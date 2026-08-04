@@ -53,3 +53,40 @@ Pull requests should explain scope, safety impact, migrations or configuration c
 ## Security & Architecture Boundaries
 
 Only `SubmissionGate` may issue submission authorization. LLM workers must remain isolated and cannot submit. Never bypass CAPTCHA, evade anti-bot controls, expose secrets, fabricate claims, or add hidden ATS manipulation. Missing or uncertain information must deny submission.
+
+# Autonomous build protocol
+
+When assigned an autonomous build:
+
+1. Read `carreros_project_spec` as the authoritative source of truth.
+2. Read all applicable architecture, implementation, milestone, and task documentation.
+3. Inspect Git status, the current implementation, tests, migrations, and existing conventions.
+4. Determine the next incomplete milestone or acceptance criterion.
+5. Create or update:
+   - `docs/AUTONOMOUS_BUILD_PLAN.md`
+   - `docs/AUTONOMOUS_STATUS.md`
+6. Continue from planning through implementation, testing, repair, review, documentation, and commit.
+7. Do not stop after producing a plan, summary, partial implementation, or list of next steps.
+8. Do not ask the user to approve intermediate phases.
+9. Resolve minor ambiguities conservatively and record the decision in the build plan.
+10. Use subagents for independent exploration, test analysis, security review, and bounded implementation tasks.
+11. The primary agent owns architecture, integration, shared schemas, migrations, final testing, and commits.
+12. Avoid concurrent writes to the same files or tightly coupled modules.
+13. Run the relevant quality gates after every meaningful implementation phase.
+14. Repair failing tests, lint, typing, migration, and build checks before continuing.
+15. Review the final diff for regressions, scope creep, secrets, generated files, and real personal data.
+16. Commit completed milestones with clear conventional commit messages.
+17. Never add real candidate data, credentials, secrets, live applications, CAPTCHA bypass, ATS manipulation, or submission authorization outside SubmissionGate.
+18. If an external dependency blocks one check, document the exact blocker and continue all independent work.
+19. Update `docs/AUTONOMOUS_STATUS.md` before every natural stopping point so another session can resume using repository state only.
+20. Stop only when:
+    - all requirements in `carreros_project_spec` are complete and verified; or
+    - a hard external blocker prevents all further useful progress.
+
+At successful completion, end the final response with exactly:
+
+BUILD_COMPLETE
+
+If a hard blocker prevents all further work, end with exactly:
+
+BUILD_BLOCKED
