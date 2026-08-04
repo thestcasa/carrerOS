@@ -1,0 +1,8 @@
+{
+  "candidate_id": "example_candidate",
+  "full_name": "Morgan Example",
+  "email": "morgan@example.invalid",
+  "phone": "+1-555-0100",
+  "city": "Exampleton",
+  "country_code": "US"
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Career OS control boundary</title>
+  <rect width="64" height="64" rx="14" fill="#0a4837"/>
+  <path d="M32 13l17 7v11c0 11-6.8 18-17 21-10.2-3-17-10-17-21V20l17-7z" fill="#dceddf"/>
+  <path d="M25 32l5 5 10-11" fill="none" stroke="#0f654b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

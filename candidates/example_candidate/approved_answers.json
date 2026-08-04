@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "key": "work_authorization",
+      "question_pattern": "Are you authorized to work in the United States?",
+      "answer": "Yes",
+      "evidence_ids": []
+    },
+    {
+      "key": "sponsorship",
+      "question_pattern": "Will you require employment sponsorship?",
+      "answer": "No",
+      "evidence_ids": []
+    }
+  ]
+}

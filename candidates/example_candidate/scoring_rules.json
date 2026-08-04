@@ -1,0 +1,11 @@
+{
+  "application_threshold": 78,
+  "human_review_threshold": 62,
+  "weights": {
+    "role_alignment": 0.35,
+    "skills_alignment": 0.3,
+    "location_alignment": 0.15,
+    "domain_alignment": 0.1,
+    "compensation_alignment": 0.1
+  }
+}

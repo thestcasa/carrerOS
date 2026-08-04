@@ -1,0 +1,6 @@
+{
+  "max_pages": 2,
+  "allowed_sections": ["Summary", "Experience", "Projects", "Education", "Skills", "Languages"],
+  "forbidden_claims": ["Unverified performance metrics", "Credentials not present in candidate evidence"],
+  "require_evidence_ids": true
+}

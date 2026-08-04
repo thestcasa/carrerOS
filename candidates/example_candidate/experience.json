@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "id": "experience_example_1",
+      "organization": "Example Systems Cooperative",
+      "title": "Software Engineer",
+      "location": "Exampleton",
+      "start_date": "2022-07-01",
+      "end_date": null,
+      "achievements": [
+        "Reduced a fictional batch pipeline's recovery time through idempotent processing",
+        "Introduced typed API contracts and automated tests"
+      ],
+      "skills": ["Python", "SQL", "FastAPI"]
+    }
+  ]
+}

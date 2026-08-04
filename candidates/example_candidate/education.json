@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "id": "education_example_1",
+      "institution": "Example State University",
+      "qualification": "Bachelor of Science",
+      "field_of_study": "Computer Science",
+      "location": "Exampleton",
+      "start_date": "2018-09-01",
+      "end_date": "2022-06-30"
+    }
+  ]
+}

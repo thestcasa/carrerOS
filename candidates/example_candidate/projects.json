@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "project_example_1",
+      "name": "Fictional Transit Forecast",
+      "description": "A fictional demand-forecasting service using synthetic public-transport data.",
+      "start_date": "2023-01-01",
+      "end_date": "2023-05-31",
+      "outcomes": ["Produced reproducible model evaluation reports"],
+      "skills": ["Python", "Machine Learning", "Docker"],
+      "url": "https://example.invalid/projects/transit-forecast"
+    }
+  ]
+}

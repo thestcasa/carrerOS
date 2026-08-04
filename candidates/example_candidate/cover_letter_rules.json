@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "max_words": 400,
+  "tone": "Direct, specific, and professional",
+  "forbidden_claims": ["Unverified company facts", "Unsupported candidate achievements"],
+  "require_evidence_ids": true
+}

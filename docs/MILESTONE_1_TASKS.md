@@ -1,0 +1,29 @@
+# Milestone 1 Task List
+
+- [x] Inspect repository, instructions, and available specification.
+- [x] Record architecture and safety boundaries.
+- [x] Record the incremental implementation plan.
+- [x] Add Python, FastAPI, database, Alembic, Docker, lint, type, and test foundation.
+- [x] Add strict candidate configuration schemas and loader.
+- [x] Add fictional `example_candidate` configuration.
+- [x] Add immutable candidate snapshot construction and source-file hashes.
+- [x] Add `validate-candidate` and `readiness` CLI commands.
+- [x] Add candidate-isolated SQLAlchemy domain models.
+- [x] Add the initial Alembic migration.
+- [x] Add typed state machine and idempotency behavior.
+- [x] Add three agent contracts and deterministic fakes.
+- [x] Add application orchestration without browser automation.
+- [x] Add fail-closed submission gate.
+- [x] Add immutable, hashed audit archive builder.
+- [x] Add all required tests.
+- [x] Run Ruff format/check, mypy, and pytest.
+- [x] Add PostgreSQL and Redis health reporting.
+- [x] Add typed candidate list, detail, update, validation, readiness, and snapshot APIs.
+- [x] Add validated, patch-versioned core-profile updates and source history.
+- [x] Add the Next.js/React/TypeScript application shell and typed API client.
+- [x] Add the candidate selector and structured core-profile editor.
+- [x] Add capability-specific readiness with links to editable blockers.
+- [x] Add accessible responsive states and explicit submission-disabled controls.
+- [x] Add frontend unit tests, lint, type checks, and production build.
+- [x] Add Redis and frontend services to the one-command Docker Compose stack.
+- [x] Update this checklist and report Milestone 1 results.

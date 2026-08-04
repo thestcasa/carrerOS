@@ -1,0 +1,32 @@
+schema_version: "1.0"
+candidate_id: example_candidate
+profile_version: "1.0.0"
+display_name: Morgan Example
+active: true
+data_files:
+  identity: identity.json
+  biography: biography.json
+  education: education.json
+  experience: experience.json
+  projects: projects.json
+  skills: skills.json
+  languages: languages.json
+  career_strategy: career_strategy.json
+  scoring_rules: scoring_rules.json
+  preferences: preferences.json
+  legal_status: legal_status.json
+  approved_answers: approved_answers.json
+  cv_rules: cv_rules.json
+  cover_letter_rules: cover_letter_rules.json
+  companies: companies.json
+  roles: roles.json
+workflow:
+  discovery_enabled: true
+  automatic_submission_enabled: false
+  email_tracking_enabled: false
+  notifications_enabled: true
+validation:
+  profile_approved: true
+  legal_status_approved: true
+  automatic_answers_approved: true
+  cv_templates_approved: true
