@@ -5,8 +5,6 @@
 
 $ErrorActionPreference = "Stop"
 
-# Quando lo script è salvato in scripts\, il parent è la root del repository.
-# Il fallback permette anche di eseguirne il contenuto dalla root in emergenza.
 if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     $RepoRoot = (Get-Location).Path
 }
@@ -26,6 +24,10 @@ if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
 
 if (-not (Test-Path $PromptFile)) {
     throw "Prompt file non trovato: $PromptFile"
+}
+
+if ((Get-Item $PromptFile).Length -eq 0) {
+    throw "Il prompt file è vuoto: $PromptFile"
 }
 
 if (-not (Test-Path $ProfileFile)) {
@@ -55,27 +57,54 @@ Write-Host ""
 Write-Host "Repository: $RepoRoot"
 Write-Host "Branch: $currentBranch"
 Write-Host "Numero massimo di run: $MaxRuns"
+Write-Host "Prompt: $PromptFile"
 
 for ($run = 1; $run -le $MaxRuns; $run++) {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $eventLog = Join-Path $LogDirectory "run-$run-$timestamp.jsonl"
-    $lastMessage = Join-Path $LogDirectory "run-$run-$timestamp-final.txt"
+
+    $eventLog = Join-Path `
+        $LogDirectory `
+        "run-$run-$timestamp.jsonl"
+
+    $errorLog = Join-Path `
+        $LogDirectory `
+        "run-$run-$timestamp-stderr.txt"
+
+    $lastMessage = Join-Path `
+        $LogDirectory `
+        "run-$run-$timestamp-final.txt"
 
     Write-Host ""
     Write-Host "=== Avvio run Codex $run di $MaxRuns ==="
 
-    Get-Content $PromptFile -Raw |
-        & codex exec `
-            --profile carreros-autonomous `
-            --sandbox workspace-write `
-            --ask-for-approval never `
-            --json `
-            --output-last-message $lastMessage `
-            - |
+    # cmd.exe gestisce in modo affidabile il passaggio del file
+    # allo stdin di codex exec su Windows.
+    $codexCommand = (
+        "type `"$PromptFile`" | " +
+        "codex exec " +
+        "--profile carreros-autonomous " +
+        "--sandbox workspace-write " +
+        "--json " +
+        "--output-last-message `"$lastMessage`" " +
+        "- " +
+        "2> `"$errorLog`""
+    )
+
+    & $env:ComSpec /d /c $codexCommand |
         Tee-Object -FilePath $eventLog |
         Out-Host
 
     $exitCode = $LASTEXITCODE
+
+    if (Test-Path $errorLog) {
+        $stderrText = Get-Content $errorLog -Raw
+
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host ""
+            Write-Host "=== Output diagnostico Codex ==="
+            Write-Host $stderrText
+        }
+    }
 
     if ($exitCode -ne 0) {
         Write-Warning "Codex è terminato con codice $exitCode."
@@ -84,6 +113,7 @@ for ($run = 1; $run -le $MaxRuns; $run++) {
             exit $exitCode
         }
 
+        Write-Host "Nuovo tentativo tra 10 secondi."
         Start-Sleep -Seconds 10
         continue
     }
@@ -119,7 +149,8 @@ for ($run = 1; $run -le $MaxRuns; $run++) {
 
     if ($run -lt $MaxRuns) {
         Write-Host ""
-        Write-Host "Build non ancora completata. Avvio di una nuova sessione."
+        Write-Host "Build non ancora completata."
+        Write-Host "Avvio di una nuova sessione tra 10 secondi."
         Start-Sleep -Seconds 10
     }
 }
