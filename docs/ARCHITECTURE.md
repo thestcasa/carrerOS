@@ -182,10 +182,20 @@ fail closed before an immutable draft version can progress. Draft storage uses c
 application path segments, exclusive version creation, and content-hash verification.
 
 The browser dry-run boundary accepts a finalized structured package, maps only known synthetic
-fields, validates uploads against allowlisted artifact paths, re-reads filled values, and extracts
-the final page without a submit operation. CAPTCHA and OTP markers persist a visible human action,
-screenshot, page snapshot, and same-session reference. Completion resumes that recorded session
-before final gate validation. No live final click exists in this build.
+fields, validates uploads against candidate-owned paths and allowlisted SHA-256 hashes, re-reads
+filled values from the DOM, and extracts the final page without a submit operation. The separate
+Playwright fixture harness is hard-limited to an exact allowlisted loopback URL and stores each
+candidate/session in a symlink-checked persistent browser profile. Each run permits one GET document
+request; all subresources, later navigation, redirects, WebSockets, and form submissions are
+blocked and counted. The worker only detects the final-submit control and has no click operation.
+
+The persisted application workflow still uses the deterministic non-network dry runner; Playwright
+integration through an isolated worker remains pending. CAPTCHA and OTP markers persist a visible
+human action, screenshot, page snapshot, and same-session reference. The API requires an explicit
+session-open handshake, but completion also calls a browser-owned verifier which defaults to denial.
+Thus the handshake cannot itself clear a challenge or reach `READY_TO_SUBMIT`. A fixture-only
+acknowledgement helper changes local fixture state for deterministic testing, accepts only an exact
+allowlisted loopback URL, and cannot solve or bypass a live challenge.
 
 Synthetic confirmation is produced by a backend-owned executor dependency; clients provide only
 the one-time authorization and acknowledge the synthetic fixture. Authorization consumption uses

@@ -60,7 +60,7 @@ class SyntheticForm(BrowserContract):
 
 
 class UploadArtifact(BrowserContract):
-    field_key: str = Field(min_length=1)
+    field_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     path: Path
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -109,3 +109,53 @@ class DryRunResult(BrowserContract):
     final_page: FinalPageSnapshot
     ready_for_human_review: bool
     submitted: Literal[False] = False
+
+
+class PlaywrightDryRunRequest(BrowserContract):
+    application_id: UUID
+    candidate_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+    session_id: UUID
+    fixture_url: str = Field(pattern=r"^http://(?:127\.0\.0\.1|localhost):[0-9]+(?:/|$)")
+    answers: dict[str, str | bool]
+    uploads: tuple[UploadArtifact, ...] = ()
+    allowed_upload_sha256: frozenset[str] = frozenset()
+
+    @model_validator(mode="after")
+    def validate_field_keys(self) -> PlaywrightDryRunRequest:
+        unsafe_keys = set(self.answers) - {
+            key
+            for key in self.answers
+            if key
+            and len(key) <= 64
+            and key[0].isalpha()
+            and key[0].isascii()
+            and all(
+                character.isascii() and (character.isalnum() or character == "_")
+                for character in key
+            )
+        }
+        if unsafe_keys:
+            raise ValueError("answer field keys must be safe synthetic fixture identifiers")
+        upload_keys = [upload.field_key for upload in self.uploads]
+        if len(upload_keys) != len(set(upload_keys)):
+            raise ValueError("upload field keys must be unique")
+        return self
+
+
+class PlaywrightDryRunResult(BrowserContract):
+    application_id: UUID
+    candidate_id: str
+    session_id: UUID
+    fixture_url: str
+    session_directory: Path
+    persistent_profile_directory: Path
+    screenshot_path: Path
+    final_page_snapshot_path: Path
+    mapped_values: dict[str, str | bool]
+    upload_hashes: tuple[str, ...]
+    human_action: Literal["captcha", "otp"] | None
+    final_submit_present: bool
+    final_submit_clicked: Literal[False] = False
+    allowed_network_requests: int = Field(ge=0)
+    blocked_network_requests: int = Field(ge=0)
+    ready_for_human_review: bool

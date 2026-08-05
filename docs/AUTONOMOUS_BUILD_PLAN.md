@@ -21,9 +21,10 @@ CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate
   preserved and integrated instead of recreated.
 - The current runtime is Python 3.14.4. The previously recorded FastAPI `TestClient` hang no
   longer reproduces: the complete 87-test backend suite passes.
-- Docker is unavailable in this environment. Frontend dependencies are currently a partial
-  `node_modules` install; TypeScript can run directly, but npm quality scripts require a clean
-  dependency installation before final verification.
+- Docker is unavailable in this environment. The Python Playwright package is installed, but this
+  minimal host lacks a usable Chromium runtime and its shared libraries. The container image now
+  installs Chromium with its dependencies; that path requires verification on a Docker-capable
+  host.
 - The specification contains real pilot data, but repository safety rules prohibit committing
   it. Pilot behavior will be proven with fictional configuration and documented onboarding
   blockers rather than copying personal data into version control.
@@ -76,8 +77,14 @@ security, settings, analytics, and artifacts are integrated. Correspondence rema
    submit control.
 3. Add human-action APIs and queue/takeover UI with same-session resumption.
 
-Status: deterministic synthetic sessions, snapshots/screenshots, APIs, queue, and resumption are
-complete. A real Playwright fixture-server worker remains.
+Status: a restricted Playwright fixture harness and loopback-only synthetic ATS fixture server are
+implemented. It uses candidate-isolated persistent profiles, hash-verified uploads, DOM field
+readback, human-action detection, and permits exactly one allowlisted GET document request per run;
+all later requests, WebSockets, service workers, redirects, and form submissions are blocked. It
+has no final-submit click operation. The application workflow is not yet wired to this harness.
+Human completion now defaults to denial unless a browser-owned same-session verifier is injected;
+the local API handshake alone cannot clear the challenge. Contract tests pass; the actual Chromium
+test is skipped on this host, and the Docker execution path and interactive transport remain open.
 
 ### Phase 4 — Milestones 5 and 6: controlled submission and operations
 

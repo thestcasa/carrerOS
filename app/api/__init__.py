@@ -375,12 +375,9 @@ def _operations_router() -> APIRouter:
         action_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
     ) -> HumanActionView:
-        actions = service.list_human_actions(candidate_id)
-        match = next((item for item in actions if item.action_id == action_id), None)
-        if match is None:
-            raise ApplicationNotFoundError("human action not found")
-        return match
+        return service.open_human_session(candidate_id, action_id, idempotency_key)
 
     @router.post("/human-actions/{action_id}/complete", response_model=HumanActionView)
     def complete_human_action(

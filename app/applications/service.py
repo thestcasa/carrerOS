@@ -110,6 +110,7 @@ class ApplicationService:
         candidate_service: CandidateService,
         runtime_root: Path,
         synthetic_confirmation: Callable[[str, UUID], str | None] | None = None,
+        human_action_session_verifier: Callable[[str, UUID, UUID, Path], bool] | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
@@ -122,6 +123,9 @@ class ApplicationService:
         self._correspondence = CorrespondenceService()
         self._synthetic_confirmation = synthetic_confirmation or (
             lambda _candidate_id, application_id: f"synthetic-confirmation-{application_id}"
+        )
+        self._human_action_session_verifier = human_action_session_verifier or (
+            lambda _candidate_id, _application_id, _session_id, _session_path: False
         )
 
     def list_applications(self, candidate_id: str) -> tuple[ApplicationSummary, ...]:
@@ -1112,6 +1116,66 @@ class ApplicationService:
             ).all()
             return tuple(self._human_action_view(session, item) for item in actions)
 
+    def open_human_session(
+        self, candidate_id: str, action_id: UUID, idempotency_key: str
+    ) -> HumanActionView:
+        with self._sessions.begin() as session:
+            action = session.scalar(
+                select(HumanAction).where(
+                    HumanAction.id == action_id,
+                    HumanAction.candidate_id == candidate_id,
+                )
+            )
+            if action is None:
+                raise ApplicationNotFoundError("human action not found")
+            if action.status != "pending":
+                raise ApplicationConflictError("human action is no longer pending")
+            if action.expires_at is not None and _utc(action.expires_at) <= datetime.now(UTC):
+                raise ApplicationConflictError("human action has expired")
+            if action.browser_session_id is None:
+                raise ApplicationConflictError("human action has no browser session")
+            browser_session = session.get(BrowserSession, action.browser_session_id)
+            if (
+                browser_session is None
+                or browser_session.candidate_id != candidate_id
+                or browser_session.application_id != action.application_id
+            ):
+                raise ApplicationConflictError("candidate browser session is unavailable")
+            if browser_session.status == "human_takeover_opened":
+                return self._human_action_view(session, action)
+            if browser_session.status != "human_action_required":
+                raise ApplicationConflictError("browser session is not paused for human action")
+            session_reference = Path(browser_session.external_session_ref or "").resolve()
+            expected_reference = (
+                self._runtime_root
+                / "candidates"
+                / candidate_id
+                / "sessions"
+                / str(browser_session.id)
+            ).resolve()
+            if session_reference != expected_reference or not session_reference.is_dir():
+                raise ApplicationConflictError("browser session reference is invalid")
+            application = self._application(session, candidate_id, action.application_id)
+            if application.state is not ApplicationState.HUMAN_ACTION_REQUIRED:
+                raise ApplicationConflictError("application is not awaiting human action")
+            browser_session.status = "human_takeover_opened"
+            session.add(
+                ApplicationEvent(
+                    candidate_id=candidate_id,
+                    application_id=application.id,
+                    idempotency_key=idempotency_key,
+                    event_type="HUMAN_SESSION_OPENED",
+                    from_state=application.state,
+                    to_state=application.state,
+                    payload={
+                        "action_id": str(action.id),
+                        "browser_session_id": str(browser_session.id),
+                    },
+                )
+            )
+            session.flush()
+            return self._human_action_view(session, action)
+
     def complete_human_action(
         self, candidate_id: str, action_id: UUID, idempotency_key: str, *, cancel: bool = False
     ) -> HumanActionView:
@@ -1126,13 +1190,44 @@ class ApplicationService:
                 raise ApplicationNotFoundError("human action not found")
             if action.status != "pending":
                 return self._human_action_view(session, action)
-            action.status = "cancelled" if cancel else "completed"
-            action.completed_at = datetime.now(UTC)
+            if action.expires_at is not None and _utc(action.expires_at) <= datetime.now(UTC):
+                raise ApplicationConflictError("human action has expired")
             application = self._application(session, candidate_id, action.application_id)
+            if application.state is not ApplicationState.HUMAN_ACTION_REQUIRED:
+                raise ApplicationConflictError("application is not awaiting human action")
             if not cancel and action.browser_session_id is not None:
                 browser_session = session.get(BrowserSession, action.browser_session_id)
-                if browser_session is not None and browser_session.candidate_id == candidate_id:
-                    browser_session.status = "ready"
+                if (
+                    browser_session is None
+                    or browser_session.candidate_id != candidate_id
+                    or browser_session.application_id != action.application_id
+                    or browser_session.status != "human_takeover_opened"
+                ):
+                    raise ApplicationConflictError(
+                        "open the recoverable browser session before completing the action"
+                    )
+                session_reference = Path(browser_session.external_session_ref or "").resolve()
+                expected_reference = (
+                    self._runtime_root
+                    / "candidates"
+                    / candidate_id
+                    / "sessions"
+                    / str(browser_session.id)
+                ).resolve()
+                if session_reference != expected_reference or not session_reference.is_dir():
+                    raise ApplicationConflictError("browser session reference is invalid")
+                if not self._human_action_session_verifier(
+                    candidate_id,
+                    action.application_id,
+                    browser_session.id,
+                    session_reference,
+                ):
+                    raise ApplicationConflictError(
+                        "browser session has not verified human-action completion"
+                    )
+                browser_session.status = "ready"
+            action.status = "cancelled" if cancel else "completed"
+            action.completed_at = datetime.now(UTC)
             target = ApplicationState.WITHDRAWN if cancel else ApplicationState.FINAL_VALIDATION
             self._transition(
                 session,
@@ -1805,6 +1900,11 @@ class ApplicationService:
     def _human_action_view(session: Session, action: HumanAction) -> HumanActionView:
         application = session.get(Application, action.application_id)
         job = session.get(GlobalJob, application.job_id) if application else None
+        browser_session = (
+            session.get(BrowserSession, action.browser_session_id)
+            if action.browser_session_id is not None
+            else None
+        )
         return HumanActionView(
             action_id=action.id,
             candidate_id=action.candidate_id,
@@ -1818,6 +1918,8 @@ class ApplicationService:
             expires_at=action.expires_at,
             screenshot_available=action.screenshot_uri is not None,
             browser_session_id=action.browser_session_id,
+            session_opened=browser_session is not None
+            and browser_session.status == "human_takeover_opened",
         )
 
     @staticmethod

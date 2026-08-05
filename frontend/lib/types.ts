@@ -370,6 +370,7 @@ export interface HumanActionView {
   expires_at: string | null;
   screenshot_available: boolean;
   browser_session_id: string | null;
+  session_opened: boolean;
 }
 
 export interface SecurityEventView {

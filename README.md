@@ -20,6 +20,7 @@ and runtime artifacts use separate persistent volumes. Services bind to localhos
 ```bash
 python -m venv .venv
 python -m pip install -e ".[dev]"
+python -m playwright install --with-deps chromium
 alembic upgrade head
 python -m app validate-candidate --candidate example_candidate
 python -m app readiness --candidate example_candidate

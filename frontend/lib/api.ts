@@ -206,6 +206,8 @@ export const api = {
     ),
   humanActions: (candidateId: string) =>
     request<HumanActionView[]>(`/api/human-actions?candidate_id=${encodeURIComponent(candidateId)}`),
+  openHumanSession: (candidateId: string, actionId: string, idempotencyKey: string) =>
+    request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/open-session?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   completeHumanAction: (candidateId: string, actionId: string, idempotencyKey: string) =>
     request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/complete?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   securityEvents: (candidateId: string) =>

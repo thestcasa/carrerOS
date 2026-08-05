@@ -26,7 +26,7 @@ from app.job_service import DiscoveryRequest, JobService
 
 
 def _services(
-    candidates_root: Path, runtime_root: Path
+    candidates_root: Path, runtime_root: Path, *, human_action_verified: bool = True
 ) -> tuple[JobService, ApplicationService, sessionmaker[Session]]:
     engine = create_engine("sqlite+pysqlite:///:memory:")
 
@@ -41,7 +41,16 @@ def _services(
     candidates = CandidateService(candidates_root)
     return (
         JobService(sessions, candidates),
-        ApplicationService(sessions, candidates, runtime_root),
+        ApplicationService(
+            sessions,
+            candidates,
+            runtime_root,
+            human_action_session_verifier=(
+                lambda _candidate_id, _application_id, _session_id, _session_path: (
+                    human_action_verified
+                )
+            ),
+        ),
         sessions,
     )
 
@@ -250,12 +259,56 @@ def test_captcha_creates_visible_resumable_human_action(
     assert actions[0].browser_session_id is not None
     assert actions[0].screenshot_available
 
+    with pytest.raises(ApplicationConflictError, match="open the recoverable browser session"):
+        applications.complete_human_action(
+            "example_candidate", actions[0].action_id, "complete-before-open-captcha-502"
+        )
+    opened = applications.open_human_session(
+        "example_candidate", actions[0].action_id, "open-captcha-502"
+    )
+    assert opened.session_opened
     completed = applications.complete_human_action(
         "example_candidate", actions[0].action_id, "complete-captcha-502"
     )
     assert completed.status == "completed"
     detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.state is ApplicationState.READY_TO_SUBMIT
+
+
+def test_captcha_completion_fails_closed_without_same_session_verification(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    jobs, applications, _sessions = _services(
+        copied_candidates_root,
+        tmp_path / "runtime",
+        human_action_verified=False,
+    )
+    job_id = _job(jobs, 503)
+    generated = applications.generate_materials(
+        "example_candidate", job_id, "generate-materials-503"
+    )
+    applications.approve_materials(
+        "example_candidate", generated.application_id, "approve-materials-503"
+    )
+    applications.start("example_candidate", generated.application_id, "start-application-503")
+    applications.dry_run(
+        "example_candidate",
+        generated.application_id,
+        DryRunCommand(challenge="captcha"),
+        "dry-run-captcha-503",
+    )
+    action = applications.list_human_actions("example_candidate")[0]
+    applications.open_human_session("example_candidate", action.action_id, "open-captcha-503")
+
+    with pytest.raises(ApplicationConflictError, match="has not verified"):
+        applications.complete_human_action(
+            "example_candidate", action.action_id, "complete-captcha-503"
+        )
+
+    detail = applications.get_application("example_candidate", generated.application_id)
+    assert detail.state is ApplicationState.HUMAN_ACTION_REQUIRED
+    assert applications.list_human_actions("example_candidate")[0].status == "pending"
 
 
 def test_denied_authorization_does_not_seal_an_orphan_archive(

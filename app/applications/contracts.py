@@ -169,6 +169,7 @@ class HumanActionView(ApplicationContract):
     expires_at: datetime | None
     screenshot_available: bool
     browser_session_id: UUID | None
+    session_opened: bool
 
 
 class SecurityEventView(ApplicationContract):

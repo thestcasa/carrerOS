@@ -3,8 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: candidate onboarding import, browser fixture hardening, and final verification
-- Branch baseline: `autonomous-build`; latest completed milestone commit is `0faa8f7`
+- Active phase: browser fixture hardening, candidate onboarding import, and final verification
+- Branch baseline: `autonomous-build`; latest completed milestone commit is `e50cd5a`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
 
@@ -49,25 +49,35 @@
   applications create a verified copy-on-write v2 archive with confirmation HTML, screenshot,
   receipt, final manifest, and refreshed audit while preserving the pre-submit v1 archive. Gate
   denials occur before archive sealing and missing exact submitted documents fail closed.
+- A restricted Playwright fixture harness now targets an exact allowlisted loopback URL, uses
+  isolated persistent browser profiles, validates uploads by candidate path and SHA-256 allowlist,
+  captures screenshots and HTML, and never exposes a final-submit click. It permits only the first
+  GET document request and blocks every later request, WebSocket, redirect, or form submission.
+- Human-action completion requires a prior explicit session-open handshake and a separate
+  browser-owned same-session verifier. The verifier defaults to denial; a database handshake alone
+  cannot advance an application to final validation.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **108 pytest tests pass** on Python
-  3.14.4 (one upstream Starlette `httpx` deprecation warning).
-  Python 3.14.4 (one upstream Starlette `httpx` deprecation warning).
-- Frontend: ESLint, strict TypeScript, **15 Vitest tests**, and the Next.js production build pass
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **112 pytest tests pass** on Python
+  3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
+  installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
+- Frontend: ESLint, strict TypeScript, **16 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
   Alembic report no missing operations.
-- Docker is not installed in this environment. PostgreSQL/Redis/Compose startup, Playwright browser
-  E2E, and automated accessibility tooling remain externally unverified.
+- Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
+  Playwright Chromium path remain externally unverified. The image installs Chromium and system
+  dependencies with `playwright install --with-deps chromium`.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
 ## Remaining definition-of-done gaps
 
-- Implement a real Playwright-based synthetic fixture worker with recoverable contexts; no real
-  final clicks are authorized in this repository.
+- Verify the real Playwright synthetic fixture test in the Docker image; no real final clicks are
+  authorized in this repository. Add a deployment-specific interactive transport before claiming
+  production same-context human takeover, and wire the fixture harness through the isolated
+  application worker boundary. The local API currently performs only a validated session handshake.
 - Complete richer onboarding CV import/extraction without committing real pilot data.
 - Execute export/deletion and retention workflows; hosted authentication/encryption and separate
   browser workers remain deployment hardening.
@@ -79,5 +89,5 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue richer candidate schemas/onboarding and browser fixture hardening.
+3. Verify and commit browser fixture hardening, then continue CV import and deletion/retention.
 4. Run backend, migration, and frontend gates after each coherent phase.
