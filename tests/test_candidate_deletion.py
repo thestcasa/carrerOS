@@ -48,8 +48,14 @@ def test_candidate_deletion_removes_owned_rows_and_files_but_retains_shared_data
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="delete_me", display_name="Delete Me"))
-    candidates.create(CandidateCreateRequest(candidate_id="keep_me", display_name="Keep Me"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="delete_me", display_name="Delete Me"),
+        "create-delete-me",
+    )
+    candidates.create(
+        CandidateCreateRequest(candidate_id="keep_me", display_name="Keep Me"),
+        "create-keep-me",
+    )
     with sessions.begin() as session:
         shared_job = GlobalJob(
             source="fictional-board",
@@ -176,7 +182,10 @@ def test_candidate_deletion_removes_owned_rows_and_files_but_retains_shared_data
     assert not (runtime_root / "candidates" / "delete_me").exists()
     assert candidates.get_config("keep_me").manifest.candidate_id == "keep_me"
     with pytest.raises(CandidateNotFoundError, match="candidate not found"):
-        candidates.create(CandidateCreateRequest(candidate_id="delete_me", display_name="Again"))
+        candidates.create(
+            CandidateCreateRequest(candidate_id="delete_me", display_name="Again"),
+            "recreate-delete-me",
+        )
     with sessions() as session:
         assert session.scalar(select(func.count(GlobalJob.id))) == 2
         assert (
@@ -251,8 +260,14 @@ def test_conflicting_deletion_key_does_not_hide_unreserved_candidate(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="first_delete", display_name="First"))
-    candidates.create(CandidateCreateRequest(candidate_id="second_keep", display_name="Second"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="first_delete", display_name="First"),
+        "create-first-delete",
+    )
+    candidates.create(
+        CandidateCreateRequest(candidate_id="second_keep", display_name="Second"),
+        "create-second-keep",
+    )
     service = CandidateLifecycleService(sessions, candidates, tmp_path / "runtime")
     shared_key = "globally-bound-deletion-command"
 
@@ -282,7 +297,10 @@ def test_marker_only_crash_state_is_status_visible_and_recoverable(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="marker_recover", display_name="Marker"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="marker_recover", display_name="Marker"),
+        "create-marker-recover",
+    )
     request = CandidateDeletionRequest(confirmation="marker_recover", delete_archives=True)
     request_sha256 = hashlib.sha256(
         json.dumps(
@@ -309,7 +327,10 @@ def test_unsafe_runtime_symlink_fails_closed_without_following_target(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="unsafe_delete", display_name="Unsafe"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="unsafe_delete", display_name="Unsafe"),
+        "create-unsafe-delete",
+    )
     runtime_root = tmp_path / "runtime"
     target = runtime_root / "candidates" / "unsafe_delete"
     outside = tmp_path / "outside"
@@ -612,7 +633,10 @@ def test_deletion_waits_for_candidate_filesystem_publishers_and_removes_late_out
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="lease_delete", display_name="Lease"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="lease_delete", display_name="Lease"),
+        "create-lease-delete",
+    )
     runtime_root = tmp_path / "runtime"
     lifecycle = CandidateLifecycleService(sessions, candidates, runtime_root)
     entered_fence = Event()
@@ -662,7 +686,10 @@ def test_export_rejects_a_file_swapped_to_an_outside_symlink(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="swap_export", display_name="Swap"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="swap_export", display_name="Swap"),
+        "create-swap-export",
+    )
     candidate_file = copied_candidates_root / "swap_export" / "swap.txt"
     candidate_file.write_text("candidate", encoding="utf-8")
     outside = tmp_path / "outside-secret.txt"
@@ -693,7 +720,10 @@ def test_failed_deletion_resumes_with_a_fresh_key_and_preserves_counts(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="resume_delete", display_name="Resume"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="resume_delete", display_name="Resume"),
+        "create-resume-delete",
+    )
     with sessions.begin() as session:
         session.add(CandidateSettingsRecord(candidate_id="resume_delete"))
     request = CandidateDeletionRequest(confirmation="resume_delete", delete_archives=True)
@@ -723,7 +753,8 @@ def test_concurrent_identical_deletions_serialize_to_the_same_receipt(
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
     candidates.create(
-        CandidateCreateRequest(candidate_id="concurrent_delete", display_name="Concurrent")
+        CandidateCreateRequest(candidate_id="concurrent_delete", display_name="Concurrent"),
+        "create-concurrent-delete",
     )
     lifecycle = CandidateLifecycleService(sessions, candidates, tmp_path / "runtime")
     request = CandidateDeletionRequest(confirmation="concurrent_delete", delete_archives=True)
@@ -760,7 +791,10 @@ def test_storage_reference_outside_canonical_roots_blocks_erasure_preflight(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(copied_candidates_root)
-    candidates.create(CandidateCreateRequest(candidate_id="unsafe_ref", display_name="Unsafe Ref"))
+    candidates.create(
+        CandidateCreateRequest(candidate_id="unsafe_ref", display_name="Unsafe Ref"),
+        "create-unsafe-ref",
+    )
     outside = tmp_path / "outside-artifact.txt"
     outside.write_text("retain", encoding="utf-8")
     with sessions.begin() as session:

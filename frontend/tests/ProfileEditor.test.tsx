@@ -61,7 +61,41 @@ describe("ProfileEditor", () => {
         "example_candidate",
         "certifications",
         { items: updated },
+        expect.stringMatching(/^update-profile-/),
       ),
+    );
+  });
+
+  it("reuses the command key when an uncertain save is retried", async () => {
+    vi.mocked(api.updateSection)
+      .mockRejectedValueOnce(new Error("connection interrupted"))
+      .mockResolvedValueOnce({
+        candidate_id: "example_candidate",
+        previous_version: "1.0.0",
+        profile_version: "1.0.1",
+        section: "certifications",
+        readiness: detail.readiness,
+      });
+    render(<ProfileEditor detail={detail} initialSection="certifications" />);
+    const textarea = screen.getByRole("textbox", { name: /^Items/ });
+    const updated = [
+      {
+        id: "fictional_certificate",
+        name: "Fictional Certificate",
+        issuer: "Example Institute",
+        approved: false,
+        archived: false,
+      },
+    ];
+    fireEvent.change(textarea, { target: { value: JSON.stringify(updated, null, 2) } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+    await waitFor(() => expect(api.updateSection).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(api.updateSection).mock.calls[1][3]).toBe(
+      vi.mocked(api.updateSection).mock.calls[0][3],
     );
   });
 

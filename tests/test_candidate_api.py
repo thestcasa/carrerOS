@@ -4,6 +4,7 @@ import base64
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
@@ -87,6 +88,7 @@ def test_profile_update_is_validated_versioned_and_archived(
     with _client(copied_candidates_root) as client:
         response = client.patch(
             "/api/candidates/example_candidate",
+            headers={"Idempotency-Key": "update-profile-identity"},
             json={"section": "identity", "data": identity},
         )
         detail = client.get("/api/candidates/example_candidate")
@@ -101,6 +103,55 @@ def test_profile_update_is_validated_versioned_and_archived(
     assert archived_identity["full_name"] == "Morgan Example"
 
 
+def test_profile_update_replays_exact_result_and_rejects_key_reuse(
+    copied_candidates_root: Path,
+) -> None:
+    candidate_dir = copied_candidates_root / "example_candidate"
+    identity = json.loads((candidate_dir / "identity.json").read_text(encoding="utf-8"))
+    identity["full_name"] = "Taylor Example"
+    payload = {"section": "identity", "data": identity}
+    headers = {"Idempotency-Key": "update-profile-replay"}
+
+    with _client(copied_candidates_root) as client:
+        first = client.patch("/api/candidates/example_candidate", headers=headers, json=payload)
+        replay = client.patch("/api/candidates/example_candidate", headers=headers, json=payload)
+        changed = client.patch(
+            "/api/candidates/example_candidate",
+            headers=headers,
+            json={
+                "section": "identity",
+                "data": {**identity, "full_name": "Another Fictional Name"},
+            },
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "idempotency_conflict"
+    assert sorted(path.name for path in (candidate_dir / ".history").iterdir()) == ["1.0.0"]
+
+
+def test_candidate_snapshot_replays_exact_identity(copied_candidates_root: Path) -> None:
+    headers = {"Idempotency-Key": "snapshot-exact-replay"}
+
+    with _client(copied_candidates_root) as client:
+        first = client.post("/api/candidates/example_candidate/snapshot", headers=headers)
+        identity = json.loads(first.json()["config_json"])["identity"]
+        identity["full_name"] = "Taylor Example"
+        updated = client.patch(
+            "/api/candidates/example_candidate",
+            headers={"Idempotency-Key": "update-after-snapshot"},
+            json={"section": "identity", "data": identity},
+        )
+        replay = client.post("/api/candidates/example_candidate/snapshot", headers=headers)
+
+    assert first.status_code == 200
+    assert updated.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+
+
 def test_invalid_update_fails_without_changing_version(copied_candidates_root: Path) -> None:
     candidate_dir = copied_candidates_root / "example_candidate"
     identity = json.loads((candidate_dir / "identity.json").read_text(encoding="utf-8"))
@@ -109,6 +160,7 @@ def test_invalid_update_fails_without_changing_version(copied_candidates_root: P
     with _client(copied_candidates_root) as client:
         response = client.patch(
             "/api/candidates/example_candidate",
+            headers={"Idempotency-Key": "update-invalid-identity"},
             json={"section": "identity", "data": identity},
         )
         detail = client.get("/api/candidates/example_candidate")
@@ -136,6 +188,7 @@ def test_authenticated_onboarding_refreshes_candidate_ownership(
         headers = {
             "Authorization": f"Bearer {tokens['session_token']}",
             "X-CSRF-Token": tokens["csrf_token"],
+            "Idempotency-Key": "create-fictional-friend",
         }
         created = client.post(
             "/api/candidates",
@@ -172,6 +225,7 @@ Fictional Systems Inc | Data Engineer | Remote | 2021-07 | 2023-12 | Python
     with _client(copied_candidates_root) as client:
         imported = client.post(
             "/api/candidates/example_candidate/cv-imports",
+            headers={"Idempotency-Key": "create-cv-import-api"},
             json={
                 "filename": "fictional.txt",
                 "content_base64": base64.b64encode(cv_text.encode()).decode(),
@@ -183,7 +237,8 @@ Fictional Systems Inc | Data Engineer | Remote | 2021-07 | 2023-12 | Python
         assert draft["experience"]["items"][0]["approved"] is False
 
         applied = client.post(
-            f"/api/candidates/example_candidate/cv-imports/{draft['import_id']}/apply"
+            f"/api/candidates/example_candidate/cv-imports/{draft['import_id']}/apply",
+            headers={"Idempotency-Key": "apply-cv-import-api"},
         )
 
     assert applied.status_code == 200, applied.text
@@ -222,3 +277,60 @@ def test_authenticated_cv_import_stream_cap_precedes_authorization_body_bufferin
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "cv_import_too_large"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        (
+            "post",
+            "/api/candidates",
+            {"candidate_id": "missing_key", "display_name": "Missing Key"},
+        ),
+        (
+            "patch",
+            "/api/candidates/example_candidate",
+            {"section": "identity", "data": {}},
+        ),
+        ("post", "/api/candidates/example_candidate/snapshot", None),
+        (
+            "post",
+            "/api/candidates/example_candidate/import",
+            {"section": "identity", "data": {}},
+        ),
+        (
+            "post",
+            "/api/candidates/example_candidate/cv-imports",
+            {"filename": "fictional.txt", "content_base64": "RklDVElPTkFM"},
+        ),
+        (
+            "post",
+            "/api/candidates/example_candidate/cv-imports/cv_aaaaaaaaaaaaaaaaaaaa/apply",
+            None,
+        ),
+    ],
+)
+def test_candidate_mutations_require_idempotency_keys(
+    copied_candidates_root: Path,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+) -> None:
+    with _client(copied_candidates_root) as client:
+        response = client.request(method, path, json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_validation_failed"
+
+
+def test_idempotency_key_length_is_bounded_at_the_api(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root) as client:
+        response = client.post(
+            "/api/candidates/example_candidate/snapshot",
+            headers={"Idempotency-Key": "x" * 129},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_validation_failed"

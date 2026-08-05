@@ -164,6 +164,7 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   const [saving, setSaving] = useState(false);
   const [invalidPaths, setInvalidPaths] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const saveCommand = useRef<{ identity: string; key: string } | null>(null);
 
   const current = data[activeSection];
   const dirty = JSON.stringify(current) !== JSON.stringify(baseline[activeSection]);
@@ -185,8 +186,25 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   async function save() {
     setSaving(true);
     setMessage(null);
+    const identity = JSON.stringify({
+      candidateId: detail.candidate_id,
+      section: activeSection,
+      data: current,
+    });
+    if (saveCommand.current?.identity !== identity) {
+      saveCommand.current = {
+        identity,
+        key: `update-profile-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+      };
+    }
     try {
-      const result = await api.updateSection(detail.candidate_id, activeSection, current);
+      const result = await api.updateSection(
+        detail.candidate_id,
+        activeSection,
+        current,
+        saveCommand.current.key,
+      );
+      saveCommand.current = null;
       setBaseline((previous) => ({ ...previous, [activeSection]: structuredClone(current) }));
       setVersion(result.profile_version);
       setMessage({ kind: "success", text: `Saved as profile version ${result.profile_version}. Previous data remains in version history.` });

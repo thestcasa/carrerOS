@@ -62,6 +62,7 @@ const renderedCv: ArtifactView = {
 
 describe("ApplicationPageClient", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(api.artifacts).mockReset();
     vi.mocked(api.application).mockReset();
     vi.mocked(api.artifacts).mockResolvedValue([]);
@@ -102,6 +103,37 @@ describe("ApplicationPageClient", () => {
     await waitFor(() => expect(screen.getByText("Inspect and retry")).toBeInTheDocument());
     expect(screen.getByText("No backend confirmation yet")).toBeInTheDocument();
     expect(screen.queryByText(/^confirmed$/i)).not.toBeInTheDocument();
+  });
+
+  it("reuses authorization and submission keys after an uncertain failure", async () => {
+    vi.mocked(api.submitSynthetic)
+      .mockRejectedValueOnce(new Error("connection interrupted"))
+      .mockResolvedValueOnce({
+        application_id: ready.application_id,
+        state: "failed_retryable",
+        successful: false,
+        status: "confirmation_missing",
+        confirmation_reference: null,
+      });
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+    const button = await screen.findByRole("button", { name: "authorize submit" });
+
+    fireEvent.click(button);
+    await screen.findByRole("alert");
+    fireEvent.click(button);
+    await waitFor(() => expect(api.submitSynthetic).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(api.authorize).mock.calls[1][2]).toBe(
+      vi.mocked(api.authorize).mock.calls[0][2],
+    );
+    expect(vi.mocked(api.submitSynthetic).mock.calls[1][3]).toBe(
+      vi.mocked(api.submitSynthetic).mock.calls[0][3],
+    );
   });
 
   it("shows the exact rendered draft and its structural validation metadata", async () => {

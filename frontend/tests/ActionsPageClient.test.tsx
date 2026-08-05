@@ -45,4 +45,23 @@ describe("ActionsPageClient", () => {
     await waitFor(() => expect(api.openHumanSession).toHaveBeenCalledOnce());
     expect(api.completeHumanAction).not.toHaveBeenCalled();
   });
+
+  it("reuses the open-session key after an uncertain failure", async () => {
+    vi.mocked(api.openHumanSession)
+      .mockRejectedValueOnce(new Error("connection interrupted"))
+      .mockResolvedValueOnce({ ...pending, session_opened: true });
+    render(<ActionsPageClient candidateId="example_candidate" />);
+    const button = await screen.findByRole("button", {
+      name: "Open recoverable browser session",
+    });
+
+    fireEvent.click(button);
+    await screen.findByRole("alert");
+    fireEvent.click(button);
+    await waitFor(() => expect(api.openHumanSession).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(api.openHumanSession).mock.calls[1][2]).toBe(
+      vi.mocked(api.openHumanSession).mock.calls[0][2],
+    );
+  });
 });

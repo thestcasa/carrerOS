@@ -6,7 +6,8 @@ the configured candidates root and must not be added to a public repository.
 Create a blocked draft with either the web candidate page or:
 
 ```bash
-python -m app onboard --candidate fictional_friend --display-name "Fictional Friend"
+python -m app onboard --candidate fictional_friend --display-name "Fictional Friend" \
+  --idempotency-key onboard-fictional-friend
 ```
 
 The command copies schema and policy structure, then clears evidence, languages, certifications,
@@ -22,8 +23,10 @@ auto-submit permission and a current validity window.
 The profile page and CLI can extract a UTF-8 text CV into a review draft:
 
 ```bash
-python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
-python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt --apply
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt \
+  --idempotency-key extract-fictional-cv
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt --apply \
+  --idempotency-key apply-fictional-cv
 ```
 
 Imports are limited to 2 MiB, 5,000 lines, and bounded structured output. The parser records the

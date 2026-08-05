@@ -1,15 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
 import type { ApplicationDetail, ArtifactView } from "@/lib/types";
-
-function key(prefix: string) {
-  return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
-}
 
 function metadataString(value: unknown): string | null {
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
@@ -26,6 +22,18 @@ export function ApplicationPageClient({
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const commandKeys = useRef(new Map<string, string>());
+  function commandKey(operation: string): string {
+    const identity = `${candidateId}:${applicationId}:${operation}`;
+    const existing = commandKeys.current.get(identity);
+    if (existing) return existing;
+    const created = `${operation}-${globalThis.crypto.randomUUID()}`;
+    commandKeys.current.set(identity, created);
+    return created;
+  }
+  function clearCommand(operation: string) {
+    commandKeys.current.delete(`${candidateId}:${applicationId}:${operation}`);
+  }
   const load = useCallback(async () => {
     const [detail, stored] = await Promise.all([
       api.application(candidateId, applicationId),
@@ -65,22 +73,30 @@ export function ApplicationPageClient({
     setError(null);
     try {
       if (kind === "dry-run") {
-        await api.dryRun(candidateId, applicationId, null, key("dry-run"));
+        await api.dryRun(candidateId, applicationId, null, commandKey("dry-run"));
       } else if (kind === "authorize-submit") {
         const authorization = await api.authorize(
           candidateId,
           applicationId,
-          key("authorize"),
+          commandKey("authorize"),
         );
         await api.submitSynthetic(
           candidateId,
           applicationId,
           authorization.authorization_id,
-          key("submit"),
+          commandKey("submit"),
         );
+        clearCommand("authorize");
+        clearCommand("submit");
       } else {
-        await api.applicationCommand(candidateId, applicationId, kind, key(kind));
+        await api.applicationCommand(
+          candidateId,
+          applicationId,
+          kind,
+          commandKey(kind),
+        );
       }
+      if (kind !== "authorize-submit") clearCommand(kind);
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The operation failed safely.");
@@ -112,7 +128,12 @@ export function ApplicationPageClient({
     setBusy(true);
     setError(null);
     try {
-      await api.prepareInterview(candidateId, applicationId, key("prepare-interview"));
+      await api.prepareInterview(
+        candidateId,
+        applicationId,
+        commandKey("prepare-interview"),
+      );
+      clearCommand("prepare-interview");
       await load();
     } catch (reason) {
       setError(

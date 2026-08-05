@@ -38,4 +38,20 @@ describe("CVImportPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply as unapproved facts" }));
     await waitFor(() => expect(api.applyCvImport).toHaveBeenCalledOnce());
   });
+
+  it("reuses the extraction key after an uncertain transport failure", async () => {
+    vi.mocked(api.createCvImport).mockRejectedValueOnce(new Error("connection interrupted"));
+    render(<CVImportPanel candidateId="example_candidate" onApplied={vi.fn()} />);
+    const file = new File(["EDUCATION"], "fictional.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByLabelText("CV file"), { target: { files: [file] } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Extract unapproved draft" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Extract unapproved draft" }));
+    await waitFor(() => expect(api.createCvImport).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(api.createCvImport).mock.calls[1][3]).toBe(
+      vi.mocked(api.createCvImport).mock.calls[0][3],
+    );
+  });
 });

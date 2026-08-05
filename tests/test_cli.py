@@ -41,6 +41,8 @@ def test_onboard_and_export_candidate_cli(
                 "fictional_friend",
                 "--display-name",
                 "Fictional Friend",
+                "--idempotency-key",
+                "onboard-fictional-friend",
             ]
         )
         == 0
@@ -78,6 +80,8 @@ Fictional Labs | Research Engineer | Remote | 2020-01 | 2022-12 | Python
                 "--file",
                 str(cv_path),
                 "--apply",
+                "--idempotency-key",
+                "import-fictional-cv",
             ]
         )
         == 0

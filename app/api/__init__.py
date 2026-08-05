@@ -50,6 +50,7 @@ from app.candidates.readiness import ReadinessReport
 from app.candidates.service import (
     CandidateCreateRequest,
     CandidateDetail,
+    CandidateIdempotencyError,
     CandidateImportRequest,
     CandidateNotFoundError,
     CandidateSectionUpdate,
@@ -82,6 +83,10 @@ from app.job_service import (
 )
 
 _CV_IMPORT_MAX_REQUEST_BYTES = 3_010_000
+IdempotencyKey = Annotated[
+    str,
+    Header(alias="Idempotency-Key", min_length=8, max_length=128),
+]
 
 
 class _CVImportBodyLimitMiddleware:
@@ -210,9 +215,11 @@ def _candidate_router() -> APIRouter:
 
     @router.post("", response_model=CandidateDetail)
     def create_candidate(
-        candidate: CandidateCreateRequest, service: CandidateServiceDependency
+        candidate: CandidateCreateRequest,
+        service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CandidateDetail:
-        return service.create(candidate)
+        return service.create(candidate, idempotency_key)
 
     @router.get("/{candidate_id}", response_model=CandidateDetail)
     def get_candidate(candidate_id: str, service: CandidateServiceDependency) -> CandidateDetail:
@@ -223,8 +230,9 @@ def _candidate_router() -> APIRouter:
         candidate_id: str,
         update: CandidateSectionUpdate,
         service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CandidateUpdateResult:
-        return service.update_section(candidate_id, update)
+        return service.update_section(candidate_id, update, idempotency_key)
 
     @router.post("/{candidate_id}/validate", response_model=CandidateValidationReport)
     def validate_candidate(
@@ -240,19 +248,23 @@ def _candidate_router() -> APIRouter:
 
     @router.post("/{candidate_id}/snapshot", response_model=CandidateSnapshot)
     def snapshot_candidate(
-        candidate_id: str, service: CandidateServiceDependency
+        candidate_id: str,
+        service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CandidateSnapshot:
-        return service.snapshot(candidate_id)
+        return service.snapshot_command(candidate_id, idempotency_key)
 
     @router.post("/{candidate_id}/import", response_model=CandidateUpdateResult)
     def import_candidate_section(
         candidate_id: str,
         imported: CandidateImportRequest,
         service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CandidateUpdateResult:
         return service.update_section(
             candidate_id,
             CandidateSectionUpdate(section=imported.section, data=imported.data),
+            idempotency_key,
         )
 
     @router.get("/{candidate_id}/export", response_model=CandidateExportView)
@@ -271,7 +283,7 @@ def _candidate_router() -> APIRouter:
         candidate_id: str,
         command: CandidateDeletionRequest,
         service: CandidateLifecycleDependency,
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> CandidateDeletionView:
         return service.delete_candidate(candidate_id, command, idempotency_key)
 
@@ -286,16 +298,18 @@ def _candidate_router() -> APIRouter:
         candidate_id: str,
         imported: CVImportRequest,
         service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CVImportDraft:
-        return service.create_cv_import(candidate_id, imported)
+        return service.create_cv_import(candidate_id, imported, idempotency_key)
 
     @router.post("/{candidate_id}/cv-imports/{import_id}/apply", response_model=CandidateDetail)
     def apply_cv_import(
         candidate_id: str,
         import_id: str,
         service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
     ) -> CandidateDetail:
-        return service.apply_cv_import(candidate_id, import_id)
+        return service.apply_cv_import(candidate_id, import_id, idempotency_key)
 
     return router
 
@@ -307,7 +321,7 @@ def _job_router() -> APIRouter:
     def discover_jobs(
         request: DiscoveryRequest,
         service: JobServiceDependency,
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> DiscoveryResult:
         return service.discover(request, idempotency_key)
 
@@ -323,7 +337,7 @@ def _job_router() -> APIRouter:
         command: DiscoverySourceCreate,
         service: ScheduledDiscoveryDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> DiscoverySourceView:
         return service.create_source(candidate_id, command, idempotency_key)
 
@@ -333,7 +347,7 @@ def _job_router() -> APIRouter:
         command: DiscoverySourceUpdate,
         service: ScheduledDiscoveryDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> DiscoverySourceView:
         return service.update_source(candidate_id, source_id, command, idempotency_key)
 
@@ -357,7 +371,7 @@ def _job_router() -> APIRouter:
         job_id: UUID,
         service: JobServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> JobView:
         return service.analyze(candidate_id, job_id, idempotency_key)
 
@@ -366,7 +380,7 @@ def _job_router() -> APIRouter:
         job_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.generate_materials(candidate_id, job_id, idempotency_key)
 
@@ -376,7 +390,7 @@ def _job_router() -> APIRouter:
             job_id: UUID,
             service: JobServiceDependency,
             candidate_id: Annotated[str, Query(min_length=1)],
-            idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+            idempotency_key: IdempotencyKey,
             _command: str = command_name,
         ) -> JobView:
             return service.command(candidate_id, job_id, cast(Any, _command), idempotency_key)
@@ -411,7 +425,7 @@ def _application_router() -> APIRouter:
         application_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.approve_materials(candidate_id, application_id, idempotency_key)
 
@@ -420,7 +434,7 @@ def _application_router() -> APIRouter:
         application_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.start(candidate_id, application_id, idempotency_key)
 
@@ -430,7 +444,7 @@ def _application_router() -> APIRouter:
         command: DryRunCommand,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.dry_run(candidate_id, application_id, command, idempotency_key)
 
@@ -439,7 +453,7 @@ def _application_router() -> APIRouter:
         application_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> AuthorizationView:
         return service.authorize(candidate_id, application_id, idempotency_key)
 
@@ -449,7 +463,7 @@ def _application_router() -> APIRouter:
         submission: SyntheticSubmissionRequest,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> SubmissionResultView:
         return service.submit_synthetic(candidate_id, application_id, submission, idempotency_key)
 
@@ -458,7 +472,7 @@ def _application_router() -> APIRouter:
         application_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.withdraw(candidate_id, application_id, idempotency_key)
 
@@ -467,9 +481,9 @@ def _application_router() -> APIRouter:
         application_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        _idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> InterviewPreparationPackage:
-        return service.prepare_interview(candidate_id, application_id)
+        return service.prepare_interview(candidate_id, application_id, idempotency_key)
 
     @router.get("/{application_id}/archive", response_model=tuple[ArtifactView, ...])
     @router.get("/{application_id}/artifacts", response_model=tuple[ArtifactView, ...])
@@ -538,7 +552,7 @@ def _operations_router() -> APIRouter:
         action_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
         return service.open_human_session(candidate_id, action_id, idempotency_key)
 
@@ -547,7 +561,7 @@ def _operations_router() -> APIRouter:
         action_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
         return service.complete_human_action(candidate_id, action_id, idempotency_key)
 
@@ -556,7 +570,7 @@ def _operations_router() -> APIRouter:
         action_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
         return service.complete_human_action(candidate_id, action_id, idempotency_key, cancel=True)
 
@@ -572,8 +586,9 @@ def _operations_router() -> APIRouter:
         event_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
     ) -> SecurityEventView:
-        return service.resolve_security_event(candidate_id, event_id)
+        return service.resolve_security_event(candidate_id, event_id, idempotency_key)
 
     @router.get("/correspondence", response_model=tuple[CorrespondenceView, ...])
     def correspondence(
@@ -587,7 +602,7 @@ def _operations_router() -> APIRouter:
     def ingest_correspondence(
         message: CorrespondenceIngestRequest,
         service: ApplicationServiceDependency,
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> CorrespondenceView:
         return service.ingest_correspondence(message, idempotency_key)
 
@@ -609,7 +624,7 @@ def _operations_router() -> APIRouter:
     def update_settings(
         update: SettingsUpdate,
         service: ApplicationServiceDependency,
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> SettingsView:
         return service.update_settings(update, idempotency_key)
 
@@ -617,7 +632,7 @@ def _operations_router() -> APIRouter:
     def emergency_stop(
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+        idempotency_key: IdempotencyKey,
     ) -> SettingsView:
         return service.emergency_stop(candidate_id, idempotency_key)
 
@@ -856,6 +871,12 @@ def create_app(
         _request: Request, exc: ApplicationConflictError
     ) -> JSONResponse:
         return _error("application_conflict", str(exc), 409)
+
+    @application.exception_handler(CandidateIdempotencyError)
+    async def candidate_idempotency_failed(
+        _request: Request, exc: CandidateIdempotencyError
+    ) -> JSONResponse:
+        return _error("idempotency_conflict", str(exc), 409)
 
     @application.exception_handler(CandidateUpdateError)
     async def candidate_update_failed(_request: Request, exc: CandidateUpdateError) -> JSONResponse:

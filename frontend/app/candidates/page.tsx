@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CandidateCard } from "@/components/CandidateCard";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { api } from "@/lib/api";
@@ -12,6 +12,7 @@ export default function CandidatesPage() {
   const [candidateId, setCandidateId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [creating, setCreating] = useState(false);
+  const createCommand = useRef<{ identity: string; key: string } | null>(null);
 
   async function load() {
     setError(null);
@@ -21,7 +22,14 @@ export default function CandidatesPage() {
 
   async function createCandidate() {
     setCreating(true); setError(null);
-    try { await api.createCandidate(candidateId, displayName); setCandidateId(""); setDisplayName(""); await load(); }
+    const identity = JSON.stringify({ candidateId, displayName });
+    if (createCommand.current?.identity !== identity) {
+      createCommand.current = {
+        identity,
+        key: `create-candidate-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+      };
+    }
+    try { await api.createCandidate(candidateId, displayName, createCommand.current.key); createCommand.current = null; setCandidateId(""); setDisplayName(""); await load(); }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Candidate onboarding failed safely."); }
     finally { setCreating(false); }
   }

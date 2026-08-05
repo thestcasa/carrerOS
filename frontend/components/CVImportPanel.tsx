@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { CandidateDetail, CVImportDraft } from "@/lib/types";
 
@@ -31,6 +31,8 @@ export function CVImportPanel({
   const [draft, setDraft] = useState<CVImportDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const extractCommand = useRef<{ identity: string; key: string } | null>(null);
+  const applyCommand = useRef<{ identity: string; key: string } | null>(null);
 
   async function extract() {
     if (!file) return;
@@ -38,7 +40,22 @@ export function CVImportPanel({
     setError(null);
     try {
       const content = await fileAsBase64(file);
-      setDraft(await api.createCvImport(candidateId, file.name, content));
+      const identity = `${candidateId}:${file.name}:${file.size}:${file.lastModified}`;
+      if (extractCommand.current?.identity !== identity) {
+        extractCommand.current = {
+          identity,
+          key: `create-cv-import-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+        };
+      }
+      setDraft(
+        await api.createCvImport(
+          candidateId,
+          file.name,
+          content,
+          extractCommand.current.key,
+        ),
+      );
+      extractCommand.current = null;
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "CV extraction failed safely.");
     } finally {
@@ -50,8 +67,22 @@ export function CVImportPanel({
     if (!draft) return;
     setBusy(true);
     setError(null);
+    const identity = `${candidateId}:${draft.import_id}`;
+    if (applyCommand.current?.identity !== identity) {
+      applyCommand.current = {
+        identity,
+        key: `apply-cv-import-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+      };
+    }
     try {
-      onApplied(await api.applyCvImport(candidateId, draft.import_id));
+      onApplied(
+        await api.applyCvImport(
+          candidateId,
+          draft.import_id,
+          applyCommand.current.key,
+        ),
+      );
+      applyCommand.current = null;
       setDraft(null);
       setFile(null);
     } catch (requestError) {
@@ -83,6 +114,8 @@ export function CVImportPanel({
           onChange={(event) => {
             setFile(event.target.files?.[0] ?? null);
             setDraft(null);
+            extractCommand.current = null;
+            applyCommand.current = null;
           }}
         />
       </label>

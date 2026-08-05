@@ -32,6 +32,8 @@ from app.domain.models import (
     ApplicationEvent,
     Base,
     BrowserSession,
+    CandidateSettingsRecord,
+    SecurityEvent,
 )
 from app.job_service import DiscoveryRequest, JobService
 
@@ -107,6 +109,10 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     generated = applications.generate_materials(
         "example_candidate", job_id, "generate-materials-501"
     )
+    assert (
+        applications.generate_materials("example_candidate", job_id, "generate-materials-501")
+        == generated
+    )
     assert generated.state is ApplicationState.REVIEW_PENDING
     assert {document.kind for document in generated.documents} == {"cv", "cover_letter"}
     assert all(document.evidence_ids for document in generated.documents)
@@ -120,10 +126,22 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     assert rendered_cv.metadata["valid"] is True
     assert rendered_cv.metadata["extraction_matches"] is True
 
-    applications.approve_materials(
+    approved = applications.approve_materials(
         "example_candidate", generated.application_id, "approve-materials-501"
     )
-    applications.start("example_candidate", generated.application_id, "start-application-501")
+    assert (
+        applications.approve_materials(
+            "example_candidate", generated.application_id, "approve-materials-501"
+        )
+        == approved
+    )
+    started = applications.start(
+        "example_candidate", generated.application_id, "start-application-501"
+    )
+    assert (
+        applications.start("example_candidate", generated.application_id, "start-application-501")
+        == started
+    )
     ready = applications.dry_run(
         "example_candidate",
         generated.application_id,
@@ -131,6 +149,22 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         "dry-run-501",
     )
     assert ready.state is ApplicationState.READY_TO_SUBMIT
+    assert (
+        applications.dry_run(
+            "example_candidate",
+            generated.application_id,
+            DryRunCommand(),
+            "dry-run-501",
+        )
+        == ready
+    )
+    with pytest.raises(ApplicationConflictError, match="reused"):
+        applications.dry_run(
+            "example_candidate",
+            generated.application_id,
+            DryRunCommand(challenge="captcha"),
+            "dry-run-501",
+        )
     dry_run_event = next(
         event for event in ready.events if event.event_type == "FINAL_VALIDATION_STARTED"
     )
@@ -142,6 +176,12 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
 
     authorization = applications.authorize(
         "example_candidate", generated.application_id, "authorize-application-501"
+    )
+    assert (
+        applications.authorize(
+            "example_candidate", generated.application_id, "authorize-application-501"
+        )
+        == authorization
     )
     artifacts = applications.list_artifacts("example_candidate", generated.application_id)
     artifact_kinds = {artifact.kind for artifact in artifacts}
@@ -247,13 +287,76 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         ),
         "correspondence-interview-501",
     )
+    replayed_correspondence = applications.ingest_correspondence(
+        CorrespondenceIngestRequest(
+            candidate_id="example_candidate",
+            provider_message_id="fictional-interview-501",
+            sender="recruiting@fictional-robotics.invalid",
+            recipients=("morgan@example.invalid",),
+            subject="Interview invitation for application 501",
+            body_text="Please schedule an interview for the Machine Learning Engineer role.",
+            received_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
+        ),
+        "correspondence-interview-501",
+    )
+    assert replayed_correspondence == correspondence
+    with pytest.raises(ApplicationConflictError, match="reused"):
+        applications.ingest_correspondence(
+            CorrespondenceIngestRequest(
+                candidate_id="example_candidate",
+                provider_message_id="fictional-interview-501",
+                sender="recruiting@fictional-robotics.invalid",
+                recipients=("morgan@example.invalid",),
+                subject="Changed fictional subject",
+                body_text="Please schedule an interview for the Machine Learning Engineer role.",
+                received_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
+            ),
+            "correspondence-interview-501",
+        )
+    with pytest.raises(ApplicationConflictError, match="message ID was reused"):
+        applications.ingest_correspondence(
+            CorrespondenceIngestRequest(
+                candidate_id="example_candidate",
+                provider_message_id="fictional-interview-501",
+                sender="recruiting@fictional-robotics.invalid",
+                recipients=("morgan@example.invalid",),
+                subject="Changed fictional subject",
+                body_text="Please schedule an interview for the Machine Learning Engineer role.",
+                received_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
+            ),
+            "correspondence-changed-fresh-key",
+        )
     assert correspondence.application_id == generated.application_id
     assert correspondence.kind == "interview"
     assert (
         applications.get_application("example_candidate", generated.application_id).state
         is ApplicationState.INTERVIEW
     )
-    package = applications.prepare_interview("example_candidate", generated.application_id)
+    assert (
+        applications.submit_synthetic(
+            "example_candidate",
+            generated.application_id,
+            SyntheticSubmissionRequest(
+                authorization_id=authorization.authorization_id,
+                synthetic_fixture_acknowledged=True,
+            ),
+            "submit-synthetic-501",
+        )
+        == result
+    )
+    package = applications.prepare_interview(
+        "example_candidate", generated.application_id, "prepare-interview-package"
+    )
+    replayed_package = applications.prepare_interview(
+        "example_candidate", generated.application_id, "prepare-interview-package"
+    )
+    assert replayed_package == package
+    with pytest.raises(ApplicationConflictError, match="reused with another request"):
+        applications.prepare_interview(
+            "example_candidate",
+            UUID("00000000-0000-0000-0000-000000000999"),
+            "prepare-interview-package",
+        )
     assert package.exact_cv
     assert package.company == "Fictional Robotics Ltd"
     assert applications.list_notifications("example_candidate")[0].immediate
@@ -350,6 +453,7 @@ def test_materials_can_be_regenerated_with_a_new_exact_snapshot_and_version(
     CandidateService(copied_candidates_root).update_section(
         "example_candidate",
         CandidateSectionUpdate(section="biography", data=biography),
+        "update-biography-regeneration",
     )
     regenerated = applications.generate_materials(
         "example_candidate", job_id, "generate-materials-505-valid"
@@ -569,10 +673,36 @@ def test_captcha_creates_visible_resumable_human_action(
         "example_candidate", actions[0].action_id, "open-captcha-502"
     )
     assert opened.session_opened
+    assert (
+        applications.open_human_session(
+            "example_candidate", actions[0].action_id, "open-captcha-502"
+        )
+        == opened
+    )
     completed = applications.complete_human_action(
         "example_candidate", actions[0].action_id, "complete-captcha-502"
     )
     assert completed.status == "completed"
+    assert (
+        applications.complete_human_action(
+            "example_candidate", actions[0].action_id, "complete-captcha-502"
+        )
+        == completed
+    )
+    with pytest.raises(ApplicationConflictError, match="reused"):
+        applications.complete_human_action(
+            "example_candidate",
+            actions[0].action_id,
+            "complete-captcha-502",
+            cancel=True,
+        )
+    with pytest.raises(ApplicationConflictError, match="already completed"):
+        applications.complete_human_action(
+            "example_candidate",
+            actions[0].action_id,
+            "cancel-completed-captcha-fresh-key",
+            cancel=True,
+        )
     detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.state is ApplicationState.READY_TO_SUBMIT
 
@@ -639,7 +769,8 @@ def test_unapproved_candidate_cannot_generate_materials(
     service.create(
         CandidateCreateRequest(
             candidate_id="unapproved_candidate", display_name="Unapproved Candidate"
-        )
+        ),
+        "create-unapproved-candidate",
     )
     _jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
 
@@ -728,6 +859,18 @@ def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
         assert records[1].previous_hash == records[0].event_hash
 
 
+def test_reading_default_settings_does_not_mutate_persistence(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+
+    settings = applications.get_settings("example_candidate")
+
+    assert settings.candidate_id == "example_candidate"
+    with sessions() as session:
+        assert session.scalars(select(CandidateSettingsRecord)).all() == []
+
+
 def test_settings_commands_are_payload_bound_and_replay_without_duplicate_audit(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
@@ -746,3 +889,38 @@ def test_settings_commands_are_payload_bound_and_replay_without_duplicate_audit(
     with sessions() as session:
         records = session.scalars(select(AdministrativeAuditRecord)).all()
         assert [record.event_type for record in records] == ["settings_updated"]
+
+
+def test_security_resolution_is_payload_bound_and_replays_without_duplicate_audit(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    with sessions.begin() as session:
+        finding = SecurityEvent(
+            candidate_id="example_candidate",
+            category="prompt_injection",
+            severity="high",
+            details={"reason": "fictional test finding"},
+        )
+        session.add(finding)
+        session.flush()
+        finding_id = finding.id
+
+    first = applications.resolve_security_event(
+        "example_candidate", finding_id, "resolve-security-finding"
+    )
+    replay = applications.resolve_security_event(
+        "example_candidate", finding_id, "resolve-security-finding"
+    )
+
+    assert replay == first
+    assert first.resolved
+    with pytest.raises(ApplicationConflictError, match="reused with another request"):
+        applications.resolve_security_event(
+            "example_candidate",
+            UUID("00000000-0000-0000-0000-000000000999"),
+            "resolve-security-finding",
+        )
+    with sessions() as session:
+        records = session.scalars(select(AdministrativeAuditRecord)).all()
+        assert [record.event_type for record in records] == ["security_event_resolved"]

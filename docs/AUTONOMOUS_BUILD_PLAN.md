@@ -208,6 +208,30 @@ tables, including administrative audit. Daily worker tasks purge eligible browse
 return expired human-action applications to an explicit retryable form-fill state. Hosted tenant
 recovery authorization, encryption, and deletion-receipt retention remain later deployment work.
 
+### Phase 5F — payload-bound mutation replay
+
+1. Require command keys for candidate creation, section import/update, snapshots, CV extraction,
+   and CV application across API, CLI, and frontend callers.
+2. Journal candidate filesystem mutations as atomic pending/completed receipts outside candidate
+   packages, reconcile interrupted version publication, and purge the receipts during deletion.
+3. Generalize durable SQL receipts across material generation/approval, workflow start, dry-run,
+   authorization, withdrawal, correspondence, interview preparation, security resolution, and
+   human-session commands.
+4. Retain the same frontend command key across uncertain failures and clear it only after a
+   backend-confirmed response.
+5. Ensure read-only settings access does not create persistence as a hidden side effect.
+
+Status: complete. Candidate journals bind canonical payloads without storing raw command keys,
+persist exact snapshot identities, stage new candidates before atomic publication, restore updates
+interrupted between section and manifest publication, and are serialized by the existing
+cross-process lifecycle lease. Application receipts and effects share one database transaction and
+exact responses replay before current-state checks. Natural provider/CV identities reject changed
+content even under fresh keys, terminal human-action intent cannot be reversed, and command keys
+are bounded before persistence. Specialized job, discovery, task, deletion, and synthetic-
+submission receipts remain in place. Regression tests cover exact response replay,
+changed-payload conflicts, interrupted publication, UI retry keys, and side-effect-free settings
+reads.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

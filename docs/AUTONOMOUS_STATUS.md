@@ -87,13 +87,18 @@
   recovery can resume an interrupted operation. Raw candidate administrative audits are erased,
   while deletion events use a local keyed pseudonym. Configurable browser-profile retention also
   handles expired human-takeover sessions and moves their applications to an auditable retry state.
+- Every candidate configuration mutation now requires a payload-bound command key. A private
+  pending/completed filesystem journal preserves exact create, update, snapshot, CV-extraction,
+  and CV-application results and reconciles interruption after version publication. Application
+  workflow, correspondence, human-action, security, and interview mutations use durable SQL
+  receipts; the frontend retains keys across uncertain failures.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **193 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **209 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **41 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **45 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `d1a7e6c9420b`; models and Alembic report no missing operations.
@@ -109,6 +114,9 @@
   authorized in this repository. Add a deployment-specific interactive transport before claiming
   production same-context human takeover, and wire the fixture harness through the isolated
   application worker boundary. The local API currently performs only a validated session handshake.
+  A safe synthetic execution adapter must still model timeout inspection, restart recovery,
+  categorized adapter failures, bounded retries, and repeated-failure human escalation without
+  introducing any live submission capability.
 - Implement portable-export round-trip import. Establish hosted authentication/encryption,
   tenant-bound deletion recovery, and a legal retention/pseudonymization policy for the minimal
   deletion tombstone before multi-user deployment.
@@ -122,6 +130,6 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with portable import, material revision/idempotency, and
+3. Continue the full specification audit with portable import, material revision, and
    remaining browser/hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

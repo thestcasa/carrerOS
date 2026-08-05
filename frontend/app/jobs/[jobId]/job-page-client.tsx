@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { JobDetail } from "@/components/JobDetail";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { api } from "@/lib/api";
@@ -14,17 +14,25 @@ export function JobPageClient({ candidateId, jobId }: { candidateId: string; job
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<"verify" | "shortlist" | "skip" | "generate" | null>(null);
+  const commandKeys = useRef(new Map<string, string>());
   async function runAction(action: "verify" | "shortlist" | "skip" | "generate") {
     setBusyAction(action);
     setActionError(null);
-    const key = globalThis.crypto?.randomUUID?.() ?? `${action}-${Date.now()}`;
+    const identity = `${candidateId}:${jobId}:${action}`;
+    let key = commandKeys.current.get(identity);
+    if (!key) {
+      key = `${action}-${globalThis.crypto.randomUUID()}`;
+      commandKeys.current.set(identity, key);
+    }
     try {
       if (action === "generate") {
         const application = await api.generateMaterials(candidateId, jobId, key);
+        commandKeys.current.delete(identity);
         router.push(`/applications/${application.application_id}?candidate_id=${encodeURIComponent(candidateId)}`);
         return;
       }
       const updated = action === "verify" ? await api.verifyJob(candidateId, jobId, key) : action === "shortlist" ? await api.shortlistJob(candidateId, jobId, key) : await api.skipJob(candidateId, jobId, key);
+      commandKeys.current.delete(identity);
       setJob(updated);
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : "The action failed safely.");

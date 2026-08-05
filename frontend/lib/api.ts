@@ -140,9 +140,14 @@ function verifiedDeletionReceipt(
 export const api = {
   health: () => request<HealthReport>("/api/health"),
   candidates: () => request<CandidateSummary[]>("/api/candidates"),
-  createCandidate: async (candidateId: string, displayName: string) => {
+  createCandidate: async (
+    candidateId: string,
+    displayName: string,
+    idempotencyKey: string,
+  ) => {
     const candidate = await request<CandidateDetail>("/api/candidates", {
       method: "POST",
+      headers: commandHeaders(idempotencyKey),
       body: JSON.stringify({ candidate_id: candidateId, display_name: displayName }),
     });
     clearLocalSession();
@@ -169,18 +174,28 @@ export const api = {
     );
     return verifiedDeletionReceipt(candidateId, result, true);
   },
-  createCvImport: (candidateId: string, filename: string, contentBase64: string) =>
+  createCvImport: (
+    candidateId: string,
+    filename: string,
+    contentBase64: string,
+    idempotencyKey: string,
+  ) =>
     request<CVImportDraft>(
       `/api/candidates/${encodeURIComponent(candidateId)}/cv-imports`,
       {
         method: "POST",
+        headers: commandHeaders(idempotencyKey),
         body: JSON.stringify({ filename, content_base64: contentBase64 }),
       },
     ),
-  applyCvImport: (candidateId: string, importId: string) =>
+  applyCvImport: (
+    candidateId: string,
+    importId: string,
+    idempotencyKey: string,
+  ) =>
     request<CandidateDetail>(
       `/api/candidates/${encodeURIComponent(candidateId)}/cv-imports/${encodeURIComponent(importId)}/apply`,
-      { method: "POST" },
+      { method: "POST", headers: commandHeaders(idempotencyKey) },
     ),
   candidate: (candidateId: string) =>
     request<CandidateDetail>(`/api/candidates/${encodeURIComponent(candidateId)}`),
@@ -188,10 +203,19 @@ export const api = {
     request<ReadinessReport>(
       `/api/candidates/${encodeURIComponent(candidateId)}/readiness`,
     ),
-  updateSection: (candidateId: string, section: EditableSection, data: JsonObject) =>
+  updateSection: (
+    candidateId: string,
+    section: EditableSection,
+    data: JsonObject,
+    idempotencyKey: string,
+  ) =>
     request<CandidateUpdateResult>(
       `/api/candidates/${encodeURIComponent(candidateId)}`,
-      { method: "PATCH", body: JSON.stringify({ section, data }) },
+      {
+        method: "PATCH",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify({ section, data }),
+      },
     ),
   jobs: (candidateId: string) =>
     request<JobSummary[]>(`/api/jobs?candidate_id=${encodeURIComponent(candidateId)}`),
@@ -274,8 +298,15 @@ export const api = {
     request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/complete?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   securityEvents: (candidateId: string) =>
     request<SecurityEventView[]>(`/api/security-events?candidate_id=${encodeURIComponent(candidateId)}`),
-  resolveSecurityEvent: (candidateId: string, eventId: string) =>
-    request<SecurityEventView>(`/api/security-events/${encodeURIComponent(eventId)}/resolve?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST" }),
+  resolveSecurityEvent: (
+    candidateId: string,
+    eventId: string,
+    idempotencyKey: string,
+  ) =>
+    request<SecurityEventView>(
+      `/api/security-events/${encodeURIComponent(eventId)}/resolve?candidate_id=${encodeURIComponent(candidateId)}`,
+      { method: "POST", headers: commandHeaders(idempotencyKey) },
+    ),
   settings: (candidateId: string) =>
     request<SettingsView>(`/api/settings?candidate_id=${encodeURIComponent(candidateId)}`),
   discoverySources: (candidateId: string) =>

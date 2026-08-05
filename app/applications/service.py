@@ -176,21 +176,27 @@ class ApplicationService:
         idempotency_key: str,
     ) -> ApplicationDetail:
         config = self._candidates.get_config(candidate_id)
-        generation_blockers = [
-            name
-            for name, approved in {
-                "candidate_profile": config.manifest.validation.profile_approved,
-                "legal_status": config.manifest.validation.legal_status_approved,
-                "automatic_answers": config.manifest.validation.automatic_answers_approved,
-                "cv_templates": config.manifest.validation.cv_templates_approved,
-            }.items()
-            if not approved
-        ]
-        if generation_blockers:
-            raise ApplicationConflictError(
-                "material generation requires approved " + ", ".join(generation_blockers)
-            )
         with self._sessions.begin() as session:
+            payload = {"job_id": str(job_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "generate_materials", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
+            generation_blockers = [
+                name
+                for name, approved in {
+                    "candidate_profile": config.manifest.validation.profile_approved,
+                    "legal_status": config.manifest.validation.legal_status_approved,
+                    "automatic_answers": config.manifest.validation.automatic_answers_approved,
+                    "cv_templates": config.manifest.validation.cv_templates_approved,
+                }.items()
+                if not approved
+            ]
+            if generation_blockers:
+                raise ApplicationConflictError(
+                    "material generation requires approved " + ", ".join(generation_blockers)
+                )
             job = session.get(GlobalJob, job_id)
             if job is None:
                 raise ApplicationNotFoundError(f"job not found: {job_id}")
@@ -230,15 +236,24 @@ class ApplicationService:
                         to_state=ApplicationState.SHORTLISTED,
                     )
                 )
-            replay = session.scalar(
+            event_replay = session.scalar(
                 select(ApplicationEvent).where(
                     ApplicationEvent.candidate_id == candidate_id,
                     ApplicationEvent.application_id == application.id,
                     ApplicationEvent.idempotency_key == f"{idempotency_key}:review",
                 )
             )
-            if replay is not None:
-                return self._detail(session, application)
+            if event_replay is not None:
+                view = self._detail(session, application)
+                self._append_administrative_command_receipt(
+                    session,
+                    candidate_id,
+                    "generate_materials",
+                    key_sha256,
+                    request_sha256,
+                    view.model_dump(mode="json"),
+                )
+                return view
 
             snapshot_record = session.scalar(
                 select(CandidateSnapshotRecord).where(
@@ -458,12 +473,28 @@ class ApplicationService:
                     "INDEPENDENT_REVIEW_FAILED",
                     payload=review.model_dump(mode="json"),
                 )
-        return self.get_application(candidate_id, application.id)
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "generate_materials",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def approve_materials(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> ApplicationDetail:
-        with self._sessions.begin() as session:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = {"application_id": str(application_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "approve_materials", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             review = session.scalar(
                 select(AgentReview)
@@ -484,12 +515,28 @@ class ApplicationService:
                 idempotency_key,
                 "MATERIALS_APPROVED",
             )
-        return self.get_application(candidate_id, application_id)
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "approve_materials",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def start(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> ApplicationDetail:
-        with self._sessions.begin() as session:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = {"application_id": str(application_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "start_application", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             self._transition(
                 session,
@@ -512,7 +559,17 @@ class ApplicationService:
                         status="synthetic_ready",
                     )
                 )
-        return self.get_application(candidate_id, application_id)
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "start_application",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def dry_run(
         self,
@@ -533,6 +590,15 @@ class ApplicationService:
     ) -> ApplicationDetail:
         config = self._candidates.get_config(candidate_id)
         with self._sessions.begin() as session:
+            payload = {
+                "application_id": str(application_id),
+                "command": command.model_dump(mode="json"),
+            }
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "dry_run_application", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             if application.state is not ApplicationState.FORM_FILLING:
                 raise ApplicationConflictError("application is not ready for form filling")
@@ -630,7 +696,17 @@ class ApplicationService:
                     "FINAL_VALIDATION_PASSED",
                     payload={"synthetic_only": True},
                 )
-        return self.get_application(candidate_id, application_id)
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "dry_run_application",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def authorize(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
@@ -643,6 +719,12 @@ class ApplicationService:
     ) -> AuthorizationView:
         config = self._candidates.get_config(candidate_id)
         with self._sessions.begin() as session:
+            payload = {"application_id": str(application_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "authorize_application", payload, idempotency_key
+            )
+            if replay is not None:
+                return AuthorizationView.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             existing = session.scalar(
                 select(SubmissionAuthorizationRecord)
@@ -805,7 +887,16 @@ class ApplicationService:
                     raise ApplicationConflictError(
                         "existing authorization does not match the current submission package"
                     )
-                return self._authorization_view(existing)
+                view = self._authorization_view(existing)
+                self._append_administrative_command_receipt(
+                    session,
+                    candidate_id,
+                    "authorize_application",
+                    key_sha256,
+                    request_sha256,
+                    view.model_dump(mode="json"),
+                )
+                return view
             authorization = decision.authorization
             record = SubmissionAuthorizationRecord(
                 authorization_id=authorization.authorization_id,
@@ -829,7 +920,16 @@ class ApplicationService:
                 )
             )
             session.flush()
-            return self._authorization_view(record)
+            view = self._authorization_view(record)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "authorize_application",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def submit_synthetic(
         self,
@@ -867,10 +967,14 @@ class ApplicationService:
                 successful = replay.event_type == "SUBMISSION_CONFIRMED"
                 return SubmissionResultView(
                     application_id=application_id,
-                    state=application.state,
+                    state=replay.to_state,
                     successful=successful,
                     status="confirmed" if successful else "confirmation_missing",
-                    confirmation_reference=application.confirmation_reference,
+                    confirmation_reference=(
+                        str(replay.payload["confirmation_reference"])
+                        if replay.payload.get("confirmation_reference") is not None
+                        else None
+                    ),
                 )
             record = lookup.get(SubmissionAuthorizationRecord, request.authorization_id)
             if (
@@ -1083,7 +1187,13 @@ class ApplicationService:
     def withdraw(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> ApplicationDetail:
-        with self._sessions.begin() as session:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = {"application_id": str(application_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "withdraw_application", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             self._transition(
                 session,
@@ -1093,7 +1203,17 @@ class ApplicationService:
                 "APPLICATION_WITHDRAWN",
             )
             application.outcome = ApplicationOutcome.WITHDRAWN
-        return self.get_application(candidate_id, application_id)
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "withdraw_application",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def list_artifacts(self, candidate_id: str, application_id: UUID) -> tuple[ArtifactView, ...]:
         with self._sessions() as session:
@@ -1123,16 +1243,26 @@ class ApplicationService:
     def ingest_correspondence(
         self, request: CorrespondenceIngestRequest, idempotency_key: str
     ) -> CorrespondenceView:
-        config = self._candidates.get_config(request.candidate_id)
-        with self._sessions.begin() as session:
+        with (
+            self._candidates.lifecycle_write(request.candidate_id) as config,
+            self._sessions.begin() as session,
+        ):
+            payload = request.model_dump(mode="json")
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session,
+                request.candidate_id,
+                "ingest_correspondence",
+                payload,
+                idempotency_key,
+            )
+            if replay is not None:
+                return CorrespondenceView.model_validate(replay)
             existing = session.scalar(
                 select(StoredCorrespondence).where(
                     StoredCorrespondence.candidate_id == request.candidate_id,
                     StoredCorrespondence.external_message_id == request.provider_message_id,
                 )
             )
-            if existing is not None:
-                return self._correspondence_view(existing)
             applications = session.scalars(
                 select(Application).where(Application.candidate_id == request.candidate_id)
             ).all()
@@ -1164,6 +1294,21 @@ class ApplicationService:
                 ),
                 applications=references,
             )
+            if existing is not None:
+                if not hmac.compare_digest(existing.body_sha256, classified.message_sha256):
+                    raise ApplicationConflictError(
+                        "provider message ID was reused with changed correspondence"
+                    )
+                view = self._correspondence_view(existing)
+                self._append_administrative_command_receipt(
+                    session,
+                    request.candidate_id,
+                    "ingest_correspondence",
+                    key_sha256,
+                    request_sha256,
+                    view.model_dump(mode="json"),
+                )
+                return view
             record = StoredCorrespondence(
                 candidate_id=request.candidate_id,
                 application_id=classified.application_id,
@@ -1217,18 +1362,37 @@ class ApplicationService:
                         immediate=event_type in notification_rules.immediate_events,
                     )
                 )
-            return self._correspondence_view(record)
+            view = self._correspondence_view(record)
+            self._append_administrative_command_receipt(
+                session,
+                request.candidate_id,
+                "ingest_correspondence",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def prepare_interview(
-        self, candidate_id: str, application_id: UUID
+        self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> InterviewPreparationPackage:
         with self._candidates.lifecycle_write(candidate_id):
-            return self._prepare_interview(candidate_id, application_id)
+            return self._prepare_interview(candidate_id, application_id, idempotency_key)
 
     def _prepare_interview(
-        self, candidate_id: str, application_id: UUID
+        self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> InterviewPreparationPackage:
         with self._sessions.begin() as session:
+            payload = {"application_id": str(application_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session,
+                candidate_id,
+                "prepare_interview",
+                payload,
+                idempotency_key,
+            )
+            if replay is not None:
+                return InterviewPreparationPackage.model_validate(replay)
             application = self._application(session, candidate_id, application_id)
             existing = session.scalar(
                 select(ApplicationArtifact).where(
@@ -1239,9 +1403,18 @@ class ApplicationService:
                 )
             )
             if existing is not None:
-                return InterviewPreparationPackage.model_validate_json(
+                package = InterviewPreparationPackage.model_validate_json(
                     Path(existing.storage_uri).read_text(encoding="utf-8")
                 )
+                self._append_administrative_command_receipt(
+                    session,
+                    candidate_id,
+                    "prepare_interview",
+                    key_sha256,
+                    request_sha256,
+                    package.model_dump(mode="json"),
+                )
+                return package
             job = session.get(GlobalJob, application.job_id)
             score = (
                 session.get(CandidateJobScore, application.score_id)
@@ -1331,6 +1504,14 @@ class ApplicationService:
                     artifact_metadata={"source_artifacts_sha256": package.source_artifacts_sha256},
                 )
             )
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "prepare_interview",
+                key_sha256,
+                request_sha256,
+                package.model_dump(mode="json"),
+            )
             return package
 
     def list_notifications(self, candidate_id: str) -> tuple[NotificationView, ...]:
@@ -1400,6 +1581,12 @@ class ApplicationService:
         self, candidate_id: str, action_id: UUID, idempotency_key: str
     ) -> HumanActionView:
         with self._sessions.begin() as session:
+            payload = {"action_id": str(action_id)}
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "open_human_session", payload, idempotency_key
+            )
+            if replay is not None:
+                return HumanActionView.model_validate(replay)
             action = session.scalar(
                 select(HumanAction).where(
                     HumanAction.id == action_id,
@@ -1422,7 +1609,16 @@ class ApplicationService:
             ):
                 raise ApplicationConflictError("candidate browser session is unavailable")
             if browser_session.status == "human_takeover_opened":
-                return self._human_action_view(session, action)
+                view = self._human_action_view(session, action)
+                self._append_administrative_command_receipt(
+                    session,
+                    candidate_id,
+                    "open_human_session",
+                    key_sha256,
+                    request_sha256,
+                    view.model_dump(mode="json"),
+                )
+                return view
             if browser_session.status != "human_action_required":
                 raise ApplicationConflictError("browser session is not paused for human action")
             session_reference = Path(browser_session.external_session_ref or "").resolve()
@@ -1454,7 +1650,16 @@ class ApplicationService:
                 )
             )
             session.flush()
-            return self._human_action_view(session, action)
+            view = self._human_action_view(session, action)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "open_human_session",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def complete_human_action(
         self, candidate_id: str, action_id: UUID, idempotency_key: str, *, cancel: bool = False
@@ -1468,6 +1673,13 @@ class ApplicationService:
         self, candidate_id: str, action_id: UUID, idempotency_key: str, *, cancel: bool = False
     ) -> HumanActionView:
         with self._sessions.begin() as session:
+            payload = {"action_id": str(action_id), "cancel": cancel}
+            operation = "cancel_human_action" if cancel else "complete_human_action"
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, operation, payload, idempotency_key
+            )
+            if replay is not None:
+                return HumanActionView.model_validate(replay)
             action = session.scalar(
                 select(HumanAction).where(
                     HumanAction.id == action_id,
@@ -1477,7 +1689,21 @@ class ApplicationService:
             if action is None:
                 raise ApplicationNotFoundError("human action not found")
             if action.status != "pending":
-                return self._human_action_view(session, action)
+                expected_status = "cancelled" if cancel else "completed"
+                if action.status != expected_status:
+                    raise ApplicationConflictError(
+                        f"human action is already {action.status}; cannot mark it {expected_status}"
+                    )
+                view = self._human_action_view(session, action)
+                self._append_administrative_command_receipt(
+                    session,
+                    candidate_id,
+                    operation,
+                    key_sha256,
+                    request_sha256,
+                    view.model_dump(mode="json"),
+                )
+                return view
             if action.expires_at is not None and _utc(action.expires_at) <= datetime.now(UTC):
                 raise ApplicationConflictError("human action has expired")
             application = self._application(session, candidate_id, action.application_id)
@@ -1536,7 +1762,17 @@ class ApplicationService:
                     f"{idempotency_key}:ready",
                     "FINAL_VALIDATION_PASSED",
                 )
-            return self._human_action_view(session, action)
+            session.flush()
+            view = self._human_action_view(session, action)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                operation,
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
 
     def list_security_events(self, candidate_id: str) -> tuple[SecurityEventView, ...]:
         self._candidates.get_config(candidate_id)
@@ -1548,8 +1784,19 @@ class ApplicationService:
             ).all()
             return tuple(self._security_view(item) for item in events)
 
-    def resolve_security_event(self, candidate_id: str, event_id: UUID) -> SecurityEventView:
-        with self._sessions.begin() as session:
+    def resolve_security_event(
+        self, candidate_id: str, event_id: UUID, idempotency_key: str
+    ) -> SecurityEventView:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session,
+                candidate_id,
+                "resolve_security_event",
+                {"event_id": str(event_id)},
+                idempotency_key,
+            )
+            if replay is not None:
+                return SecurityEventView.model_validate(replay)
             event = session.scalar(
                 select(SecurityEvent).where(
                     SecurityEvent.id == event_id,
@@ -1558,19 +1805,33 @@ class ApplicationService:
             )
             if event is None:
                 raise ApplicationNotFoundError("security event not found")
-            event.resolved = True
-            self._append_admin_audit(
+            if not event.resolved:
+                event.resolved = True
+                self._append_admin_audit(
+                    session,
+                    candidate_id,
+                    "security_event_resolved",
+                    {"security_event_id": str(event_id)},
+                )
+            view = self._security_view(event)
+            self._append_administrative_command_receipt(
                 session,
                 candidate_id,
-                "security_event_resolved",
-                {"security_event_id": str(event_id)},
+                "resolve_security_event",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
             )
-            return self._security_view(event)
+            return view
 
     def get_settings(self, candidate_id: str) -> SettingsView:
         config = self._candidates.get_config(candidate_id)
-        with self._sessions.begin() as session:
-            record = self._settings_record(session, candidate_id)
+        with self._sessions() as session:
+            record = session.scalar(
+                select(CandidateSettingsRecord).where(
+                    CandidateSettingsRecord.candidate_id == candidate_id
+                )
+            ) or self._default_settings_record(candidate_id)
             return self._settings_view(config, record)
 
     def update_settings(self, update: SettingsUpdate, idempotency_key: str) -> SettingsView:
@@ -2631,6 +2892,23 @@ class ApplicationService:
         )
 
     @staticmethod
+    def _default_settings_record(candidate_id: str) -> CandidateSettingsRecord:
+        return CandidateSettingsRecord(
+            candidate_id=candidate_id,
+            automation_mode="dry_run",
+            discovery_enabled=False,
+            emergency_stopped=False,
+            allowed_ats_adapters=[],
+            tested_ats_adapters=[],
+            dry_run_acceptance_passed=False,
+            explicit_autonomy_confirmation=False,
+            maximum_applications_per_day=5,
+            maximum_applications_per_week=20,
+            maximum_applications_per_company_30_days=3,
+            browser_session_retention_days=30,
+        )
+
+    @staticmethod
     def _settings_record(session: Session, candidate_id: str) -> CandidateSettingsRecord:
         record = session.scalar(
             select(CandidateSettingsRecord).where(
@@ -2638,7 +2916,7 @@ class ApplicationService:
             )
         )
         if record is None:
-            record = CandidateSettingsRecord(candidate_id=candidate_id)
+            record = ApplicationService._default_settings_record(candidate_id)
             session.add(record)
             session.flush()
         return record
@@ -2696,7 +2974,24 @@ class ApplicationService:
         payload: dict[str, Any],
         idempotency_key: str,
     ) -> tuple[SettingsView | None, str, str]:
-        if len(idempotency_key) < 8:
+        replay, request_sha256, key_sha256 = ApplicationService._administrative_command_replay(
+            session, candidate_id, operation, payload, idempotency_key
+        )
+        return (
+            SettingsView.model_validate(replay) if replay is not None else None,
+            request_sha256,
+            key_sha256,
+        )
+
+    @staticmethod
+    def _administrative_command_replay(
+        session: Session,
+        candidate_id: str,
+        operation: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+    ) -> tuple[dict[str, Any] | None, str, str]:
+        if not 8 <= len(idempotency_key) <= 128:
             raise ApplicationConflictError("idempotency key is invalid")
         key_sha256 = hashlib.sha256(idempotency_key.encode()).hexdigest()
         request_sha256 = hashlib.sha256(
@@ -2720,7 +3015,7 @@ class ApplicationService:
             receipt.request_sha256, request_sha256
         ):
             raise ApplicationConflictError("idempotency key was reused with another request")
-        return SettingsView.model_validate(receipt.result), request_sha256, key_sha256
+        return receipt.result, request_sha256, key_sha256
 
     @staticmethod
     def _append_settings_receipt(
@@ -2731,13 +3026,31 @@ class ApplicationService:
         request_sha256: str,
         view: SettingsView,
     ) -> None:
+        ApplicationService._append_administrative_command_receipt(
+            session,
+            candidate_id,
+            operation,
+            key_sha256,
+            request_sha256,
+            view.model_dump(mode="json"),
+        )
+
+    @staticmethod
+    def _append_administrative_command_receipt(
+        session: Session,
+        candidate_id: str,
+        operation: str,
+        key_sha256: str,
+        request_sha256: str,
+        result: dict[str, Any],
+    ) -> None:
         session.add(
             AdministrativeCommandReceipt(
                 candidate_id=candidate_id,
                 operation=operation,
                 idempotency_key_sha256=key_sha256,
                 request_sha256=request_sha256,
-                result=view.model_dump(mode="json"),
+                result=result,
             )
         )
 

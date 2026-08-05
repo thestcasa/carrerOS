@@ -9,14 +9,16 @@ Useful commands:
 ```bash
 alembic upgrade head
 alembic check
-python -m app onboard --candidate fictional_friend --display-name "Fictional Friend"
+python -m app onboard --candidate fictional_friend --display-name "Fictional Friend" \
+  --idempotency-key onboard-fictional-friend
 python -m app validate-candidate --candidate fictional_friend
 python -m app readiness --candidate fictional_friend
 python -m app export-candidate --candidate fictional_friend
 python -m app deletion-status --candidate fictional_friend
 python -m app delete-candidate --candidate fictional_friend \
   --confirmation fictional_friend --idempotency-key operator-chosen-command-key
-python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt \
+  --idempotency-key import-fictional-friend-cv
 python -m app discover --candidate fictional_friend --fixture fixtures/jobs.json
 python -m app.browser.fixture_server --port 8090
 ```

@@ -133,7 +133,13 @@ Every candidate-specific table has a non-null, indexed `candidate_id`. Relations
 
 Applications use an explicit enum-backed state machine. Transitions are allow-listed. Invalid transitions raise a typed error. Transition commands require an idempotency key; replaying the same key with the same transition is a no-op, while reusing it for different input is an error. Retryable failures can return to their prior processing stage; terminal failures cannot transition.
 
-State changes are recorded as candidate-scoped application events. Persistence-level uniqueness on `(candidate_id, application_id, idempotency_key)` protects replay behavior.
+State changes are recorded as candidate-scoped application events. Application commands also use
+candidate-scoped administrative receipts that hash the operation, canonical payload, and command
+key and retain the exact response. A cross-process candidate lifecycle lease serializes receipt
+creation with the state transition. Candidate configuration mutations use a private atomic
+pending/completed filesystem journal because their files must be published before a completed
+receipt can be recorded; interrupted updates reconcile the expected source and target profile
+versions before completing a replay.
 
 ## Submission decision
 

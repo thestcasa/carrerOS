@@ -272,7 +272,7 @@ def test_candidate_deletion_requires_confirmation_and_revokes_stale_grant(
         }
         created = client.post(
             "/api/candidates",
-            headers=initial_headers,
+            headers={**initial_headers, "Idempotency-Key": "create-delete-api"},
             json={"candidate_id": "delete_api", "display_name": "Delete API"},
         )
         assert created.status_code == 200, created.text

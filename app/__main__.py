@@ -23,6 +23,12 @@ def _candidates_root() -> Path:
     return Path(configured) if configured else Path.cwd() / "candidates"
 
 
+def _idempotency_key(value: str) -> str:
+    if not 8 <= len(value) <= 128:
+        raise argparse.ArgumentTypeError("idempotency key must contain 8 to 128 characters")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -32,18 +38,20 @@ def build_parser() -> argparse.ArgumentParser:
     onboard = subparsers.add_parser("onboard")
     onboard.add_argument("--candidate", required=True)
     onboard.add_argument("--display-name")
+    onboard.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     export = subparsers.add_parser("export-candidate")
     export.add_argument("--candidate", required=True)
     delete_candidate = subparsers.add_parser("delete-candidate")
     delete_candidate.add_argument("--candidate", required=True)
     delete_candidate.add_argument("--confirmation", required=True)
-    delete_candidate.add_argument("--idempotency-key", required=True)
+    delete_candidate.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     deletion_status = subparsers.add_parser("deletion-status")
     deletion_status.add_argument("--candidate", required=True)
     cv_import = subparsers.add_parser("import-cv")
     cv_import.add_argument("--candidate", required=True)
     cv_import.add_argument("--file", type=Path, required=True)
     cv_import.add_argument("--apply", action="store_true")
+    cv_import.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     discover = subparsers.add_parser("discover")
     discover.add_argument("--candidate", required=True)
     discover.add_argument(
@@ -51,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="JSON fixture with platform, company, company_domain, and payloads.",
     )
+    discover.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     subparsers.add_parser("run-worker")
     subparsers.add_parser("run-scheduler")
     return parser
@@ -67,7 +76,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             CandidateCreateRequest(
                 candidate_id=args.candidate,
                 display_name=args.display_name or args.candidate.replace("_", " ").title(),
-            )
+            ),
+            args.idempotency_key,
         )
         print(
             json.dumps(
@@ -133,9 +143,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 filename=args.file.name,
                 content_base64=base64.b64encode(args.file.read_bytes()).decode(),
             ),
+            f"{args.idempotency_key}:draft",
         )
         if args.apply:
-            detail = candidate_service.apply_cv_import(args.candidate, draft.import_id)
+            detail = candidate_service.apply_cv_import(
+                args.candidate, draft.import_id, f"{args.idempotency_key}:apply"
+            )
             print(
                 json.dumps(
                     {
@@ -175,7 +188,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 company=fixture["company"],
                 company_domain=fixture["company_domain"],
                 payloads=tuple(fixture["payloads"]),
-            )
+            ),
+            args.idempotency_key,
         )
         print(result.model_dump_json())
         return 0
