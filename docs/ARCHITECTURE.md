@@ -173,6 +173,12 @@ ATS domain (or a subdomain); credentials, fragments, cross-domain application li
 authorities fail closed. Description text is treated as untrusted and scanned for instruction
 override, secret-exfiltration, safety-bypass, local-file, and hidden-ATS-content signals.
 
+Candidate-owned source records schedule exact public Greenhouse, Lever, or Ashby board endpoints.
+The read-only transport does not follow redirects and bounds timeout, response bytes, JSON media
+type, and job count. Cadence-bucket tasks are leased through the SQL queue; run status, counts,
+freshness, and body-free error codes are durable. Replays reuse discovery receipts, and only changed
+safe jobs are rescored.
+
 `global_jobs` stores the current candidate-neutral normalized view. `job_versions` is append-only
 and records every content change by canonical payload hash, while repeated unchanged discovery is
 idempotent. Candidate evaluation is stored separately in `candidate_job_scores`, allowing the same
@@ -183,7 +189,12 @@ not engine constants.
 Candidate inbox state is isolated in `candidate_job_decisions`. Every analyze, verify, shortlist,
 or skip mutation records a durable `candidate_job_commands` receipt keyed by candidate and caller
 idempotency key; discovery has its own durable receipt. Reuse with different input fails with a
-stable conflict. Injection findings block analysis and enter the candidate security ledger. Worker and scheduler are distinct Compose processes that
+stable conflict. Scheduled source creation and updates are also payload-bound and replay from
+durable receipts. Missing settings or an empty adapter allowlist deny scheduling and execution.
+Each job mutation locks and verifies the discovery-run attempt in its own transaction, so an
+expired worker cannot commit after a newer lease owns the run. Queue completion and failure also
+treat ownership loss as a non-mutating outcome, leaving the newer worker lease intact. Injection
+findings block analysis and enter the candidate security ledger. Worker and scheduler are distinct Compose processes that
 advertise health through Redis, and external ports bind to localhost by default.
 
 ## Trust and privacy decisions

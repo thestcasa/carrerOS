@@ -16,6 +16,7 @@ CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate
 - The authoritative spec's Milestones 2–8 and most full-product acceptance tests remain.
 - Existing local changes in `scripts/run-autonomous-build.sh` and `artifacts/` predate this build;
   they are user-owned and excluded from implementation commits.
+- The later untracked root file `how d8c72b0` is also user-owned and excluded without inspection.
 - The inherited worktree contains uncommitted, passing foundations for discovery, materials,
   synthetic browser dry runs, operations, correspondence, and local-auth primitives. These are
   preserved and integrated instead of recreated.
@@ -164,6 +165,22 @@ Status: complete for deterministic PDF output. CV template selection is versione
 DOCX remains optional. Tests cover pagination without truncation, glyph/URL/template/page failures,
 persisted render denial and regeneration, exact-version approval, candidate/symlink isolation,
 authorization-package drift, exact browser upload hash, and byte-identical archives.
+
+### Phase 5D — durable scheduled discovery
+
+1. Persist candidate-owned Greenhouse, Lever, and Ashby source configuration and discovery runs.
+2. Fetch only through a bounded read-only transport with exact provider URL policy, response limits,
+   deterministic error categories, and injectable fixtures.
+3. Enqueue enabled sources once per cadence bucket and execute them through leased worker tasks.
+4. Reuse normalization, injection quarantine, versioning, deduplication, and candidate scoring.
+5. Expose source freshness, counts, next run, and failures through authenticated API/UI surfaces.
+
+Status: complete for credential-free scheduled discovery. Candidate-owned sources and run status
+are durable; exact provider endpoints are fetched through bounded read-only transports; cadence
+tasks use transaction-fenced leases and content-bound replay keys; every source mutation has a
+payload-bound receipt; missing settings and empty adapter allowlists fail closed; safe changed jobs
+alone are reanalyzed; settings and jobs surfaces expose policy and execution status. Manual payload
+import is labeled development-only.
 
 ### Phase 6 — definition-of-done verification
 

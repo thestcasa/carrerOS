@@ -190,6 +190,38 @@ export interface DiscoveryResult {
   discovered: number;
   unchanged: number;
   job_ids: string[];
+  changed_job_ids?: string[];
+}
+
+export interface DiscoverySourceView {
+  source_id: string;
+  candidate_id: string;
+  provider: AtsPlatform;
+  company: string;
+  company_domain: string;
+  board_token: string;
+  enabled: boolean;
+  cadence_minutes: number;
+  next_run_at: string;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_status: string | null;
+  last_discovered: number;
+  last_unchanged: number;
+}
+
+export interface DiscoverySourceCreate {
+  provider: AtsPlatform;
+  company: string;
+  company_domain: string;
+  board_token: string;
+  cadence_minutes: number;
+  enabled: boolean;
+}
+
+export interface DiscoverySourceUpdate {
+  enabled?: boolean;
+  cadence_minutes?: number;
 }
 
 export type MaterialKind = "cv" | "cover_letter" | "answer_set";
@@ -401,14 +433,27 @@ export interface SettingsView {
   automation_mode: "disabled" | "dry_run" | "approval_required" | "autonomous";
   discovery_enabled: boolean;
   emergency_stopped: boolean;
-  allowed_ats_adapters: string[];
-  tested_ats_adapters: string[];
+  allowed_ats_adapters: AtsPlatform[];
+  tested_ats_adapters: AtsPlatform[];
   dry_run_acceptance_passed: boolean;
   explicit_autonomy_confirmation: boolean;
   maximum_applications_per_day: number;
   maximum_applications_per_week: number;
   maximum_applications_per_company_30_days: number;
   autonomy_blockers: string[];
+}
+
+export interface SettingsUpdate {
+  candidate_id: string;
+  automation_mode?: SettingsView["automation_mode"];
+  discovery_enabled?: boolean;
+  allowed_ats_adapters?: AtsPlatform[];
+  tested_ats_adapters?: AtsPlatform[];
+  dry_run_acceptance_passed?: boolean;
+  explicit_autonomy_confirmation?: boolean;
+  maximum_applications_per_day?: number;
+  maximum_applications_per_week?: number;
+  maximum_applications_per_company_30_days?: number;
 }
 
 export interface AnalyticsOverview {

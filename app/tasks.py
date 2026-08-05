@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.domain.models import WorkflowTask
 
 
+class TaskLeaseLostError(ValueError):
+    """The caller no longer owns the durable task lease and must not mutate it."""
+
+
 class TaskContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -113,6 +117,13 @@ class TaskQueue:
             task.locked_at = None
             return self._view(task)
 
+    def get(self, task_id: UUID) -> TaskView:
+        with self._sessions() as session:
+            task = session.get(WorkflowTask, task_id)
+            if task is None:
+                raise ValueError("workflow task not found")
+            return self._view(task)
+
     def fail(
         self,
         task_id: UUID,
@@ -139,7 +150,7 @@ class TaskQueue:
         if task is None:
             raise ValueError("workflow task not found")
         if task.status != "running" or task.locked_by != worker_id:
-            raise ValueError("workflow task is not leased by this worker")
+            raise TaskLeaseLostError("workflow task is not leased by this worker")
         return task
 
     @staticmethod

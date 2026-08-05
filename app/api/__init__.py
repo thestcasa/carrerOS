@@ -54,6 +54,14 @@ from app.candidates.snapshot import CandidateSnapshot
 from app.core.settings import Settings
 from app.correspondence import InterviewPreparationPackage
 from app.db import build_engine, build_session_factory
+from app.discovery.providers import ProviderFeedClient
+from app.discovery.scheduled import (
+    DiscoverySourceCreate,
+    DiscoverySourceUpdate,
+    DiscoverySourceView,
+    ScheduledDiscoveryError,
+    ScheduledDiscoveryService,
+)
 from app.health import HealthChecker, HealthProbe, HealthReport
 from app.job_service import (
     DiscoveryRequest,
@@ -143,10 +151,17 @@ def _application_service(request: Request) -> ApplicationService:
     return cast(ApplicationService, request.app.state.application_service)
 
 
+def _scheduled_discovery_service(request: Request) -> ScheduledDiscoveryService:
+    return cast(ScheduledDiscoveryService, request.app.state.scheduled_discovery_service)
+
+
 CandidateServiceDependency = Annotated[CandidateService, Depends(_candidate_service)]
 HealthCheckerDependency = Annotated[HealthChecker, Depends(_health_checker)]
 JobServiceDependency = Annotated[JobService, Depends(_job_service)]
 ApplicationServiceDependency = Annotated[ApplicationService, Depends(_application_service)]
+ScheduledDiscoveryDependency = Annotated[
+    ScheduledDiscoveryService, Depends(_scheduled_discovery_service)
+]
 
 
 class _LocalSessionRequest(BaseModel):
@@ -257,6 +272,32 @@ def _job_router() -> APIRouter:
         idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
     ) -> DiscoveryResult:
         return service.discover(request, idempotency_key)
+
+    @router.get("/sources", response_model=tuple[DiscoverySourceView, ...])
+    def list_discovery_sources(
+        service: ScheduledDiscoveryDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[DiscoverySourceView, ...]:
+        return service.list_sources(candidate_id)
+
+    @router.post("/sources", response_model=DiscoverySourceView)
+    def create_discovery_source(
+        command: DiscoverySourceCreate,
+        service: ScheduledDiscoveryDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> DiscoverySourceView:
+        return service.create_source(candidate_id, command, idempotency_key)
+
+    @router.patch("/sources/{source_id}", response_model=DiscoverySourceView)
+    def update_discovery_source(
+        source_id: UUID,
+        command: DiscoverySourceUpdate,
+        service: ScheduledDiscoveryDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> DiscoverySourceView:
+        return service.update_source(candidate_id, source_id, command, idempotency_key)
 
     @router.get("", response_model=tuple[JobView, ...])
     def list_jobs(
@@ -562,6 +603,7 @@ def create_app(
     settings: Settings | None = None,
     candidate_service: CandidateService | None = None,
     job_service: JobService | None = None,
+    scheduled_discovery_service: ScheduledDiscoveryService | None = None,
     application_service: ApplicationService | None = None,
     health_checker: HealthChecker | None = None,
 ) -> FastAPI:
@@ -573,8 +615,16 @@ def create_app(
     engine = build_engine(resolved_settings.database_url)
     session_factory = build_session_factory(engine)
     application.state.candidate_service = resolved_candidate_service
-    application.state.job_service = job_service or JobService(
-        session_factory, resolved_candidate_service
+    resolved_job_service = job_service or JobService(session_factory, resolved_candidate_service)
+    application.state.job_service = resolved_job_service
+    application.state.scheduled_discovery_service = (
+        scheduled_discovery_service
+        or ScheduledDiscoveryService(
+            session_factory,
+            resolved_candidate_service,
+            resolved_job_service,
+            ProviderFeedClient(),
+        )
     )
     application.state.application_service = application_service or ApplicationService(
         session_factory, resolved_candidate_service, resolved_settings.runtime_root
@@ -697,6 +747,12 @@ def create_app(
     @application.exception_handler(JobCommandConflictError)
     async def job_command_conflict(_request: Request, exc: JobCommandConflictError) -> JSONResponse:
         return _error("idempotency_conflict", str(exc), 409)
+
+    @application.exception_handler(ScheduledDiscoveryError)
+    async def scheduled_discovery_failed(
+        _request: Request, exc: ScheduledDiscoveryError
+    ) -> JSONResponse:
+        return _error("scheduled_discovery_conflict", str(exc), 409)
 
     @application.exception_handler(ApplicationNotFoundError)
     async def application_not_found(

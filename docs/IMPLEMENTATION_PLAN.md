@@ -61,6 +61,8 @@ not add browser automation or live submission.
 - [x] Add a network-denied Playwright fixture harness and bounded unapproved CV import workflow.
 - [x] Render and structurally validate versioned PDFs before approval, upload their exact hashes,
   and archive the same bytes without lossy rerendering.
+- [x] Schedule candidate-owned public ATS sources through bounded read-only transports and durable
+  leased discovery tasks with freshness/error status.
 - [ ] Complete isolated Playwright application integration, retention/deletion execution, and
   hosted security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those

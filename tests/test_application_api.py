@@ -13,6 +13,8 @@ from app.applications import ApplicationService
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
 from app.db import build_session_factory
+from app.discovery.providers import FixtureProviderTransport, ProviderFeedClient
+from app.discovery.scheduled import ScheduledDiscoveryService
 from app.domain.models import Base
 from app.health import HealthReport, ServiceStatus
 from app.job_service import DiscoveryRequest, JobService
@@ -40,6 +42,12 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
     sessions = build_session_factory(engine)
     candidates = CandidateService(candidates_root)
     jobs = JobService(sessions, candidates)
+    scheduled_discovery = ScheduledDiscoveryService(
+        sessions,
+        candidates,
+        jobs,
+        ProviderFeedClient(FixtureProviderTransport({})),
+    )
     applications = ApplicationService(
         sessions,
         candidates,
@@ -79,6 +87,7 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
                 settings=settings,
                 candidate_service=candidates,
                 job_service=jobs,
+                scheduled_discovery_service=scheduled_discovery,
                 application_service=applications,
                 health_checker=_HealthyServices(),
             )
@@ -110,6 +119,38 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
             headers={**auth, "Idempotency-Key": "api-generate-0001"},
         )
         assert missing_csrf.status_code == 403
+        assert (
+            client.get("/api/jobs/sources?candidate_id=example_candidate", headers=auth).json()
+            == []
+        )
+        source = client.post(
+            "/api/jobs/sources?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-source-0001"},
+            json={
+                "provider": "greenhouse",
+                "company": "Fictional Robotics Ltd",
+                "company_domain": "fictional-robotics.invalid",
+                "board_token": "fictional",
+                "cadence_minutes": 60,
+                "enabled": True,
+            },
+        )
+        assert source.status_code == 200
+        assert source.json()["provider"] == "greenhouse"
+        source_id = source.json()["source_id"]
+        missing_update_key = client.patch(
+            f"/api/jobs/sources/{source_id}?candidate_id=example_candidate",
+            headers={"Authorization": auth["Authorization"], "X-CSRF-Token": tokens["csrf_token"]},
+            json={"enabled": False},
+        )
+        assert missing_update_key.status_code == 422
+        updated_source = client.patch(
+            f"/api/jobs/sources/{source_id}?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-source-update-0001"},
+            json={"enabled": False},
+        )
+        assert updated_source.status_code == 200
+        assert updated_source.json()["enabled"] is False
 
         generated = client.post(
             f"/api/jobs/{job_id}/generate-materials?candidate_id=example_candidate",

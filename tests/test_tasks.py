@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -9,9 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.candidates.service import CandidateService
 from app.db import build_session_factory
+from app.discovery.scheduled import ScheduledDiscoveryService
 from app.domain.models import Base, WorkflowTask
 from app.runtime import run_scheduler_once, run_worker_once
-from app.tasks import TaskQueue
+from app.tasks import TaskQueue, TaskView
 
 
 def _queue() -> tuple[TaskQueue, sessionmaker[Session]]:
@@ -69,3 +71,40 @@ def test_scheduler_and_worker_process_candidate_readiness_durably(
     assert completed is not None and completed.status == "completed"
     with sessions() as session:
         assert session.scalar(select(func.count(WorkflowTask.id))) == 1
+
+
+def test_worker_does_not_mutate_or_crash_after_task_lease_is_reclaimed(
+    copied_candidates_root: Path,
+) -> None:
+    queue, _sessions = _queue()
+    candidates = CandidateService(copied_candidates_root)
+    now = datetime(2026, 8, 5, 10, tzinfo=UTC)
+    queued = queue.enqueue(
+        candidate_id="example_candidate",
+        kind="discover_source",
+        idempotency_key="discovery-takeover",
+        payload={"source_id": "fixture", "cadence_bucket": "fixture"},
+        scheduled_for=now,
+    )
+
+    class ReclaimingDiscovery:
+        def execute_task(self, task: TaskView, *, now: datetime | None = None) -> None:
+            assert task.task_id == queued.task_id
+            assert now is not None
+            reclaimed = queue.claim(worker_id="worker-new", now=now + timedelta(minutes=6))
+            assert reclaimed is not None and reclaimed.task_id == task.task_id
+            raise ValueError("stale execution stopped")
+
+    current = run_worker_once(
+        queue,
+        candidates,
+        worker_id="worker-old",
+        now=now,
+        discovery=cast(ScheduledDiscoveryService, ReclaimingDiscovery()),
+    )
+
+    assert current is not None
+    assert current.status == "running"
+    assert current.locked_by == "worker-new"
+    assert current.attempts == 2
+    assert current.last_error is None

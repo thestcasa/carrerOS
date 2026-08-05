@@ -14,3 +14,17 @@ does not hard-code a pilot's AI/ML taxonomy.
 Tests and CLI discovery use fixtures. Adding a provider requires strict contracts, URL allowlists,
 append-only version tests, prompt-injection cases, and a candidate-independent parser. Provider
 credentials and live application submission do not belong in adapters.
+
+Scheduled discovery uses only these public read endpoints:
+
+- `boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`
+- `api.lever.co/v0/postings/{token}?mode=json`
+- `api.ashbyhq.com/posting-api/job-board/{token}`
+
+Source tokens are restricted identifiers, not URLs or credentials. Redirects, non-JSON responses,
+oversized bodies, excessive job counts, malformed payloads, and provider errors fail with stable
+body-free codes that are safe to persist. Response reads use one-raw-read operations with a
+remaining socket timeout and an absolute monotonic deadline. Source execution requires an explicit
+enabled candidate setting and provider allowlist membership; absence and empty lists deny. Manual
+JSON payload ingestion remains a development and deterministic-fixture path rather than the
+autonomous production path.

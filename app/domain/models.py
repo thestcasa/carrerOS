@@ -172,6 +172,88 @@ class CandidateDiscoveryCommand(Base, CandidateScopedMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CandidateDiscoverySource(Base, TimestampMixin, CandidateScopedMixin):
+    """Candidate-owned, read-only ATS board scheduled for periodic discovery."""
+
+    __tablename__ = "candidate_discovery_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "provider", "board_token", name="uq_candidate_discovery_source"
+        ),
+        UniqueConstraint(
+            "candidate_id", "idempotency_key", name="uq_candidate_discovery_source_command"
+        ),
+        UniqueConstraint("candidate_id", "id", name="uq_candidate_discovery_source_scope"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    company: Mapped[str] = mapped_column(String(255), nullable=False)
+    company_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    board_token: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    cadence_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    next_run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, index=True
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(64))
+
+
+class CandidateDiscoverySourceCommand(Base, CandidateScopedMixin):
+    """Payload-bound receipt for a discovery source mutation."""
+
+    __tablename__ = "candidate_discovery_source_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "idempotency_key", name="uq_candidate_discovery_source_update_key"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "source_id"],
+            ["candidate_discovery_sources.candidate_id", "candidate_discovery_sources.id"],
+            name="fk_discovery_source_command_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("candidate_discovery_sources.id"), nullable=False, index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CandidateDiscoveryRun(Base, CandidateScopedMixin):
+    """Durable status for one cadence-bucket execution of a discovery source."""
+
+    __tablename__ = "candidate_discovery_runs"
+    __table_args__ = (
+        UniqueConstraint("source_id", "cadence_bucket", name="uq_discovery_run_bucket"),
+        ForeignKeyConstraint(
+            ["candidate_id", "source_id"],
+            ["candidate_discovery_sources.candidate_id", "candidate_discovery_sources.id"],
+            name="fk_discovery_run_source_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("candidate_discovery_sources.id"), nullable=False, index=True
+    )
+    cadence_bucket: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="scheduled")
+    discovered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    lease_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WorkflowTask(Base, TimestampMixin, CandidateScopedMixin):
     """Durable worker task with candidate scope, leasing, and replay protection."""
 

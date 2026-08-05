@@ -11,6 +11,9 @@ import type {
   CVImportDraft,
   DiscoveryRequest,
   DiscoveryResult,
+  DiscoverySourceView,
+  DiscoverySourceCreate,
+  DiscoverySourceUpdate,
   EditableSection,
   HealthReport,
   HumanActionView,
@@ -21,6 +24,7 @@ import type {
   ReadinessReport,
   SecurityEventView,
   SettingsView,
+  SettingsUpdate,
   SubmissionResultView,
 } from "./types";
 
@@ -230,7 +234,13 @@ export const api = {
     request<SecurityEventView>(`/api/security-events/${encodeURIComponent(eventId)}/resolve?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST" }),
   settings: (candidateId: string) =>
     request<SettingsView>(`/api/settings?candidate_id=${encodeURIComponent(candidateId)}`),
-  updateSettings: (input: Partial<SettingsView> & { candidate_id: string }) =>
+  discoverySources: (candidateId: string) =>
+    request<DiscoverySourceView[]>(`/api/jobs/sources?candidate_id=${encodeURIComponent(candidateId)}`),
+  createDiscoverySource: (candidateId: string, input: DiscoverySourceCreate, idempotencyKey: string) =>
+    request<DiscoverySourceView>(`/api/jobs/sources?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
+  updateDiscoverySource: (candidateId: string, sourceId: string, input: DiscoverySourceUpdate, idempotencyKey: string) =>
+    request<DiscoverySourceView>(`/api/jobs/sources/${encodeURIComponent(sourceId)}?candidate_id=${encodeURIComponent(candidateId)}`, { method: "PATCH", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
+  updateSettings: (input: SettingsUpdate) =>
     request<SettingsView>("/api/settings", { method: "PATCH", body: JSON.stringify(input) }),
   emergencyStop: (candidateId: string) =>
     request<SettingsView>(`/api/automation/emergency-stop?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST" }),

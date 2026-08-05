@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -57,6 +58,7 @@ class DiscoveryResult(_Contract):
     discovered: int
     unchanged: int
     job_ids: tuple[UUID, ...]
+    changed_job_ids: tuple[UUID, ...] = ()
 
 
 class JobView(_Contract):
@@ -112,7 +114,11 @@ class JobService:
         }
 
     def discover(
-        self, request: DiscoveryRequest, idempotency_key: str | None = None
+        self,
+        request: DiscoveryRequest,
+        idempotency_key: str | None = None,
+        *,
+        transaction_guard: Callable[[Session], None] | None = None,
     ) -> DiscoveryResult:
         self._candidates.get_config(request.candidate_id)
         request_json = json.dumps(
@@ -124,7 +130,10 @@ class JobService:
         discovered = 0
         unchanged = 0
         job_ids: list[UUID] = []
+        changed_job_ids: list[UUID] = []
         with self._sessions.begin() as session:
+            if transaction_guard is not None:
+                transaction_guard(session)
             existing_command = session.scalar(
                 select(CandidateDiscoveryCommand).where(
                     CandidateDiscoveryCommand.candidate_id == request.candidate_id,
@@ -148,6 +157,7 @@ class JobService:
                 discovered += int(changed)
                 unchanged += int(not changed)
                 if changed:
+                    changed_job_ids.append(job.id)
                     for finding in job.security_findings:
                         session.add(
                             SecurityEvent(
@@ -163,7 +173,10 @@ class JobService:
                             )
                         )
             result = DiscoveryResult(
-                discovered=discovered, unchanged=unchanged, job_ids=tuple(job_ids)
+                discovered=discovered,
+                unchanged=unchanged,
+                job_ids=tuple(job_ids),
+                changed_job_ids=tuple(changed_job_ids),
             )
             session.add(
                 CandidateDiscoveryCommand(
@@ -189,9 +202,18 @@ class JobService:
                 raise JobNotFoundError(f"job not found: {job_id}")
             return self._view(session, job, candidate_id)
 
-    def analyze(self, candidate_id: str, job_id: UUID, idempotency_key: str) -> JobView:
+    def analyze(
+        self,
+        candidate_id: str,
+        job_id: UUID,
+        idempotency_key: str,
+        *,
+        transaction_guard: Callable[[Session], None] | None = None,
+    ) -> JobView:
         config = self._candidates.get_config(candidate_id)
         with self._sessions.begin() as session:
+            if transaction_guard is not None:
+                transaction_guard(session)
             job = session.get(GlobalJob, job_id)
             if job is None:
                 raise JobNotFoundError(f"job not found: {job_id}")

@@ -3,10 +3,11 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: deletion/retention design, productionization gaps, and final verification
-- Branch baseline: `autonomous-build`; latest completed milestone is active-candidate propagation
+- Active phase: durable scheduled discovery from candidate-owned ATS sources
+- Branch baseline: `autonomous-build`; latest completed milestone is rendered submission identity
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
-- Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
+- Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
+  later untracked root file `how d8c72b0`
 
 ## Implemented and integrated
 
@@ -71,15 +72,22 @@
   reports are downloadable with template, snapshot, page, and extraction metadata. Submission
   authorizations are bound to the reviewed versions, browser hash, candidate snapshot, and verified
   archive manifest, and that package digest is reconstructed immediately before consumption.
+- Candidate-owned Greenhouse, Lever, and Ashby discovery sources now run through durable cadence
+  tasks. The read-only provider client enforces exact HTTPS endpoints, no redirects, bounded JSON
+  responses with absolute deadlines, stable errors, and job-count limits. Missing settings and
+  empty adapter allowlists deny execution. Runs persist freshness and counts; source mutations and
+  retries use payload-bound receipts, transaction-level lease fences prevent superseded worker
+  side effects, unchanged postings do not create versions or scores, and injection findings remain
+  quarantined. Jobs and settings surfaces separate schedules from manual fixture import.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **142 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **175 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **27 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **29 Vitest tests**, and the Next.js production build pass
   for all required routes.
-- Migrations: fresh SQLite upgrade and `alembic check` pass through `b4e1f59c2d73`; models and
+- Migrations: fresh SQLite upgrade and `alembic check` pass through `c8f320d09a1e`; models and
   Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
@@ -99,11 +107,12 @@
 - Complete role-specific template/content selection, richer cover-letter policy, and manual
   rendered-material revision; DOCX remains an optional format.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
-  worktree clean apart from the two preserved user-owned paths.
+  worktree clean apart from the preserved user-owned paths.
 
 ## Resume instructions
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue discovery productionization or deletion with a durable tombstone and writer fence.
+3. Continue deletion with a durable tombstone and writer fence, then remaining material/browser
+   productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.
