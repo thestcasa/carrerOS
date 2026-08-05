@@ -13,6 +13,7 @@ import type {
   EditableSection,
   HealthReport,
   HumanActionView,
+  InterviewPreparationPackage,
   JsonObject,
   JobDetail,
   JobSummary,
@@ -198,6 +199,11 @@ export const api = {
     }
     return response.blob();
   },
+  prepareInterview: (candidateId: string, applicationId: string, idempotencyKey: string) =>
+    request<InterviewPreparationPackage>(
+      `/api/applications/${encodeURIComponent(applicationId)}/prepare-interview?candidate_id=${encodeURIComponent(candidateId)}`,
+      { method: "POST", headers: commandHeaders(idempotencyKey) },
+    ),
   humanActions: (candidateId: string) =>
     request<HumanActionView[]>(`/api/human-actions?candidate_id=${encodeURIComponent(candidateId)}`),
   completeHumanAction: (candidateId: string, actionId: string, idempotencyKey: string) =>

@@ -106,6 +106,21 @@ export function ApplicationPageClient({
     }
   }
 
+  async function prepareInterview() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.prepareInterview(candidateId, applicationId, key("prepare-interview"));
+      await load();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Interview preparation failed safely.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (error && !application) {
     return (
       <div className="page-wrap">
@@ -163,6 +178,15 @@ export function ApplicationPageClient({
             {busy ? "Working…" : nextAction.replaceAll("-", " ")}
           </button>
         ) : null}
+        {application.state === "interview" ? (
+          <button
+            className="button primary"
+            disabled={busy}
+            onClick={() => void prepareInterview()}
+          >
+            Prepare interview package
+          </button>
+        ) : null}
       </section>
       <section className="detail-columns">
         <article className="panel">
@@ -188,6 +212,23 @@ export function ApplicationPageClient({
             </div>
           ))}
         </article>
+      </section>
+      <section className="panel">
+        <p className="eyebrow">Correspondence</p>
+        <h2>Recruiting timeline</h2>
+        {application.correspondence.length ? (
+          <ol className="timeline">
+            {application.correspondence.map((message) => (
+              <li key={message.correspondence_id}>
+                <span>{new Date(message.received_at).toLocaleString()}</span>
+                <strong>{message.kind.replaceAll("_", " ")}</strong>
+                <small>{message.subject}</small>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="muted">No associated recruiter correspondence.</p>
+        )}
       </section>
       <section className="panel">
         <p className="eyebrow">Archive and receipt</p>

@@ -38,6 +38,7 @@ class SubmissionGateInput(BaseModel):
     target_domain_validated: bool | None = None
     final_page_matches_job: bool | None = None
     pre_submit_archive_created: bool | None = None
+    rate_limits_allowed: bool | None = None
     configuration_valid: bool | None = None
     candidate_score: int | None = Field(default=None, ge=0, le=100)
     application_threshold: int | None = Field(default=None, ge=0, le=100)
@@ -133,6 +134,7 @@ class SubmissionGate:
             "target_domain_invalid_or_missing": gate_input.target_domain_validated,
             "final_page_mismatch_or_missing": gate_input.final_page_matches_job,
             "pre_submit_archive_missing": gate_input.pre_submit_archive_created,
+            "rate_limit_reached_or_missing": gate_input.rate_limits_allowed,
         }
         reasons.extend(code for code, value in required_flags.items() if value is not True)
 

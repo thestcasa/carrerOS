@@ -181,6 +181,19 @@ paths, queries, and bodies must be session-owned. Artifact bytes are served only
 authorization and hash verification. Local-session issuance assumes localhost trust; it is not a
 substitute for hosted multi-user identity and encrypted storage.
 
+## Durable operations and correspondence
+
+The scheduler creates candidate-scoped SQL tasks with deterministic bucket keys. Workers claim
+tasks under a lease, recover expired work, retry with a bound, and reject keys reused for different
+payloads. Redis publishes process health; SQL remains the task source of truth.
+
+Correspondence ingestion stores message hashes rather than raw bodies, associates only on unique
+deterministic evidence, and permits unmatched candidate-owned records. Valid interview, rejection,
+and offer messages advance the explicit application state machine and create dashboard
+notifications. Interview packages are immutable derivatives of the exact persisted CV, cover
+letter, answers, job evidence, score rationale, and associated message subjects; no reply or send
+capability exists.
+
 - Candidate data is configuration, never an engine constant.
 - Generated claims must cite candidate evidence IDs.
 - Agent outputs remain proposals until deterministic validation and review complete.

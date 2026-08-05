@@ -62,6 +62,41 @@ class ReviewView(ApplicationContract):
     report: dict[str, object]
 
 
+class CorrespondenceView(ApplicationContract):
+    correspondence_id: UUID
+    candidate_id: str
+    application_id: UUID | None
+    provider_message_id: str
+    kind: str
+    sender: str
+    subject: str
+    received_at: datetime
+    association_reason: str
+
+
+class CorrespondenceIngestRequest(ApplicationContract):
+    candidate_id: str = Field(min_length=1)
+    provider_message_id: str = Field(min_length=1)
+    thread_id: str | None = None
+    sender: str = Field(min_length=1)
+    recipients: tuple[str, ...]
+    subject: str = Field(min_length=1)
+    body_text: str = Field(min_length=1)
+    received_at: datetime
+
+
+class NotificationView(ApplicationContract):
+    notification_id: UUID
+    candidate_id: str
+    application_id: UUID | None
+    event_type: str
+    channel: str
+    message: str
+    immediate: bool
+    status: str
+    created_at: datetime
+
+
 class ApplicationDetail(ApplicationSummary):
     source_url: str
     ats_platform: str | None
@@ -69,6 +104,7 @@ class ApplicationDetail(ApplicationSummary):
     answers: tuple[AnswerView, ...]
     events: tuple[EventView, ...]
     review: ReviewView | None
+    correspondence: tuple[CorrespondenceView, ...]
     archive_available: bool
     confirmation_reference: str | None
     submitted_at: datetime | None

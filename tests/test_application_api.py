@@ -139,8 +139,34 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
                 "confirmation_reference": None,
             },
         )
+        correspondence = client.post(
+            "/api/correspondence/ingest",
+            headers={**mutation, "Idempotency-Key": "api-correspondence-0001"},
+            json={
+                "candidate_id": "example_candidate",
+                "provider_message_id": "api-recruiter-601",
+                "sender": "recruiting@fictional-robotics.invalid",
+                "recipients": ["morgan@example.invalid"],
+                "subject": "Recruiter update for application 601",
+                "body_text": "A recruiter would like to discuss your background.",
+                "received_at": "2026-08-05T15:00:00Z",
+            },
+        )
+        interview_package = client.post(
+            f"/api/applications/{application_id}/prepare-interview?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-interview-0001"},
+        )
+        notifications = client.get(
+            "/api/notifications?candidate_id=example_candidate", headers=auth
+        )
 
     assert outcome.status_code == 200, outcome.text
     assert outcome.json()["successful"] is False
     assert outcome.json()["state"] == "failed_retryable"
     assert outcome.json()["status"] == "confirmation_missing"
+    assert correspondence.status_code == 200, correspondence.text
+    assert correspondence.json()["application_id"] == application_id
+    assert interview_package.status_code == 200, interview_package.text
+    assert interview_package.json()["company"] == "Fictional Robotics Ltd"
+    assert notifications.status_code == 200
+    assert notifications.json()[0]["event_type"] == "correspondence_recruiter"

@@ -1,23 +1,26 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications import (
     ApplicationConflictError,
     ApplicationService,
+    CorrespondenceIngestRequest,
     DryRunCommand,
+    SettingsUpdate,
     SyntheticSubmissionRequest,
 )
-from app.candidates.service import CandidateService
+from app.candidates.service import CandidateCreateRequest, CandidateService
 from app.db import build_session_factory
 from app.domain.enums import ApplicationState
-from app.domain.models import Base
+from app.domain.models import AdministrativeAuditRecord, Base
 from app.job_service import DiscoveryRequest, JobService
 
 
@@ -153,6 +156,33 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     }.issubset({artifact.kind for artifact in artifacts})
     assert all(artifact.immutable for artifact in artifacts)
 
+    correspondence = applications.ingest_correspondence(
+        CorrespondenceIngestRequest(
+            candidate_id="example_candidate",
+            provider_message_id="fictional-interview-501",
+            sender="recruiting@fictional-robotics.invalid",
+            recipients=("morgan@example.invalid",),
+            subject="Interview invitation for application 501",
+            body_text="Please schedule an interview for the Machine Learning Engineer role.",
+            received_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
+        ),
+        "correspondence-interview-501",
+    )
+    assert correspondence.application_id == generated.application_id
+    assert correspondence.kind == "interview"
+    assert (
+        applications.get_application("example_candidate", generated.application_id).state
+        is ApplicationState.INTERVIEW
+    )
+    package = applications.prepare_interview("example_candidate", generated.application_id)
+    assert package.exact_cv
+    assert package.company == "Fictional Robotics Ltd"
+    assert applications.list_notifications("example_candidate")[0].immediate
+    assert "interview_package" in {
+        artifact.kind
+        for artifact in applications.list_artifacts("example_candidate", generated.application_id)
+    }
+
     with pytest.raises(ApplicationConflictError, match="already consumed"):
         applications.submit_synthetic(
             "example_candidate",
@@ -201,3 +231,43 @@ def test_captcha_creates_visible_resumable_human_action(
     assert completed.status == "completed"
     detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.state is ApplicationState.READY_TO_SUBMIT
+
+
+def test_unapproved_candidate_cannot_generate_materials(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    service = CandidateService(copied_candidates_root)
+    service.create(
+        CandidateCreateRequest(
+            candidate_id="unapproved_candidate", display_name="Unapproved Candidate"
+        )
+    )
+    _jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+
+    with pytest.raises(ApplicationConflictError, match="candidate_profile"):
+        applications.generate_materials(
+            "unapproved_candidate",
+            UUID("00000000-0000-0000-0000-000000000999"),
+            "blocked-unapproved-generation",
+        )
+
+
+def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    applications.update_settings(
+        SettingsUpdate(candidate_id="example_candidate", automation_mode="dry_run")
+    )
+    applications.emergency_stop("example_candidate")
+
+    with sessions() as session:
+        records = session.scalars(
+            select(AdministrativeAuditRecord).order_by(AdministrativeAuditRecord.occurred_at)
+        ).all()
+        assert [record.event_type for record in records] == [
+            "settings_updated",
+            "emergency_stop_activated",
+        ]
+        assert records[0].previous_hash is None
+        assert records[1].previous_hash == records[0].event_hash

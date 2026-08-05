@@ -22,8 +22,11 @@ from app.applications import (
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
+    CorrespondenceIngestRequest,
+    CorrespondenceView,
     DryRunCommand,
     HumanActionView,
+    NotificationView,
     SecurityEventView,
     SettingsUpdate,
     SettingsView,
@@ -47,6 +50,7 @@ from app.candidates.service import (
 )
 from app.candidates.snapshot import CandidateSnapshot
 from app.core.settings import Settings
+from app.correspondence import InterviewPreparationPackage
 from app.db import build_engine, build_session_factory
 from app.health import HealthChecker, HealthProbe, HealthReport
 from app.job_service import (
@@ -299,6 +303,15 @@ def _application_router() -> APIRouter:
     ) -> ApplicationDetail:
         return service.withdraw(candidate_id, application_id, idempotency_key)
 
+    @router.post("/{application_id}/prepare-interview", response_model=InterviewPreparationPackage)
+    def prepare_interview(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        _idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> InterviewPreparationPackage:
+        return service.prepare_interview(candidate_id, application_id)
+
     @router.get("/{application_id}/archive", response_model=tuple[ArtifactView, ...])
     @router.get("/{application_id}/artifacts", response_model=tuple[ArtifactView, ...])
     def application_artifacts(
@@ -338,6 +351,24 @@ def _operations_router() -> APIRouter:
         candidate_id: Annotated[str, Query(min_length=1)],
     ) -> tuple[HumanActionView, ...]:
         return service.list_human_actions(candidate_id)
+
+    @router.get("/human-actions/{action_id}", response_model=HumanActionView)
+    def human_action(
+        action_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> HumanActionView:
+        match = next(
+            (
+                item
+                for item in service.list_human_actions(candidate_id)
+                if item.action_id == action_id
+            ),
+            None,
+        )
+        if match is None:
+            raise ApplicationNotFoundError("human action not found")
+        return match
 
     @router.post("/human-actions/{action_id}/open-session", response_model=HumanActionView)
     def open_human_session(
@@ -383,6 +414,29 @@ def _operations_router() -> APIRouter:
         candidate_id: Annotated[str, Query(min_length=1)],
     ) -> SecurityEventView:
         return service.resolve_security_event(candidate_id, event_id)
+
+    @router.get("/correspondence", response_model=tuple[CorrespondenceView, ...])
+    def correspondence(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        application_id: UUID | None = None,
+    ) -> tuple[CorrespondenceView, ...]:
+        return service.list_correspondence(candidate_id, application_id)
+
+    @router.post("/correspondence/ingest", response_model=CorrespondenceView)
+    def ingest_correspondence(
+        message: CorrespondenceIngestRequest,
+        service: ApplicationServiceDependency,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> CorrespondenceView:
+        return service.ingest_correspondence(message, idempotency_key)
+
+    @router.get("/notifications", response_model=tuple[NotificationView, ...])
+    def notifications(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[NotificationView, ...]:
+        return service.list_notifications(candidate_id)
 
     @router.get("/settings", response_model=SettingsView)
     def settings(

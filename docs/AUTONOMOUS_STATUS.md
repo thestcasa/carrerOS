@@ -3,7 +3,7 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: correspondence persistence, workflow scheduling, and final hardening
+- Active phase: candidate-schema richness, browser fixture hardening, and final verification
 - Branch baseline: `autonomous-build`; latest committed baseline was `5cbb3cc`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
@@ -30,16 +30,21 @@
 - Database-enforced same-candidate composite relationships, local bearer/CSRF enforcement,
   backend-authoritative confirmation/autonomy UI, emergency stop, settings, analytics, security,
   dashboard, signed-token/admin-audit/export/deletion planning foundations.
-- Provider-neutral correspondence classification and immutable interview-package library exists,
-  but persistence-backed APIs/UI and status integration remain the active slice.
+- Provider-neutral correspondence is persisted and associated fail-closed; interview/rejection/
+  offer messages update valid states, create dashboard notifications, appear in application detail,
+  and generate immutable interview packages from exact application evidence.
+- SQL-backed workflow tasks provide idempotent scheduling, row leases, expired-lease recovery,
+  bounded retries, and real worker handling for periodic candidate readiness checks.
+- Candidate settings/security mutations have a persistent hash-chained administrative ledger;
+  application rate limits and emergency stop are checked at authorization and execution time.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, `ruff check`, strict `mypy`, and **94 pytest tests passed** on
+- Backend: `ruff format --check`, `ruff check`, strict `mypy`, and **99 pytest tests passed** on
   Python 3.14.4 (one upstream Starlette `httpx` deprecation warning).
 - Frontend: ESLint, strict TypeScript, **13 Vitest tests passed**, and Next.js production build
   passed for dashboard, candidates, jobs, applications, actions, security, analytics, and settings.
-- Migrations: fresh SQLite upgrade and `alembic check` pass through `d302b1f4ac09`; models and
+- Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
   Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup, Playwright browser
   E2E, and automated accessibility tooling remain externally unverified.
@@ -50,9 +55,6 @@
 
 - Implement a real Playwright-based synthetic fixture worker with recoverable contexts; no real
   final clicks are authorized in this repository.
-- Replace heartbeat-only worker/scheduler processes with durable task processing and configured
-  discovery cadence.
-- Persist correspondence/notifications/interview packages and expose them in application detail.
 - Complete richer onboarding import/extraction, candidate facts approval/confidentiality, and
   notification settings domains without committing real pilot data.
 - Execute export/deletion and retention workflows; hosted authentication/encryption and separate
@@ -65,5 +67,5 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue correspondence persistence/UI, then durable scheduling and browser fixture hardening.
+3. Continue richer candidate schemas/onboarding and browser fixture hardening.
 4. Run backend, migration, and frontend gates after each coherent phase.

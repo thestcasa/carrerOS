@@ -57,6 +57,7 @@ def _authorization() -> tuple[SubmissionAuthorization, SubmissionGateInput]:
         target_domain_validated=True,
         final_page_matches_job=True,
         pre_submit_archive_created=True,
+        rate_limits_allowed=True,
         configuration_valid=True,
         candidate_score=90,
         application_threshold=80,

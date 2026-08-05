@@ -57,8 +57,9 @@ not add browser automation or live submission.
   export/deletion planning foundations.
 - [x] Integrate materials, synthetic application workflow, artifacts, human actions, security,
   settings, analytics, local auth, and the primary required web routes.
-- [ ] Complete the Playwright fixture-server worker, persistent workflow queue, correspondence
-  persistence/UI, notification delivery, retention/deletion execution, and hosted security.
+- [x] Add a persistent workflow queue and correspondence/notification/interview integration.
+- [ ] Complete the Playwright fixture-server worker, retention/deletion execution, richer
+  candidate facts/onboarding, and hosted security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
   external runtimes are available.
 

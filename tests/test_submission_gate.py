@@ -36,6 +36,7 @@ def _passing_input(**overrides: object) -> SubmissionGateInput:
         "target_domain_validated": True,
         "final_page_matches_job": True,
         "pre_submit_archive_created": True,
+        "rate_limits_allowed": True,
         "configuration_valid": True,
         "candidate_score": 85,
         "application_threshold": 80,
@@ -84,6 +85,7 @@ def test_submission_is_denied_after_semantic_review_failure() -> None:
         ({"duplicate_application": None}, "duplicate_application_detected_or_missing"),
         ({"captcha_pending": True}, "captcha_pending_or_missing"),
         ({"captcha_pending": None}, "captcha_pending_or_missing"),
+        ({"rate_limits_allowed": False}, "rate_limit_reached_or_missing"),
         ({"unsupported_claims_count": 1}, "unsupported_claims_present"),
         ({"unsupported_claims_count": None}, "unsupported_claims_count_missing"),
         (

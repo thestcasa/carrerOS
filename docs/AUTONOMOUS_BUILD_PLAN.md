@@ -90,7 +90,8 @@ complete. A real Playwright fixture-server worker remains.
    while readiness is blocked.
 
 Status: synthetic-only submission, archives, one-time authorization, primary operational routes,
-and both frontend safety regression tests are complete. Notifications and durable scheduling remain.
+both frontend safety regression tests, notifications, transactional rate limits, durable task
+scheduling, and administrative audit are complete.
 
 ### Phase 5 — Milestones 7 and 8: correspondence and hardening
 
@@ -99,6 +100,11 @@ and both frontend safety regression tests are complete. Notifications and durabl
 2. Add local authentication, tenant-aware authorization, encrypted secret interfaces,
    candidate export/deletion, signed artifact access, administrative audit, CSRF/session/rate
    protections, and isolated worker ownership needed before hosted deployment.
+
+Status: correspondence persistence/classification/state integration, notifications, immutable
+interview packages, local session ownership/CSRF, tenant constraints, artifact authorization,
+exports, and administrative audit are complete. Rich onboarding, executable deletion/retention,
+hosted encryption, and separate Playwright worker ownership remain.
 
 ### Phase 6 — definition-of-done verification
 

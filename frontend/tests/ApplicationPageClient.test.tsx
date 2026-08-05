@@ -33,6 +33,7 @@ const ready: ApplicationDetail = {
   answers: [],
   events: [],
   review: null,
+  correspondence: [],
   archive_available: true,
   confirmation_reference: null,
   submitted_at: null,

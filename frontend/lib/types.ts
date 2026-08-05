@@ -302,9 +302,42 @@ export interface ApplicationDetail extends ApplicationSummary {
     semantic_passed: boolean;
     report: JsonObject;
   } | null;
+  correspondence: CorrespondenceView[];
   archive_available: boolean;
   confirmation_reference: string | null;
   submitted_at: string | null;
+}
+
+export interface CorrespondenceView {
+  correspondence_id: string;
+  candidate_id: string;
+  application_id: string | null;
+  provider_message_id: string;
+  kind: string;
+  sender: string;
+  subject: string;
+  received_at: string;
+  association_reason: string;
+}
+
+export interface NotificationView {
+  notification_id: string;
+  candidate_id: string;
+  application_id: string | null;
+  event_type: string;
+  channel: string;
+  message: string;
+  immediate: boolean;
+  status: string;
+  created_at: string;
+}
+
+export interface InterviewPreparationPackage extends JsonObject {
+  candidate_id: string;
+  application_id: string;
+  company: string;
+  job_title: string;
+  source_artifacts_sha256: string;
 }
 
 export interface ArtifactView {

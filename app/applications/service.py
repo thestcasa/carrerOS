@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -18,10 +19,13 @@ from app.applications.contracts import (
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
+    CorrespondenceIngestRequest,
+    CorrespondenceView,
     DocumentView,
     DryRunCommand,
     EventView,
     HumanActionView,
+    NotificationView,
     ReviewView,
     SecurityEventView,
     SettingsUpdate,
@@ -34,6 +38,15 @@ from app.browser import DryRunRequest, FieldKind, SyntheticBrowserDryRunner, Upl
 from app.browser.fixtures import standard_application_form
 from app.candidates.models import CandidateConfig
 from app.candidates.service import CandidateService
+from app.correspondence import (
+    ApplicationReference,
+    ArchivedApplicationArtifacts,
+    CorrespondenceKind,
+    CorrespondenceService,
+    InterviewPreparationPackage,
+    MessageFixture,
+    SubmittedAnswer,
+)
 from app.domain.enums import (
     ApplicationOutcome,
     ApplicationState,
@@ -41,6 +54,7 @@ from app.domain.enums import (
     HumanActionKind,
 )
 from app.domain.models import (
+    AdministrativeAuditRecord,
     AgentReview,
     Application,
     ApplicationAnswer,
@@ -53,9 +67,11 @@ from app.domain.models import (
     CandidateSnapshotRecord,
     GlobalJob,
     HumanAction,
+    NotificationRecord,
     SecurityEvent,
     SubmissionAuthorizationRecord,
 )
+from app.domain.models import CorrespondenceRecord as StoredCorrespondence
 from app.materials import DeterministicMaterialGenerator, IndependentMaterialReviewer
 from app.materials.contracts import (
     AnswerPrompt,
@@ -102,6 +118,7 @@ class ApplicationService:
         self._browser = SyntheticBrowserDryRunner(self._runtime_root)
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
         self._consumer = AuthorizationConsumer(session_factory)
+        self._correspondence = CorrespondenceService()
 
     def list_applications(self, candidate_id: str) -> tuple[ApplicationSummary, ...]:
         self._candidates.get_config(candidate_id)
@@ -126,8 +143,20 @@ class ApplicationService:
         idempotency_key: str,
     ) -> ApplicationDetail:
         config = self._candidates.get_config(candidate_id)
-        if not config.manifest.validation.profile_approved:
-            raise ApplicationConflictError("candidate profile is not approved")
+        generation_blockers = [
+            name
+            for name, approved in {
+                "candidate_profile": config.manifest.validation.profile_approved,
+                "legal_status": config.manifest.validation.legal_status_approved,
+                "automatic_answers": config.manifest.validation.automatic_answers_approved,
+                "cv_templates": config.manifest.validation.cv_templates_approved,
+            }.items()
+            if not approved
+        ]
+        if generation_blockers:
+            raise ApplicationConflictError(
+                "material generation requires approved " + ", ".join(generation_blockers)
+            )
         with self._sessions.begin() as session:
             job = session.get(GlobalJob, job_id)
             if job is None:
@@ -452,6 +481,9 @@ class ApplicationService:
                 .limit(1)
             )
             now = datetime.now(UTC)
+            settings = self._settings_record(session, candidate_id)
+            if settings.emergency_stopped:
+                raise ApplicationConflictError("emergency stop is active")
             if existing is not None and _utc(existing.expires_at) > now:
                 return self._authorization_view(existing)
             job = session.get(GlobalJob, application.job_id)
@@ -500,6 +532,9 @@ class ApplicationService:
                     BrowserSession.candidate_id == candidate_id,
                     BrowserSession.application_id == application_id,
                 )
+            )
+            rate_limits_allowed = job is not None and self._rate_limits_allow(
+                session, candidate_id, job.company, settings, now
             )
             if application.archive_uri is None:
                 application.archive_uri = str(
@@ -554,6 +589,7 @@ class ApplicationService:
                 final_page_matches_job=browser_session is not None
                 and browser_session.status == "ready",
                 pre_submit_archive_created=application.archive_uri is not None,
+                rate_limits_allowed=rate_limits_allowed,
                 configuration_valid=True,
                 candidate_score=int(score.total_score) if score else None,
                 application_threshold=config.scoring_rules.application_threshold,
@@ -627,6 +663,11 @@ class ApplicationService:
             settings = self._settings_record(session, candidate_id)
             if settings.emergency_stopped:
                 raise ApplicationConflictError("emergency stop is active")
+            job = session.get(GlobalJob, application.job_id)
+            if job is None or not self._rate_limits_allow(
+                session, candidate_id, job.company, settings, now
+            ):
+                raise ApplicationConflictError("candidate application rate limit is active")
             live_record.consumed_at = now
             self._transition(
                 session,
@@ -699,6 +740,231 @@ class ApplicationService:
                 )
             ).all()
             return tuple(self._artifact_view(item) for item in artifacts)
+
+    def list_correspondence(
+        self, candidate_id: str, application_id: UUID | None = None
+    ) -> tuple[CorrespondenceView, ...]:
+        self._candidates.get_config(candidate_id)
+        with self._sessions() as session:
+            query = select(StoredCorrespondence).where(
+                StoredCorrespondence.candidate_id == candidate_id
+            )
+            if application_id is not None:
+                self._application(session, candidate_id, application_id)
+                query = query.where(StoredCorrespondence.application_id == application_id)
+            records = session.scalars(query.order_by(StoredCorrespondence.received_at.desc())).all()
+            return tuple(self._correspondence_view(item) for item in records)
+
+    def ingest_correspondence(
+        self, request: CorrespondenceIngestRequest, idempotency_key: str
+    ) -> CorrespondenceView:
+        self._candidates.get_config(request.candidate_id)
+        with self._sessions.begin() as session:
+            existing = session.scalar(
+                select(StoredCorrespondence).where(
+                    StoredCorrespondence.candidate_id == request.candidate_id,
+                    StoredCorrespondence.external_message_id == request.provider_message_id,
+                )
+            )
+            if existing is not None:
+                return self._correspondence_view(existing)
+            applications = session.scalars(
+                select(Application).where(Application.candidate_id == request.candidate_id)
+            ).all()
+            references: list[ApplicationReference] = []
+            for application in applications:
+                job = session.get(GlobalJob, application.job_id)
+                if job is None:
+                    continue
+                references.append(
+                    ApplicationReference(
+                        candidate_id=request.candidate_id,
+                        application_id=application.id,
+                        company=job.company,
+                        company_domain=job.company_domain or "unknown.invalid",
+                        job_title=job.title,
+                        external_references=(job.external_id,),
+                    )
+                )
+            classified = self._correspondence.ingest(
+                candidate_id=request.candidate_id,
+                message=MessageFixture(
+                    provider_message_id=request.provider_message_id,
+                    thread_id=request.thread_id,
+                    sender=request.sender,
+                    recipients=request.recipients,
+                    subject=request.subject,
+                    body_text=request.body_text,
+                    received_at=request.received_at,
+                ),
+                applications=references,
+            )
+            record = StoredCorrespondence(
+                candidate_id=request.candidate_id,
+                application_id=classified.application_id,
+                external_message_id=request.provider_message_id,
+                kind=classified.kind.value,
+                sender=request.sender,
+                subject=request.subject,
+                received_at=request.received_at,
+                body_sha256=classified.message_sha256,
+                metadata_payload={
+                    "association_reason": classified.association_reason,
+                    "thread_id": request.thread_id,
+                },
+            )
+            session.add(record)
+            session.flush()
+            if classified.application_id is not None:
+                application = self._application(
+                    session, request.candidate_id, classified.application_id
+                )
+                targets = {
+                    CorrespondenceKind.REJECTION: ApplicationState.REJECTED,
+                    CorrespondenceKind.INTERVIEW: ApplicationState.INTERVIEW,
+                    CorrespondenceKind.OFFER: ApplicationState.OFFER,
+                }
+                target = targets.get(classified.kind)
+                if target is not None and target in VALID_TRANSITIONS[application.state]:
+                    self._transition(
+                        session,
+                        application,
+                        target,
+                        idempotency_key,
+                        f"CORRESPONDENCE_{classified.kind.value.upper()}",
+                        payload={"correspondence_id": str(record.id)},
+                    )
+            if classified.kind is not CorrespondenceKind.UNKNOWN:
+                session.add(
+                    NotificationRecord(
+                        candidate_id=request.candidate_id,
+                        application_id=classified.application_id,
+                        event_type=f"correspondence_{classified.kind.value}",
+                        channel="dashboard",
+                        message=request.subject,
+                        immediate=classified.kind
+                        in {
+                            CorrespondenceKind.RECRUITER,
+                            CorrespondenceKind.INTERVIEW,
+                            CorrespondenceKind.OFFER,
+                        },
+                    )
+                )
+            return self._correspondence_view(record)
+
+    def prepare_interview(
+        self, candidate_id: str, application_id: UUID
+    ) -> InterviewPreparationPackage:
+        with self._sessions.begin() as session:
+            application = self._application(session, candidate_id, application_id)
+            existing = session.scalar(
+                select(ApplicationArtifact).where(
+                    ApplicationArtifact.candidate_id == candidate_id,
+                    ApplicationArtifact.application_id == application_id,
+                    ApplicationArtifact.kind == "interview_package",
+                    ApplicationArtifact.version == 1,
+                )
+            )
+            if existing is not None:
+                return InterviewPreparationPackage.model_validate_json(
+                    Path(existing.storage_uri).read_text(encoding="utf-8")
+                )
+            job = session.get(GlobalJob, application.job_id)
+            score = (
+                session.get(CandidateJobScore, application.score_id)
+                if application.score_id
+                else None
+            )
+            if job is None or score is None:
+                raise ApplicationConflictError("job evidence is missing for interview preparation")
+            documents = session.scalars(
+                select(ApplicationDocument).where(
+                    ApplicationDocument.candidate_id == candidate_id,
+                    ApplicationDocument.application_id == application_id,
+                )
+            ).all()
+            answers = session.scalars(
+                select(ApplicationAnswer).where(
+                    ApplicationAnswer.candidate_id == candidate_id,
+                    ApplicationAnswer.application_id == application_id,
+                )
+            ).all()
+            correspondence = session.scalars(
+                select(StoredCorrespondence).where(
+                    StoredCorrespondence.candidate_id == candidate_id,
+                    StoredCorrespondence.application_id == application_id,
+                )
+            ).all()
+            by_kind = {item.kind.value: item for item in documents}
+            cv = by_kind.get(DocumentKind.CV.value)
+            if cv is None:
+                raise ApplicationConflictError("exact CV is missing for interview preparation")
+            cover_letter = by_kind.get(DocumentKind.COVER_LETTER.value)
+            evidence = tuple(str(item) for item in score.rationale.get("evidence", []))
+            package = self._correspondence.prepare_interview(
+                ArchivedApplicationArtifacts(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    company=job.company,
+                    job_title=job.title,
+                    exact_cv=Path(cv.storage_uri).read_text(encoding="utf-8"),
+                    exact_cover_letter=(
+                        Path(cover_letter.storage_uri).read_text(encoding="utf-8")
+                        if cover_letter
+                        else None
+                    ),
+                    submitted_answers=tuple(
+                        SubmittedAnswer(question=item.question, answer=item.answer)
+                        for item in answers
+                    ),
+                    original_job_description=job.description,
+                    job_score=int(score.total_score),
+                    score_rationale=json.dumps(score.rationale, sort_keys=True),
+                    candidate_job_match_summary=(
+                        f"Candidate-scoped score {int(score.total_score)} for {job.title}."
+                    ),
+                    required_skills=tuple(job.required_skills),
+                    relevant_projects=tuple(
+                        item.removeprefix("project:")
+                        for item in evidence
+                        if item.startswith("project:")
+                    ),
+                    unsupported_areas=tuple(score.rationale.get("hard_blockers", [])),
+                    recruiter_correspondence=tuple(item.subject for item in correspondence),
+                )
+            )
+            content = canonical_json_bytes(package.model_dump(mode="json"))
+            path = self._write_exclusive(
+                candidate_id,
+                application_id,
+                "interview_package",
+                "interview-package-v1.json",
+                content,
+            )
+            session.add(
+                ApplicationArtifact(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    kind="interview_package",
+                    version=1,
+                    storage_uri=str(path),
+                    sha256=hashlib.sha256(content).hexdigest(),
+                    content_type="application/json",
+                    immutable=True,
+                    artifact_metadata={"source_artifacts_sha256": package.source_artifacts_sha256},
+                )
+            )
+            return package
+
+    def list_notifications(self, candidate_id: str) -> tuple[NotificationView, ...]:
+        self._candidates.get_config(candidate_id)
+        with self._sessions() as session:
+            records = session.scalars(
+                select(NotificationRecord)
+                .where(NotificationRecord.candidate_id == candidate_id)
+                .order_by(NotificationRecord.created_at.desc())
+            ).all()
+            return tuple(self._notification_view(item) for item in records)
 
     def artifact_path(self, candidate_id: str, application_id: UUID, artifact_id: UUID) -> Path:
         with self._sessions() as session:
@@ -788,6 +1054,12 @@ class ApplicationService:
             if event is None:
                 raise ApplicationNotFoundError("security event not found")
             event.resolved = True
+            self._append_admin_audit(
+                session,
+                candidate_id,
+                "security_event_resolved",
+                {"security_event_id": str(event_id)},
+            )
             return self._security_view(event)
 
     def get_settings(self, candidate_id: str) -> SettingsView:
@@ -808,6 +1080,12 @@ class ApplicationService:
                 raise ApplicationConflictError(
                     "autonomous mode is blocked: " + ", ".join(view.autonomy_blockers)
                 )
+            self._append_admin_audit(
+                session,
+                update.candidate_id,
+                "settings_updated",
+                {"fields": sorted(values), "automation_mode": view.automation_mode},
+            )
             return view
 
     def emergency_stop(self, candidate_id: str) -> SettingsView:
@@ -816,6 +1094,9 @@ class ApplicationService:
             record = self._settings_record(session, candidate_id)
             record.emergency_stopped = True
             record.automation_mode = "disabled"
+            self._append_admin_audit(
+                session, candidate_id, "emergency_stop_activated", {"automation_mode": "disabled"}
+            )
             return self._settings_view(config, record)
 
     def analytics(self, candidate_id: str) -> AnalyticsOverview:
@@ -1180,6 +1461,14 @@ class ApplicationService:
             .order_by(AgentReview.created_at.desc())
             .limit(1)
         )
+        correspondence = session.scalars(
+            select(StoredCorrespondence)
+            .where(
+                StoredCorrespondence.candidate_id == application.candidate_id,
+                StoredCorrespondence.application_id == application.id,
+            )
+            .order_by(StoredCorrespondence.received_at)
+        ).all()
         immutable_kinds = {
             item.kind
             for item in session.scalars(
@@ -1239,6 +1528,7 @@ class ApplicationService:
                 if review
                 else None
             ),
+            correspondence=tuple(self._correspondence_view(item) for item in correspondence),
             archive_available=application.archive_uri is not None,
             confirmation_reference=application.confirmation_reference,
             submitted_at=application.submitted_at,
@@ -1318,6 +1608,36 @@ class ApplicationService:
         )
 
     @staticmethod
+    def _correspondence_view(record: StoredCorrespondence) -> CorrespondenceView:
+        return CorrespondenceView(
+            correspondence_id=record.id,
+            candidate_id=record.candidate_id,
+            application_id=record.application_id,
+            provider_message_id=record.external_message_id,
+            kind=record.kind,
+            sender=record.sender,
+            subject=record.subject,
+            received_at=record.received_at,
+            association_reason=str(
+                record.metadata_payload.get("association_reason", "persisted_association")
+            ),
+        )
+
+    @staticmethod
+    def _notification_view(record: NotificationRecord) -> NotificationView:
+        return NotificationView(
+            notification_id=record.id,
+            candidate_id=record.candidate_id,
+            application_id=record.application_id,
+            event_type=record.event_type,
+            channel=record.channel,
+            message=record.message,
+            immediate=record.immediate,
+            status=record.status,
+            created_at=record.created_at,
+        )
+
+    @staticmethod
     def _settings_record(session: Session, candidate_id: str) -> CandidateSettingsRecord:
         record = session.scalar(
             select(CandidateSettingsRecord).where(
@@ -1329,6 +1649,88 @@ class ApplicationService:
             session.add(record)
             session.flush()
         return record
+
+    @staticmethod
+    def _rate_limits_allow(
+        session: Session,
+        candidate_id: str,
+        company: str,
+        settings: CandidateSettingsRecord,
+        now: datetime,
+    ) -> bool:
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        submitted_today = (
+            session.scalar(
+                select(func.count(Application.id)).where(
+                    Application.candidate_id == candidate_id,
+                    Application.submitted_at >= day_start,
+                )
+            )
+            or 0
+        )
+        submitted_week = (
+            session.scalar(
+                select(func.count(Application.id)).where(
+                    Application.candidate_id == candidate_id,
+                    Application.submitted_at >= now - timedelta(days=7),
+                )
+            )
+            or 0
+        )
+        submitted_company = (
+            session.scalar(
+                select(func.count(Application.id))
+                .join(GlobalJob, GlobalJob.id == Application.job_id)
+                .where(
+                    Application.candidate_id == candidate_id,
+                    Application.submitted_at >= now - timedelta(days=30),
+                    func.lower(GlobalJob.company) == company.casefold(),
+                )
+            )
+            or 0
+        )
+        return (
+            submitted_today < settings.maximum_applications_per_day
+            and submitted_week < settings.maximum_applications_per_week
+            and submitted_company < settings.maximum_applications_per_company_30_days
+        )
+
+    @staticmethod
+    def _append_admin_audit(
+        session: Session,
+        candidate_id: str,
+        event_type: str,
+        details: dict[str, object],
+    ) -> None:
+        previous = session.scalar(
+            select(AdministrativeAuditRecord)
+            .where(AdministrativeAuditRecord.candidate_id == candidate_id)
+            .order_by(AdministrativeAuditRecord.occurred_at.desc())
+            .limit(1)
+        )
+        occurred_at = datetime.now(UTC)
+        previous_hash = previous.event_hash if previous else None
+        content = canonical_json_bytes(
+            {
+                "candidate_id": candidate_id,
+                "actor_id": "local-user",
+                "event_type": event_type,
+                "details": details,
+                "previous_hash": previous_hash,
+                "occurred_at": occurred_at,
+            }
+        )
+        session.add(
+            AdministrativeAuditRecord(
+                candidate_id=candidate_id,
+                actor_id="local-user",
+                event_type=event_type,
+                details=details,
+                previous_hash=previous_hash,
+                event_hash=hashlib.sha256(content).hexdigest(),
+                occurred_at=occurred_at,
+            )
+        )
 
     @staticmethod
     def _settings_view(config: CandidateConfig, record: CandidateSettingsRecord) -> SettingsView:
