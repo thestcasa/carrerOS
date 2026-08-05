@@ -136,6 +136,16 @@ unapproved facts, and blocks readiness pending explicit review. API, CLI, profil
 and failure-path tests are included. PDF parsing is deferred until a resource-isolated document
 worker exists.
 
+### Phase 5B — active candidate propagation
+
+1. Persist a validated active candidate in a same-site local cookie.
+2. Propagate selection through dashboard data, primary navigation, list routes, and detail routes.
+3. Preserve an explicit query override while rejecting malformed candidate IDs.
+
+Status: complete. Candidate-card navigation selects the active profile, all operational links carry
+it explicitly, server pages fall back to the validated cookie, and the dashboard loads and labels
+the same candidate. Frontend regression coverage proves cross-route propagation.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

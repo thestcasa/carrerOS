@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { selectActiveCandidate } from "@/lib/active-candidate";
 import type { CandidateSummary } from "@/lib/types";
 import { StatusPill } from "./StatusPill";
 
@@ -23,10 +26,10 @@ export function CandidateCard({ candidate }: { candidate: CandidateSummary }) {
           <div><dt>Submission automation</dt><dd>{candidate.automation_status}</dd></div>
         </dl>
         <div className="card-actions">
-          <Link className="button primary" href={`/candidates/${candidate.candidate_id}/readiness`}>
+          <Link onClick={() => selectActiveCandidate(candidate.candidate_id)} className="button primary" href={`/candidates/${candidate.candidate_id}/readiness`}>
             Review readiness
           </Link>
-          <Link className="button secondary" href={`/candidates/${candidate.candidate_id}/profile`}>
+          <Link onClick={() => selectActiveCandidate(candidate.candidate_id)} className="button secondary" href={`/candidates/${candidate.candidate_id}/profile`}>
             Edit profile
           </Link>
         </div>

@@ -6,6 +6,7 @@ import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { CVImportPanel } from "@/components/CVImportPanel";
 import { ProfileEditor } from "@/components/ProfileEditor";
 import { api } from "@/lib/api";
+import { selectActiveCandidate } from "@/lib/active-candidate";
 import type { CandidateDetail, EditableSection } from "@/lib/types";
 
 export function ProfilePageClient({ candidateId, initialSection }: { candidateId: string; initialSection?: EditableSection }) {
@@ -14,13 +15,21 @@ export function ProfilePageClient({ candidateId, initialSection }: { candidateId
 
   async function load() {
     setError(null);
-    try { setDetail(await api.candidate(candidateId)); }
+    try {
+      const candidateDetail = await api.candidate(candidateId);
+      selectActiveCandidate(candidateId);
+      setDetail(candidateDetail);
+    }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : "The candidate profile is unavailable."); }
   }
   useEffect(() => {
     let active = true;
     api.candidate(candidateId)
-      .then((candidateDetail) => { if (active) setDetail(candidateDetail); })
+      .then((candidateDetail) => {
+        if (!active) return;
+        selectActiveCandidate(candidateId);
+        setDetail(candidateDetail);
+      })
       .catch((requestError: unknown) => { if (active) setError(requestError instanceof Error ? requestError.message : "The candidate profile is unavailable."); });
     return () => { active = false; };
   }, [candidateId]);

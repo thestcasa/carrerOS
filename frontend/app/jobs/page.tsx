@@ -1,4 +1,5 @@
 import { JobsPageClient } from "./jobs-page-client";
+import { resolveActiveCandidateId } from "@/lib/active-candidate-server";
 
 export default async function JobsPage({
   searchParams,
@@ -6,5 +7,5 @@ export default async function JobsPage({
   searchParams: Promise<{ candidate_id?: string }>;
 }) {
   const query = await searchParams;
-  return <JobsPageClient candidateId={query.candidate_id ?? "example_candidate"} />;
+  return <JobsPageClient candidateId={await resolveActiveCandidateId(query.candidate_id)} />;
 }

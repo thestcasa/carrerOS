@@ -3,8 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: candidate portability, deletion/retention, and final verification
-- Branch baseline: `autonomous-build`; latest completed milestone commit is `2c45dd0`
+- Active phase: deletion/retention design, productionization gaps, and final verification
+- Branch baseline: `autonomous-build`; latest completed milestone is active-candidate propagation
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
 
@@ -61,13 +61,16 @@
   source hash, restricted confidentiality, and false approvals. Applying a draft creates one
   version atomically and blocks readiness until explicit review.
 - PDF parsing remains denied until it can execute in a CPU/memory/time-constrained worker.
+- Candidate selection now persists as a validated same-site cookie. The dashboard, navigation,
+  operational list routes, and job/application detail routes consistently use the query override or
+  active candidate instead of silently hardcoding the fictional example profile.
 
 ## Latest verification
 
 - Backend: `ruff format --check`, Ruff lint, strict mypy, and **122 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **17 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **26 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
   Alembic report no missing operations.
@@ -93,5 +96,5 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Verify and commit CV import, then continue executable deletion/retention.
+3. Continue discovery/material productionization or deletion with a durable tombstone and writer fence.
 4. Run backend, migration, and frontend gates after each coherent phase.

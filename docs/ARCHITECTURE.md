@@ -15,6 +15,9 @@ committed; it must be onboarded privately and remains blocked until approved.
 The Next.js control plane exposes the dashboard, candidate onboarding/editor/readiness, job inbox
 and analysis, application pipeline/detail, human actions, security ledger, automation settings,
 and analytics. Its authenticated API client never reads local candidate or artifact paths.
+Candidate selection is a validated local same-site cookie with an explicit query override; primary
+navigation and server-rendered list/detail routes propagate the same candidate ID. The cookie is a
+UX preference only—the backend bearer-session candidate scope remains authoritative.
 
 The application service persists candidate snapshots, generated evidence-backed materials,
 independent review, synthetic browser sessions, screenshots, state transitions, one-time gate
