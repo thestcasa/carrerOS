@@ -12,6 +12,7 @@ from app.materials.contracts import (
     JobTarget,
 )
 from app.materials.generation import DeterministicMaterialGenerator
+from app.materials.rendering import DeterministicPdfRenderer, RenderedMaterial, template_for
 from app.materials.review import IndependentMaterialReviewer
 from app.materials.storage import DraftArtifactStore, DraftVersionExistsError
 from app.materials.validation import MaterialValidator
@@ -22,6 +23,7 @@ __all__ = [
     "ApprovedFact",
     "Claim",
     "DeterministicMaterialGenerator",
+    "DeterministicPdfRenderer",
     "DraftArtifactStore",
     "DraftVersionExistsError",
     "GeneratedAnswer",
@@ -31,4 +33,6 @@ __all__ = [
     "IndependentMaterialReviewer",
     "JobTarget",
     "MaterialValidator",
+    "RenderedMaterial",
+    "template_for",
 ]

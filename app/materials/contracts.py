@@ -94,12 +94,30 @@ class ValidationReport(MaterialModel):
     issues: tuple[ValidationIssue, ...] = ()
 
 
+class RenderValidationReport(MaterialModel):
+    document_kind: DocumentKind
+    document_version: int = Field(ge=1)
+    template_id: str
+    template_version: str
+    renderer_version: Literal["deterministic_pdf_v2"] = "deterministic_pdf_v2"
+    source_sha256: Sha256
+    pdf_sha256: Sha256 | None = None
+    extracted_text_sha256: Sha256 | None = None
+    page_count: int = Field(ge=0)
+    maximum_pages: int = Field(ge=1)
+    extraction_matches: bool
+    layout_overlap_count: int = Field(ge=0)
+    valid: bool
+    issues: tuple[ValidationIssue, ...] = ()
+
+
 class MaterialReview(MaterialModel):
     decision: ReviewDecision
     semantic_review_passed: bool
     documents_supported: bool
     answers_supported: bool
     issues: tuple[ValidationIssue, ...] = ()
+    render_reports: tuple[RenderValidationReport, ...] = ()
 
 
 class DraftArtifactManifest(MaterialModel):

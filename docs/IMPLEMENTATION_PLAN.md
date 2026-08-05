@@ -59,6 +59,8 @@ not add browser automation or live submission.
   settings, analytics, local auth, and the primary required web routes.
 - [x] Add a persistent workflow queue and correspondence/notification/interview integration.
 - [x] Add a network-denied Playwright fixture harness and bounded unapproved CV import workflow.
+- [x] Render and structurally validate versioned PDFs before approval, upload their exact hashes,
+  and archive the same bytes without lossy rerendering.
 - [ ] Complete isolated Playwright application integration, retention/deletion execution, and
   hosted security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those

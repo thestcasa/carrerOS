@@ -18,6 +18,7 @@ from app.materials.contracts import (
     JobTarget,
 )
 from app.materials.generation import DeterministicMaterialGenerator
+from app.materials.rendering import DeterministicPdfRenderer, template_for
 from app.materials.review import IndependentMaterialReviewer
 from app.materials.storage import DraftArtifactStore, DraftVersionExistsError
 from app.materials.validation import MaterialValidator
@@ -67,7 +68,18 @@ def test_generation_is_deterministic_and_every_claim_has_provenance() -> None:
     )
     assert first.answers[0].supported
     assert first.answers[0].approved_source_key == "work_authorization"
-    review = IndependentMaterialReviewer().review(request, first)
+    renderer = DeterministicPdfRenderer()
+    render_reports = tuple(
+        renderer.render(
+            document,
+            template_id=template_for(document.kind, "technical_two_page", "1.0")[0],
+            template_version=template_for(document.kind, "technical_two_page", "1.0")[1],
+            maximum_pages=2,
+            document_version=1,
+        ).report
+        for document in first.documents
+    )
+    review = IndependentMaterialReviewer().review(request, first, render_reports)
     assert review.decision == ReviewDecision.PASS
 
 

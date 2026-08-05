@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApplicationPageClient } from "@/app/applications/[applicationId]/application-page-client";
 import { api } from "@/lib/api";
-import type { ApplicationDetail } from "@/lib/types";
+import type { ApplicationDetail, ArtifactView } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
   api: {
@@ -39,8 +39,31 @@ const ready: ApplicationDetail = {
   submitted_at: null,
 };
 
+const renderedCv: ArtifactView = {
+  artifact_id: "00000000-0000-0000-0000-000000000444",
+  application_id: ready.application_id,
+  candidate_id: ready.candidate_id,
+  kind: "rendered_cv",
+  version: 1,
+  sha256: "a".repeat(64),
+  content_type: "application/pdf",
+  immutable: false,
+  download_path: "/api/fixture",
+  metadata: {
+    template_id: "technical_two_page",
+    template_version: "1.0",
+    candidate_snapshot_version: "1.0.0",
+    page_count: 2,
+    extraction_matches: true,
+    valid: true,
+  },
+  created_at: "2026-08-05T10:00:00Z",
+};
+
 describe("ApplicationPageClient", () => {
   beforeEach(() => {
+    vi.mocked(api.artifacts).mockReset();
+    vi.mocked(api.application).mockReset();
     vi.mocked(api.artifacts).mockResolvedValue([]);
     vi.mocked(api.application)
       .mockResolvedValueOnce(ready)
@@ -79,5 +102,25 @@ describe("ApplicationPageClient", () => {
     await waitFor(() => expect(screen.getByText("Inspect and retry")).toBeInTheDocument());
     expect(screen.getByText("No backend confirmation yet")).toBeInTheDocument();
     expect(screen.queryByText(/^confirmed$/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the exact rendered draft and its structural validation metadata", async () => {
+    vi.mocked(api.artifacts).mockReset();
+    vi.mocked(api.artifacts).mockResolvedValueOnce([renderedCv]);
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application).mockResolvedValueOnce({ ...ready, archive_available: false });
+
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+
+    expect(await screen.findByText("rendered_cv v1 · draft")).toBeVisible();
+    expect(screen.getByText(/Template technical_two_page@1.0/)).toHaveTextContent(
+      "snapshot 1.0.0 · 2 page(s) · extraction matched · validation passed",
+    );
+    expect(screen.getByRole("button", { name: "Download exact artifact" })).toBeEnabled();
   });
 });

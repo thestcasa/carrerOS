@@ -14,7 +14,7 @@ from app.browser.contracts import (
     UploadArtifact,
 )
 from app.browser.dry_run import BrowserDryRunError
-from app.browser.paths import CandidateSessionPaths
+from app.browser.paths import CandidatePathError, CandidateSessionPaths
 
 
 class RestrictedPlaywrightWorker:
@@ -30,9 +30,16 @@ class RestrictedPlaywrightWorker:
 
     def run(self, request: PlaywrightDryRunRequest) -> PlaywrightDryRunResult:
         self._require_allowed_fixture(request.fixture_url)
-        session_directory = self._paths.session_directory(request.candidate_id, request.session_id)
+        try:
+            session_directory = self._paths.session_directory(
+                request.candidate_id, request.session_id
+            )
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
         self._validate_session_path(session_directory)
         profile_directory = session_directory / "playwright-profile"
+        if profile_directory.is_symlink():
+            raise BrowserDryRunError("candidate browser profile path contains a symlink")
         session_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         session_directory.chmod(0o700)
         self._validate_session_path(session_directory)
@@ -72,6 +79,12 @@ class RestrictedPlaywrightWorker:
                 submit_present = submit.count() > 0 and submit.first.is_visible()
                 screenshot_path = session_directory / "playwright-final-page.png"
                 snapshot_path = session_directory / "playwright-final-page.html"
+                metadata_path = session_directory / "playwright-session.json"
+                if any(
+                    path.is_symlink()
+                    for path in (profile_directory, screenshot_path, snapshot_path, metadata_path)
+                ):
+                    raise BrowserDryRunError("candidate browser output path contains a symlink")
                 page.screenshot(path=str(screenshot_path), full_page=True)
                 snapshot_path.write_text(page.content(), encoding="utf-8")
                 metadata = {
@@ -84,7 +97,6 @@ class RestrictedPlaywrightWorker:
                     "allowed_network_requests": network_audit["allowed"],
                     "blocked_network_requests": network_audit["blocked"],
                 }
-                metadata_path = session_directory / "playwright-session.json"
                 metadata_path.write_text(
                     json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8"
                 )
@@ -126,9 +138,17 @@ class RestrictedPlaywrightWorker:
         if not synthetic_fixture_acknowledged:
             raise BrowserDryRunError("synthetic fixture acknowledgement is required")
         self._require_allowed_fixture(fixture_url)
-        session_directory = self._paths.session_directory(candidate_id, session_id)
+        try:
+            session_directory = self._paths.session_directory(candidate_id, session_id)
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
+        self._validate_session_path(session_directory)
         profile_directory = session_directory / "playwright-profile"
-        if not profile_directory.is_dir():
+        if (
+            profile_directory.is_symlink()
+            or not profile_directory.is_dir()
+            or profile_directory.resolve() != profile_directory
+        ):
             raise BrowserDryRunError("persistent browser profile is missing")
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
@@ -177,8 +197,18 @@ class RestrictedPlaywrightWorker:
         return None
 
     def _validate_upload(self, request: PlaywrightDryRunRequest, artifact: UploadArtifact) -> None:
-        artifact_path = artifact.path.resolve()
-        allowed_root = self._paths.allowed_artifact_root(request.candidate_id).resolve()
+        try:
+            allowed_root = self._paths.allowed_artifact_root(request.candidate_id).resolve()
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
+        raw_path = artifact.path.absolute()
+        if raw_path.is_symlink() or any(
+            parent.is_symlink()
+            for parent in raw_path.parents
+            if parent != allowed_root and parent.is_relative_to(allowed_root)
+        ):
+            raise BrowserDryRunError("upload path contains a symlink")
+        artifact_path = raw_path.resolve()
         if not artifact_path.is_relative_to(allowed_root):
             raise BrowserDryRunError("upload path is outside the candidate artifact allowlist")
         if artifact.sha256 not in request.allowed_upload_sha256:

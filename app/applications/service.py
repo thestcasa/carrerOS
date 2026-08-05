@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -33,11 +34,18 @@ from app.applications.contracts import (
     SubmissionResultView,
     SyntheticSubmissionRequest,
 )
-from app.archive import ApplicationArchiveBuilder, ApplicationArchiveData, canonical_json_bytes
+from app.archive import (
+    ApplicationArchiveBuilder,
+    ApplicationArchiveData,
+    ArchiveManifest,
+    canonical_json_bytes,
+    sha256_bytes,
+)
 from app.browser import DryRunRequest, FieldKind, SyntheticBrowserDryRunner, UploadArtifact
 from app.browser.fixtures import standard_application_form
 from app.candidates.models import CandidateConfig, ClaimFact
 from app.candidates.service import CandidateService
+from app.candidates.snapshot import CandidateSnapshot
 from app.correspondence import (
     ApplicationReference,
     ArchivedApplicationArtifacts,
@@ -72,13 +80,19 @@ from app.domain.models import (
     SubmissionAuthorizationRecord,
 )
 from app.domain.models import CorrespondenceRecord as StoredCorrespondence
-from app.materials import DeterministicMaterialGenerator, IndependentMaterialReviewer
+from app.materials import (
+    DeterministicMaterialGenerator,
+    DeterministicPdfRenderer,
+    IndependentMaterialReviewer,
+    template_for,
+)
 from app.materials.contracts import (
     AnswerPrompt,
     ApprovedAnswerFact,
     ApprovedFact,
     GenerationRequest,
     JobTarget,
+    MaterialReview,
 )
 from app.operations import AuthorizationConsumer
 from app.submission_gate import SubmissionGate, SubmissionGateInput
@@ -116,6 +130,7 @@ class ApplicationService:
         self._candidates = candidate_service
         self._runtime_root = runtime_root.resolve()
         self._generator = DeterministicMaterialGenerator()
+        self._renderer = DeterministicPdfRenderer()
         self._reviewer = IndependentMaterialReviewer()
         self._browser = SyntheticBrowserDryRunner(self._runtime_root)
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
@@ -215,49 +230,95 @@ class ApplicationService:
             if replay is not None:
                 return self._detail(session, application)
 
-            snapshot = self._candidates.snapshot(candidate_id)
-            snapshot_path = self._write_exclusive(
-                candidate_id,
-                application.id,
-                "candidate_snapshot",
-                f"{snapshot.config_sha256}.json",
-                canonical_json_bytes(snapshot.model_dump(mode="json")),
+            snapshot_record = session.scalar(
+                select(CandidateSnapshotRecord).where(
+                    CandidateSnapshotRecord.candidate_id == candidate_id,
+                    CandidateSnapshotRecord.application_id == application.id,
+                    CandidateSnapshotRecord.profile_version == config.manifest.profile_version,
+                )
             )
-            session.add(
-                CandidateSnapshotRecord(
+            if snapshot_record is None:
+                snapshot = self._candidates.snapshot(candidate_id)
+                snapshot_path = self._write_exclusive(
+                    candidate_id,
+                    application.id,
+                    "candidate_snapshot",
+                    f"{snapshot.config_sha256}.json",
+                    canonical_json_bytes(snapshot.model_dump(mode="json")),
+                )
+                snapshot_record = CandidateSnapshotRecord(
+                    id=snapshot.snapshot_id,
                     candidate_id=candidate_id,
                     application_id=application.id,
                     profile_version=snapshot.profile_version,
                     sha256=snapshot.config_sha256,
                     storage_uri=str(snapshot_path),
                 )
-            )
-            self._transition(
-                session,
-                application,
-                ApplicationState.CANDIDATE_SNAPSHOT_CREATED,
-                f"{idempotency_key}:snapshot",
-                "CANDIDATE_SNAPSHOT_CREATED",
-            )
+                session.add(snapshot_record)
+            else:
+                snapshot = self._load_candidate_snapshot(application, snapshot_record)
+            regenerating = application.state is ApplicationState.REVIEW_FAILED
+            if application.state is ApplicationState.SHORTLISTED:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.CANDIDATE_SNAPSHOT_CREATED,
+                    f"{idempotency_key}:snapshot",
+                    "CANDIDATE_SNAPSHOT_CREATED",
+                )
+            elif application.state is not ApplicationState.REVIEW_FAILED:
+                raise ApplicationConflictError("application is not ready for material generation")
             self._transition(
                 session,
                 application,
                 ApplicationState.MATERIALS_GENERATING,
                 f"{idempotency_key}:generating",
-                "MATERIALS_GENERATION_STARTED",
+                "MATERIALS_REGENERATION_STARTED"
+                if regenerating
+                else "MATERIALS_GENERATION_STARTED",
             )
             request = self._generation_request(config, application.id, job)
             generated = self._generator.generate(request)
-            review = self._reviewer.review(request, generated)
-            for document in generated.documents:
-                latest = session.scalar(
-                    select(func.max(ApplicationDocument.version)).where(
-                        ApplicationDocument.candidate_id == candidate_id,
-                        ApplicationDocument.application_id == application.id,
-                        ApplicationDocument.kind == document.kind,
+            document_versions = {
+                document.kind: (
+                    session.scalar(
+                        select(func.max(ApplicationDocument.version)).where(
+                            ApplicationDocument.candidate_id == candidate_id,
+                            ApplicationDocument.application_id == application.id,
+                            ApplicationDocument.kind == document.kind,
+                        )
                     )
+                    or 0
                 )
-                version = (latest or 0) + 1
+                + 1
+                for document in generated.documents
+            }
+            rendered = tuple(
+                self._renderer.render(
+                    document,
+                    template_id=template_for(
+                        document.kind,
+                        config.cv_rules.template_id,
+                        config.cv_rules.template_version,
+                    )[0],
+                    template_version=template_for(
+                        document.kind,
+                        config.cv_rules.template_id,
+                        config.cv_rules.template_version,
+                    )[1],
+                    maximum_pages=(
+                        config.cv_rules.max_pages if document.kind is DocumentKind.CV else 2
+                    ),
+                    document_version=document_versions[document.kind],
+                )
+                for document in generated.documents
+            )
+            review = self._reviewer.review(
+                request, generated, tuple(item.report for item in rendered)
+            )
+            for rendered_document in rendered:
+                document = rendered_document.document
+                version = document_versions[document.kind]
                 document_path = self._write_exclusive(
                     candidate_id,
                     application.id,
@@ -277,22 +338,81 @@ class ApplicationService:
                         storage_uri=str(document_path),
                         sha256=document.content_sha256,
                         evidence_ids={"items": evidence_ids},
-                        validated=review.documents_supported,
+                        validated=review.documents_supported and rendered_document.report.valid,
                     )
                 )
-            for answer in generated.answers:
+                render_metadata = {
+                    **rendered_document.report.model_dump(mode="json"),
+                    "candidate_snapshot_version": snapshot.profile_version,
+                    "candidate_snapshot_sha256": snapshot.config_sha256,
+                    "candidate_snapshot_id": str(snapshot.snapshot_id),
+                    "document_version": version,
+                    "evidence_ids": evidence_ids,
+                }
+                report_content = canonical_json_bytes(render_metadata)
+                report_path = self._write_exclusive(
+                    candidate_id,
+                    application.id,
+                    f"render_report_{document.kind.value}",
+                    f"v{version}.json",
+                    report_content,
+                )
                 session.add(
-                    ApplicationAnswer(
+                    ApplicationArtifact(
+                        candidate_id=candidate_id,
+                        application_id=application.id,
+                        kind=f"render_report_{document.kind.value}",
+                        version=version,
+                        storage_uri=str(report_path),
+                        sha256=hashlib.sha256(report_content).hexdigest(),
+                        content_type="application/json",
+                        immutable=False,
+                        artifact_metadata=render_metadata,
+                    )
+                )
+                if rendered_document.report.valid:
+                    pdf_path = self._write_exclusive(
+                        candidate_id,
+                        application.id,
+                        f"rendered_{document.kind.value}",
+                        f"v{version}.pdf",
+                        rendered_document.pdf_bytes,
+                    )
+                    session.add(
+                        ApplicationArtifact(
+                            candidate_id=candidate_id,
+                            application_id=application.id,
+                            kind=f"rendered_{document.kind.value}",
+                            version=version,
+                            storage_uri=str(pdf_path),
+                            sha256=rendered_document.report.pdf_sha256 or "",
+                            content_type="application/pdf",
+                            immutable=False,
+                            artifact_metadata=render_metadata,
+                        )
+                    )
+            for answer in generated.answers:
+                stored_answer = session.scalar(
+                    select(ApplicationAnswer).where(
+                        ApplicationAnswer.candidate_id == candidate_id,
+                        ApplicationAnswer.application_id == application.id,
+                        ApplicationAnswer.question_key == answer.question_key,
+                    )
+                )
+                if stored_answer is None:
+                    stored_answer = ApplicationAnswer(
                         candidate_id=candidate_id,
                         application_id=application.id,
                         question_key=answer.question_key,
                         question=answer.question,
                         answer=answer.answer,
-                        approved_source_key=answer.approved_source_key,
-                        evidence_ids={"items": list(answer.evidence_ids)},
-                        supported=answer.supported,
                     )
-                )
+                    session.add(stored_answer)
+                stored_answer.question = answer.question
+                stored_answer.answer = answer.answer
+                stored_answer.approved_source_key = answer.approved_source_key
+                stored_answer.evidence_ids = {"items": list(answer.evidence_ids)}
+                stored_answer.supported = answer.supported
             session.add(
                 AgentReview(
                     candidate_id=candidate_id,
@@ -316,9 +436,18 @@ class ApplicationService:
                 f"{idempotency_key}:review",
                 "INDEPENDENT_REVIEW_PASSED"
                 if review.semantic_review_passed
-                else "INDEPENDENT_REVIEW_FAILED",
+                else "INDEPENDENT_REVIEW_COMPLETED",
                 payload=review.model_dump(mode="json"),
             )
+            if not review.semantic_review_passed:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.REVIEW_FAILED,
+                    f"{idempotency_key}:review-failed",
+                    "INDEPENDENT_REVIEW_FAILED",
+                    payload=review.model_dump(mode="json"),
+                )
         return self.get_application(candidate_id, application.id)
 
     def approve_materials(
@@ -335,8 +464,9 @@ class ApplicationService:
                 .order_by(AgentReview.created_at.desc())
                 .limit(1)
             )
-            if review is None or not review.semantic_passed:
+            if review is None:
                 raise ApplicationConflictError("materials did not pass independent review")
+            self._reviewed_materials(session, application, review)
             self._transition(
                 session,
                 application,
@@ -386,18 +516,28 @@ class ApplicationService:
             application = self._application(session, candidate_id, application_id)
             if application.state is not ApplicationState.FORM_FILLING:
                 raise ApplicationConflictError("application is not ready for form filling")
-            document = session.scalar(
-                select(ApplicationDocument)
+            review = session.scalar(
+                select(AgentReview)
                 .where(
-                    ApplicationDocument.candidate_id == candidate_id,
-                    ApplicationDocument.application_id == application_id,
-                    ApplicationDocument.kind == DocumentKind.CV,
+                    AgentReview.candidate_id == candidate_id,
+                    AgentReview.application_id == application_id,
                 )
-                .order_by(ApplicationDocument.version.desc())
+                .order_by(AgentReview.created_at.desc())
                 .limit(1)
             )
-            if document is None:
-                raise ApplicationConflictError("validated CV is missing")
+            if review is None:
+                raise ApplicationConflictError("validated rendered CV is missing or corrupted")
+            reviewed_materials = self._reviewed_materials(session, application, review)
+            rendered_cv = next(
+                (
+                    artifact
+                    for document, artifact in reviewed_materials
+                    if document.kind is DocumentKind.CV
+                ),
+                None,
+            )
+            if rendered_cv is None:
+                raise ApplicationConflictError("validated rendered CV is missing or corrupted")
             browser_session = session.scalar(
                 select(BrowserSession).where(
                     BrowserSession.candidate_id == candidate_id,
@@ -420,11 +560,11 @@ class ApplicationService:
                     uploads=(
                         UploadArtifact(
                             field_key="cv",
-                            path=Path(document.storage_uri),
-                            sha256=document.sha256,
+                            path=Path(rendered_cv.storage_uri),
+                            sha256=rendered_cv.sha256,
                         ),
                     ),
-                    allowed_upload_sha256=frozenset({document.sha256}),
+                    allowed_upload_sha256=frozenset({rendered_cv.sha256}),
                 )
             )
             browser_session.status = "human_action_required" if result.human_actions else "ready"
@@ -492,8 +632,6 @@ class ApplicationService:
             settings = self._settings_record(session, candidate_id)
             if settings.emergency_stopped:
                 raise ApplicationConflictError("emergency stop is active")
-            if existing is not None and _utc(existing.expires_at) > now:
-                return self._authorization_view(existing)
             job = session.get(GlobalJob, application.job_id)
             score = (
                 session.get(CandidateJobScore, application.score_id)
@@ -509,12 +647,12 @@ class ApplicationService:
                 .order_by(AgentReview.created_at.desc())
                 .limit(1)
             )
-            documents = session.scalars(
-                select(ApplicationDocument).where(
-                    ApplicationDocument.candidate_id == candidate_id,
-                    ApplicationDocument.application_id == application_id,
-                )
-            ).all()
+            reviewed_materials = (
+                self._reviewed_materials(session, application, review) if review is not None else ()
+            )
+            reviewed_documents = tuple(item[0] for item in reviewed_materials)
+            rendered_artifacts = tuple(item[1] for item in reviewed_materials)
+
             answers = session.scalars(
                 select(ApplicationAnswer).where(
                     ApplicationAnswer.candidate_id == candidate_id,
@@ -540,6 +678,13 @@ class ApplicationService:
                     BrowserSession.candidate_id == candidate_id,
                     BrowserSession.application_id == application_id,
                 )
+            )
+            browser_upload_hashes = self._browser_upload_hashes(session, application)
+            rendered_cv = next(
+                (item for item in rendered_artifacts if item.kind == "rendered_cv"), None
+            )
+            browser_package_valid = rendered_cv is not None and browser_upload_hashes == (
+                rendered_cv.sha256,
             )
             rate_limits_allowed = job is not None and self._rate_limits_allow(
                 session, candidate_id, job.company, settings, now
@@ -573,13 +718,9 @@ class ApplicationService:
                 salary_policy_compatible=score is not None
                 and "salary_below_minimum" not in score.rationale.get("hard_blockers", []),
                 candidate_snapshot_valid=config.manifest.validation.profile_approved,
-                cv_render_valid=any(
-                    item.kind is DocumentKind.CV and item.validated for item in documents
-                ),
+                cv_render_valid=any(item.kind == "rendered_cv" for item in rendered_artifacts),
                 cover_letter_valid=not config.cover_letter_rules.enabled
-                or any(
-                    item.kind is DocumentKind.COVER_LETTER and item.validated for item in documents
-                ),
+                or any(item.kind == "rendered_cover_letter" for item in rendered_artifacts),
                 answers_valid=all(item.supported for item in answers),
                 unsupported_claims_count=0 if review and review.semantic_passed else 1,
                 unresolved_sensitive_questions_count=sum(
@@ -589,7 +730,8 @@ class ApplicationService:
                 captcha_pending=bool(unresolved_actions),
                 target_domain_validated=job is not None and job.application_url is not None,
                 final_page_matches_job=browser_session is not None
-                and browser_session.status == "ready",
+                and browser_session.status == "ready"
+                and browser_package_valid,
                 pre_submit_archive_created=True,
                 rate_limits_allowed=rate_limits_allowed,
                 configuration_valid=self._candidates.readiness(candidate_id).status == "ready",
@@ -597,7 +739,8 @@ class ApplicationService:
                 application_threshold=config.scoring_rules.application_threshold,
                 answers_complete=bool(answers),
                 answers_supported=all(item.supported for item in answers),
-                documents_valid=bool(documents) and all(item.validated for item in documents),
+                documents_valid=bool(reviewed_documents)
+                and all(item.validated for item in reviewed_documents),
                 semantic_review_passed=review.semantic_passed if review else False,
                 workflow_state=application.state,
                 unresolved_security_events=bool(unresolved_security),
@@ -612,11 +755,12 @@ class ApplicationService:
                 )
             if application.archive_uri is None:
                 application.archive_uri = str(
-                    self._create_archive(
-                        session, config, application, job, score, documents, answers
-                    )
+                    self._create_archive(session, config, application, job, score, answers)
                 )
-            archive_ready = self._archives.verify(Path(application.archive_uri))
+            snapshot_record = self._reviewed_snapshot(session, application, reviewed_materials)
+            archive_ready = self._archive_matches_package(
+                application, reviewed_materials, snapshot_record
+            )
             decision = gate.evaluate(
                 gate_input.model_copy(update={"pre_submit_archive_created": archive_ready})
             )
@@ -624,6 +768,18 @@ class ApplicationService:
                 raise ApplicationConflictError(
                     "submission gate denied: " + ", ".join(decision.reasons)
                 )
+            package_sha256 = self._submission_package_sha256(
+                application,
+                reviewed_materials,
+                snapshot_record,
+                browser_upload_hashes,
+            )
+            if existing is not None and _utc(existing.expires_at) > now:
+                if existing.package_sha256 != package_sha256:
+                    raise ApplicationConflictError(
+                        "existing authorization does not match the current submission package"
+                    )
+                return self._authorization_view(existing)
             authorization = decision.authorization
             record = SubmissionAuthorizationRecord(
                 authorization_id=authorization.authorization_id,
@@ -632,6 +788,7 @@ class ApplicationService:
                 workflow_state=authorization.workflow_state,
                 issued_at=authorization.issued_at,
                 expires_at=authorization.expires_at,
+                package_sha256=package_sha256,
             )
             session.add(record)
             session.add(
@@ -695,6 +852,52 @@ class ApplicationService:
             raise ApplicationConflictError("submission authorization is expired")
         with self._sessions.begin() as session:
             application = self._application(session, candidate_id, application_id)
+            record = session.get(SubmissionAuthorizationRecord, request.authorization_id)
+            if (
+                record is None
+                or record.candidate_id != candidate_id
+                or record.application_id != application_id
+            ):
+                raise ApplicationConflictError("submission authorization was not found")
+            if record.consumed_at is not None:
+                raise ApplicationConflictError("submission authorization was already consumed")
+            if application.state is not ApplicationState.READY_TO_SUBMIT:
+                raise ApplicationConflictError("application is no longer ready to submit")
+            review = session.scalar(
+                select(AgentReview)
+                .where(
+                    AgentReview.candidate_id == candidate_id,
+                    AgentReview.application_id == application_id,
+                )
+                .order_by(AgentReview.created_at.desc())
+                .limit(1)
+            )
+            if review is None:
+                raise ApplicationConflictError("material review is missing")
+            reviewed_materials = self._reviewed_materials(session, application, review)
+            snapshot_record = self._reviewed_snapshot(session, application, reviewed_materials)
+            browser_upload_hashes = self._browser_upload_hashes(session, application)
+            rendered_cv = next(
+                artifact
+                for _document, artifact in reviewed_materials
+                if artifact.kind == "rendered_cv"
+            )
+            if browser_upload_hashes != (rendered_cv.sha256,):
+                raise ApplicationConflictError(
+                    "browser upload does not match the reviewed rendered CV"
+                )
+            package_sha256 = self._submission_package_sha256(
+                application,
+                reviewed_materials,
+                snapshot_record,
+                browser_upload_hashes,
+            )
+            if record.package_sha256 is None or not hmac.compare_digest(
+                record.package_sha256, package_sha256
+            ):
+                raise ApplicationConflictError(
+                    "submission authorization does not match the current package"
+                )
             claimed = session.execute(
                 update(SubmissionAuthorizationRecord)
                 .where(
@@ -708,8 +911,6 @@ class ApplicationService:
             ).scalar_one_or_none()
             if claimed is None:
                 raise ApplicationConflictError("submission authorization was already consumed")
-            if application.state is not ApplicationState.READY_TO_SUBMIT:
-                raise ApplicationConflictError("application is no longer ready to submit")
             settings = self._settings_record(session, candidate_id)
             if settings.emergency_stopped:
                 raise ApplicationConflictError("emergency stop is active")
@@ -1019,9 +1220,13 @@ class ApplicationService:
             ).all()
             by_kind = {item.kind.value: item for item in documents}
             cv = by_kind.get(DocumentKind.CV.value)
-            if cv is None:
+            if cv is None or not self._source_document_valid(cv):
                 raise ApplicationConflictError("exact CV is missing for interview preparation")
             cover_letter = by_kind.get(DocumentKind.COVER_LETTER.value)
+            if cover_letter is not None and not self._source_document_valid(cover_letter):
+                raise ApplicationConflictError(
+                    "exact cover letter is missing for interview preparation"
+                )
             evidence = tuple(str(item) for item in score.rationale.get("evidence", []))
             package = self._correspondence.prepare_interview(
                 ArchivedApplicationArtifacts(
@@ -1500,18 +1705,20 @@ class ApplicationService:
         filename: str,
         content: bytes,
     ) -> Path:
-        directory = (
-            self._runtime_root
-            / "candidates"
-            / candidate_id
-            / "application_archive"
-            / str(application_id)
-            / kind
-        ).resolve()
-        if not directory.is_relative_to(self._runtime_root):
-            raise ApplicationConflictError("artifact path escaped runtime root")
+        if not kind or not kind.replace("_", "").isalnum() or Path(filename).name != filename:
+            raise ApplicationConflictError("artifact path contains an unsafe segment")
+        application_root = self._candidate_application_root(
+            candidate_id, application_id, create=True
+        )
+        directory = application_root / kind
+        if directory.is_symlink():
+            raise ApplicationConflictError("artifact directory contains a symlink")
         directory.mkdir(parents=True, exist_ok=True)
+        if directory.resolve() != directory:
+            raise ApplicationConflictError("artifact directory is unsafe")
         path = directory / filename
+        if path.is_symlink():
+            raise ApplicationConflictError("artifact path contains a symlink")
         try:
             with path.open("xb") as output:
                 output.write(content)
@@ -1522,6 +1729,320 @@ class ApplicationService:
                 ) from None
         return path
 
+    def _candidate_application_root(
+        self, candidate_id: str, application_id: UUID, *, create: bool
+    ) -> Path:
+        if not candidate_id or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in candidate_id
+        ):
+            raise ApplicationConflictError("candidate artifact scope is invalid")
+        candidates_root = self._runtime_root / "candidates"
+        candidate_root = candidates_root / candidate_id
+        archive_root = candidate_root / "application_archive"
+        application_root = archive_root / str(application_id)
+        if create:
+            self._runtime_root.mkdir(parents=True, exist_ok=True)
+        if not self._runtime_root.is_dir():
+            raise ApplicationConflictError("runtime artifact root is unavailable")
+        components = (
+            (candidates_root, self._runtime_root),
+            (candidate_root, candidates_root),
+            (archive_root, candidate_root),
+            (application_root, archive_root),
+        )
+        for path, expected_parent in components:
+            if path.is_symlink():
+                raise ApplicationConflictError("candidate artifact path contains a symlink")
+            if create and not path.exists():
+                path.mkdir()
+            if path.exists() and (
+                not path.is_dir() or path.resolve() != path or path.parent != expected_parent
+            ):
+                raise ApplicationConflictError("candidate artifact path is unsafe")
+        return application_root
+
+    def _render_artifact_valid(
+        self,
+        artifact: ApplicationArtifact,
+        *,
+        document: ApplicationDocument,
+        snapshot: CandidateSnapshotRecord,
+    ) -> bool:
+        if (
+            artifact.content_type != "application/pdf"
+            or artifact.artifact_metadata.get("valid") is not True
+            or artifact.artifact_metadata.get("pdf_sha256") != artifact.sha256
+            or artifact.artifact_metadata.get("source_sha256") != document.sha256
+            or artifact.artifact_metadata.get("document_version") != document.version
+            or artifact.artifact_metadata.get("candidate_snapshot_version")
+            != snapshot.profile_version
+            or artifact.artifact_metadata.get("candidate_snapshot_sha256") != snapshot.sha256
+            or artifact.candidate_id != document.candidate_id
+            or artifact.application_id != document.application_id
+            or artifact.version != document.version
+            or artifact.kind != f"rendered_{document.kind.value}"
+        ):
+            return False
+        try:
+            application_root = self._candidate_application_root(
+                artifact.candidate_id, artifact.application_id, create=False
+            )
+        except ApplicationConflictError:
+            return False
+        path = Path(artifact.storage_uri).absolute()
+        expected = application_root / artifact.kind / f"v{artifact.version}.pdf"
+        if path != expected or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+            return False
+        return hashlib.sha256(path.read_bytes()).hexdigest() == artifact.sha256
+
+    def _source_document_valid(self, document: ApplicationDocument) -> bool:
+        try:
+            application_root = self._candidate_application_root(
+                document.candidate_id, document.application_id, create=False
+            )
+        except ApplicationConflictError:
+            return False
+        path = Path(document.storage_uri).absolute()
+        expected = application_root / document.kind.value / f"v{document.version}.txt"
+        if path != expected or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+            return False
+        return hashlib.sha256(path.read_bytes()).hexdigest() == document.sha256
+
+    def _load_candidate_snapshot(
+        self, application: Application, record: CandidateSnapshotRecord
+    ) -> CandidateSnapshot:
+        try:
+            application_root = self._candidate_application_root(
+                application.candidate_id, application.id, create=False
+            )
+        except ApplicationConflictError as exc:
+            raise ApplicationConflictError(
+                "candidate snapshot storage reference is invalid"
+            ) from exc
+        path = Path(record.storage_uri).absolute()
+        expected = application_root / "candidate_snapshot" / f"{record.sha256}.json"
+        if path != expected or path.is_symlink() or path.parent.is_symlink():
+            raise ApplicationConflictError("candidate snapshot storage reference is invalid")
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ApplicationConflictError(
+                "candidate snapshot storage reference is invalid"
+            ) from exc
+        if resolved != expected or not resolved.is_file():
+            raise ApplicationConflictError("candidate snapshot storage reference is invalid")
+        try:
+            snapshot = CandidateSnapshot.model_validate_json(resolved.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ApplicationConflictError("candidate snapshot validation failed") from exc
+        if (
+            snapshot.candidate_id != application.candidate_id
+            or snapshot.profile_version != record.profile_version
+            or snapshot.config_sha256 != record.sha256
+            or hashlib.sha256(snapshot.config_json.encode("utf-8")).hexdigest() != record.sha256
+        ):
+            raise ApplicationConflictError("candidate snapshot identity mismatch")
+        return snapshot
+
+    def _reviewed_materials(
+        self, session: Session, application: Application, review: AgentReview
+    ) -> tuple[tuple[ApplicationDocument, ApplicationArtifact], ...]:
+        try:
+            material_review = MaterialReview.model_validate(review.report)
+        except ValueError as exc:
+            raise ApplicationConflictError("material review record is invalid") from exc
+        if not review.semantic_passed or not material_review.semantic_review_passed:
+            raise ApplicationConflictError("materials did not pass independent review")
+        if not material_review.render_reports:
+            raise ApplicationConflictError("material review has no rendered document identity")
+        reviewed: list[tuple[ApplicationDocument, ApplicationArtifact]] = []
+        seen_kinds: set[DocumentKind] = set()
+        snapshot_ids: set[UUID] = set()
+        for report in material_review.render_reports:
+            if not report.valid or report.pdf_sha256 is None or report.document_kind in seen_kinds:
+                raise ApplicationConflictError("material review contains invalid render identity")
+            seen_kinds.add(report.document_kind)
+            document = session.scalar(
+                select(ApplicationDocument).where(
+                    ApplicationDocument.candidate_id == application.candidate_id,
+                    ApplicationDocument.application_id == application.id,
+                    ApplicationDocument.kind == report.document_kind,
+                    ApplicationDocument.version == report.document_version,
+                )
+            )
+            artifact = session.scalar(
+                select(ApplicationArtifact).where(
+                    ApplicationArtifact.candidate_id == application.candidate_id,
+                    ApplicationArtifact.application_id == application.id,
+                    ApplicationArtifact.kind == f"rendered_{report.document_kind.value}",
+                    ApplicationArtifact.version == report.document_version,
+                    ApplicationArtifact.sha256 == report.pdf_sha256,
+                )
+            )
+            if (
+                document is None
+                or artifact is None
+                or not document.validated
+                or not self._source_document_valid(document)
+            ):
+                raise ApplicationConflictError(
+                    f"reviewed {report.document_kind.value.upper()} source is missing or corrupted"
+                )
+            snapshot_id = artifact.artifact_metadata.get("candidate_snapshot_id")
+            try:
+                snapshot_uuid = UUID(str(snapshot_id))
+            except ValueError as exc:
+                raise ApplicationConflictError(
+                    "rendered document snapshot identity is invalid"
+                ) from exc
+            snapshot = session.get(CandidateSnapshotRecord, snapshot_uuid)
+            snapshot_ids.add(snapshot_uuid)
+            if (
+                snapshot is None
+                or snapshot.candidate_id != application.candidate_id
+                or snapshot.application_id != application.id
+                or artifact.artifact_metadata.get("template_id") != report.template_id
+                or artifact.artifact_metadata.get("template_version") != report.template_version
+                or artifact.artifact_metadata.get("source_sha256") != report.source_sha256
+            ):
+                raise ApplicationConflictError("reviewed rendered document identity mismatch")
+            if not self._render_artifact_valid(artifact, document=document, snapshot=snapshot):
+                raise ApplicationConflictError(
+                    f"rendered {report.document_kind.value.upper()} is missing or corrupted"
+                )
+            reviewed.append((document, artifact))
+        if DocumentKind.CV not in seen_kinds:
+            raise ApplicationConflictError("reviewed rendered CV is missing")
+        if len(snapshot_ids) != 1:
+            raise ApplicationConflictError("reviewed documents use different candidate snapshots")
+        return tuple(reviewed)
+
+    @staticmethod
+    def _browser_upload_hashes(session: Session, application: Application) -> tuple[str, ...]:
+        event = session.scalar(
+            select(ApplicationEvent)
+            .where(
+                ApplicationEvent.candidate_id == application.candidate_id,
+                ApplicationEvent.application_id == application.id,
+                ApplicationEvent.event_type == "FINAL_VALIDATION_STARTED",
+            )
+            .order_by(ApplicationEvent.occurred_at.desc())
+            .limit(1)
+        )
+        if event is None:
+            return ()
+        final_page = event.payload.get("final_page")
+        values = final_page.get("upload_hashes") if isinstance(final_page, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+            for value in values
+        ):
+            return ()
+        return tuple(values)
+
+    @staticmethod
+    def _reviewed_snapshot(
+        session: Session,
+        application: Application,
+        materials: tuple[tuple[ApplicationDocument, ApplicationArtifact], ...],
+    ) -> CandidateSnapshotRecord:
+        snapshot_id = UUID(str(materials[0][1].artifact_metadata["candidate_snapshot_id"]))
+        snapshot = session.get(CandidateSnapshotRecord, snapshot_id)
+        if (
+            snapshot is None
+            or snapshot.candidate_id != application.candidate_id
+            or snapshot.application_id != application.id
+        ):
+            raise ApplicationConflictError("reviewed candidate snapshot is missing")
+        return snapshot
+
+    def _archive_matches_package(
+        self,
+        application: Application,
+        materials: tuple[tuple[ApplicationDocument, ApplicationArtifact], ...],
+        snapshot: CandidateSnapshotRecord,
+    ) -> bool:
+        if application.archive_uri is None:
+            return False
+        path = self._safe_archive_path(application.archive_uri)
+        if path is None or not self._archives.verify(path):
+            return False
+        try:
+            manifest = ArchiveManifest.model_validate_json(
+                (path / "manifest.json").read_text(encoding="utf-8")
+            )
+            archived_snapshot = CandidateSnapshot.model_validate_json(
+                (path / "candidate_snapshot" / "profile.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return False
+        artifacts = {artifact.kind: artifact for _document, artifact in materials}
+        expected_cover = artifacts.get("rendered_cover_letter")
+        return (
+            manifest.candidate_id == application.candidate_id
+            and manifest.application_id == application.id
+            and manifest.status == "ready_to_submit"
+            and archived_snapshot.snapshot_id == snapshot.id
+            and archived_snapshot.config_sha256 == snapshot.sha256
+            and manifest.cv.get("sha256") == artifacts["rendered_cv"].sha256
+            and manifest.cover_letter.get("sha256")
+            == (expected_cover.sha256 if expected_cover is not None else None)
+        )
+
+    def _submission_package_sha256(
+        self,
+        application: Application,
+        materials: tuple[tuple[ApplicationDocument, ApplicationArtifact], ...],
+        snapshot: CandidateSnapshotRecord,
+        browser_upload_hashes: tuple[str, ...],
+    ) -> str:
+        if not self._archive_matches_package(application, materials, snapshot):
+            raise ApplicationConflictError("pre-submit archive does not match reviewed package")
+        assert application.archive_uri is not None
+        archive_path = self._safe_archive_path(application.archive_uri)
+        if archive_path is None:
+            raise ApplicationConflictError("pre-submit archive path is unsafe")
+        manifest_path = archive_path / "manifest.json"
+        package = {
+            "candidate_id": application.candidate_id,
+            "application_id": str(application.id),
+            "workflow_state": application.state.value,
+            "candidate_snapshot_id": str(snapshot.id),
+            "candidate_snapshot_sha256": snapshot.sha256,
+            "documents": [
+                {
+                    "kind": artifact.kind,
+                    "version": artifact.version,
+                    "source_sha256": document.sha256,
+                    "pdf_sha256": artifact.sha256,
+                }
+                for document, artifact in sorted(materials, key=lambda item: item[1].kind)
+            ],
+            "browser_upload_hashes": sorted(browser_upload_hashes),
+            "archive_manifest_sha256": sha256_bytes(manifest_path.read_bytes()),
+        }
+        return sha256_bytes(canonical_json_bytes(package))
+
+    def _safe_archive_path(self, archive_uri: str) -> Path | None:
+        archive_root = (self._runtime_root / "application_archive").resolve()
+        raw_path = Path(archive_uri).absolute()
+        if raw_path.is_symlink():
+            return None
+        try:
+            path = raw_path.resolve(strict=True)
+        except OSError:
+            return None
+        if not path.is_relative_to(archive_root):
+            return None
+        for parent in (raw_path, *raw_path.parents):
+            if parent == archive_root:
+                break
+            if parent.is_symlink():
+                return None
+        return path
+
     def _create_archive(
         self,
         session: Session,
@@ -1529,7 +2050,6 @@ class ApplicationService:
         application: Application,
         job: GlobalJob | None,
         score: CandidateJobScore | None,
-        documents: Sequence[ApplicationDocument],
         answers: Sequence[ApplicationAnswer],
     ) -> Path:
         events = session.scalars(
@@ -1544,12 +2064,32 @@ class ApplicationService:
                 SecurityEvent.application_id == application.id,
             )
         ).all()
+        review = session.scalar(
+            select(AgentReview)
+            .where(
+                AgentReview.candidate_id == application.candidate_id,
+                AgentReview.application_id == application.id,
+            )
+            .order_by(AgentReview.created_at.desc())
+            .limit(1)
+        )
+        if review is None:
+            raise ApplicationConflictError("material review is missing")
+        reviewed_materials = self._reviewed_materials(session, application, review)
+        reviewed_documents = tuple(item[0] for item in reviewed_materials)
+        rendered_artifacts = tuple(item[1] for item in reviewed_materials)
+        snapshot_id = UUID(str(rendered_artifacts[0].artifact_metadata["candidate_snapshot_id"]))
+        snapshot_record = session.get(CandidateSnapshotRecord, snapshot_id)
+        if snapshot_record is None:
+            raise ApplicationConflictError("candidate snapshot is missing")
+        candidate_snapshot = self._load_candidate_snapshot(application, snapshot_record)
+
         archive = self._archives.create(
             candidate_id=application.candidate_id,
             application_id=application.id,
             recover_existing=True,
             data=ApplicationArchiveData(
-                candidate_snapshot=config.model_dump(mode="json"),
+                candidate_snapshot=candidate_snapshot.model_dump(mode="json"),
                 job_snapshot={
                     "id": str(job.id) if job else None,
                     "external_id": job.external_id if job else None,
@@ -1567,12 +2107,15 @@ class ApplicationService:
                 },
                 generated_document_references=[
                     {
-                        "kind": item.kind.value,
+                        "kind": item.kind.removeprefix("rendered_"),
                         "version": item.version,
                         "sha256": item.sha256,
                         "storage_uri": item.storage_uri,
+                        "content_type": item.content_type,
+                        "template_id": item.artifact_metadata.get("template_id"),
+                        "template_version": item.artifact_metadata.get("template_version"),
                     }
-                    for item in documents
+                    for item in rendered_artifacts
                 ],
                 answers=[
                     {
@@ -1583,7 +2126,10 @@ class ApplicationService:
                     }
                     for item in answers
                 ],
-                validation_report={"documents_valid": all(item.validated for item in documents)},
+                validation_report={
+                    "documents_valid": all(item.validated for item in reviewed_documents),
+                    "render_reports": [item.artifact_metadata for item in rendered_artifacts],
+                },
                 event_log=[
                     {
                         "event_type": item.event_type,
@@ -1650,20 +2196,6 @@ class ApplicationService:
                         "relative_path": relative_path,
                         "submitted_exact": kind.startswith("submitted_"),
                     },
-                )
-            )
-        for document in documents:
-            session.add(
-                ApplicationArtifact(
-                    candidate_id=application.candidate_id,
-                    application_id=application.id,
-                    kind=document.kind.value,
-                    version=document.version,
-                    storage_uri=document.storage_uri,
-                    sha256=document.sha256,
-                    content_type="text/plain",
-                    immutable=True,
-                    artifact_metadata={"submitted_exact": True},
                 )
             )
         return archive
@@ -1800,6 +2332,8 @@ class ApplicationService:
                 )
             ).all()
         }
+        if any(not self._source_document_valid(item) for item in documents):
+            raise ApplicationConflictError("application source document is missing or corrupted")
         return ApplicationDetail(
             **summary.model_dump(),
             source_url=job.url if job else "",

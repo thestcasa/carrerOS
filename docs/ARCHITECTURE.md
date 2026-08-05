@@ -90,6 +90,12 @@ internal or unapproved text. Readiness checks minimum approved evidence, identit
 strategy/preferences/legal/document approvals, availability, legal verification, sensitive answers,
 and unverified approved claims.
 
+Generated text and the uploadable file are separate, linked records. A versioned, allowlisted,
+network-free PDF renderer runs before independent approval and rejects unsupported glyphs, unsafe
+URLs, extraction loss, unbreakable layout, and page-limit violations. Its report records source,
+PDF, template, candidate-snapshot, page, extraction, and layout identities in candidate-scoped
+artifact metadata. Only a hash-verified rendered PDF can enter the synthetic browser boundary.
+
 Candidate snapshots are serialized deterministically, include the profile version and source-file hashes, and carry a SHA-256 of their canonical content for audit archives. Only fictional example data is committed.
 
 The candidate API lists profiles, returns structured configuration, validates readiness,
@@ -145,6 +151,11 @@ the candidate snapshot, raw/extracted/normalized job evidence, scoring, exact PD
 synthetic submitted documents, final answers, pre-submit/final-page captures, receipt, and JSONL
 audit ledgers. The manifest hashes every file. Creation is exclusive; recursive verification
 detects additions, deletions, or modifications.
+The builder copies the already validated and browser-allowlisted PDF bytes rather than rendering
+again, so reviewed, uploaded, archived, and downloadable document hashes are identical.
+Submission authorization persists a digest over those exact document versions, the candidate
+snapshot, the browser-observed upload hash, and the verified archive manifest. Submission rebuilds
+that digest transactionally and fails closed before consuming a stale or mutated authorization.
 
 ## Deployment foundation
 
@@ -188,9 +199,11 @@ PDF input is rejected until a resource-isolated parser worker is available.
 ## Materials and synthetic browser dry runs
 
 The materials boundary consumes explicit approved facts and exact approved-answer keys. Every
-generated claim carries evidence IDs; hashes, target-company validation, and independent review
-fail closed before an immutable draft version can progress. Draft storage uses candidate and
-application path segments, exclusive version creation, and content-hash verification.
+generated claim carries evidence IDs; hashes, target-company validation, structural PDF validation,
+and independent review fail closed before a draft version can progress. Source text remains
+versioned for provenance while the rendered PDF and its report are separate downloadable artifacts.
+Draft storage uses candidate and application path segments, exclusive version creation, and
+content-hash verification.
 
 The browser dry-run boundary accepts a finalized structured package, maps only known synthetic
 fields, validates uploads against candidate-owned paths and allowlisted SHA-256 hashes, re-reads

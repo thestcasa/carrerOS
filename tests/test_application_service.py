@@ -18,10 +18,20 @@ from app.applications import (
     SyntheticSubmissionRequest,
 )
 from app.archive import ApplicationArchiveBuilder
-from app.candidates.service import CandidateCreateRequest, CandidateService
+from app.candidates.service import (
+    CandidateCreateRequest,
+    CandidateSectionUpdate,
+    CandidateService,
+)
 from app.db import build_session_factory
-from app.domain.enums import ApplicationState
-from app.domain.models import AdministrativeAuditRecord, Base
+from app.domain.enums import ApplicationState, DocumentKind
+from app.domain.models import (
+    AdministrativeAuditRecord,
+    ApplicationArtifact,
+    ApplicationDocument,
+    ApplicationEvent,
+    Base,
+)
 from app.job_service import DiscoveryRequest, JobService
 
 
@@ -100,6 +110,14 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     assert {document.kind for document in generated.documents} == {"cv", "cover_letter"}
     assert all(document.evidence_ids for document in generated.documents)
     assert generated.review is not None and generated.review.semantic_passed
+    draft_artifacts = applications.list_artifacts("example_candidate", generated.application_id)
+    rendered_cv = next(item for item in draft_artifacts if item.kind == "rendered_cv")
+    rendered_cv_path = applications.artifact_path(
+        "example_candidate", generated.application_id, rendered_cv.artifact_id
+    )
+    rendered_cv_bytes = rendered_cv_path.read_bytes()
+    assert rendered_cv.metadata["valid"] is True
+    assert rendered_cv.metadata["extraction_matches"] is True
 
     applications.approve_materials(
         "example_candidate", generated.application_id, "approve-materials-501"
@@ -112,6 +130,14 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         "dry-run-501",
     )
     assert ready.state is ApplicationState.READY_TO_SUBMIT
+    dry_run_event = next(
+        event for event in ready.events if event.event_type == "FINAL_VALIDATION_STARTED"
+    )
+    final_page = dry_run_event.payload["final_page"]
+    assert isinstance(final_page, dict)
+    upload_hashes = final_page["upload_hashes"]
+    assert isinstance(upload_hashes, list)
+    assert rendered_cv.sha256 in upload_hashes
 
     authorization = applications.authorize(
         "example_candidate", generated.application_id, "authorize-application-501"
@@ -130,13 +156,12 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         "application_audit",
     }.issubset(artifact_kinds)
     submitted_cv = next(artifact for artifact in artifacts if artifact.kind == "submitted_cv")
-    assert (
-        applications.artifact_path(
-            "example_candidate", generated.application_id, submitted_cv.artifact_id
-        )
-        .read_bytes()
-        .startswith(b"%PDF-1.4")
-    )
+    submitted_cv_bytes = applications.artifact_path(
+        "example_candidate", generated.application_id, submitted_cv.artifact_id
+    ).read_bytes()
+    assert submitted_cv_bytes.startswith(b"%PDF-1.4")
+    assert submitted_cv_bytes == rendered_cv_bytes
+    assert submitted_cv.sha256 == rendered_cv.sha256
     result = applications.submit_synthetic(
         "example_candidate",
         generated.application_id,
@@ -155,14 +180,23 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     artifacts = applications.list_artifacts("example_candidate", generated.application_id)
     assert {
         "archive_manifest",
-        "cv",
-        "cover_letter",
+        "rendered_cv",
+        "rendered_cover_letter",
+        "render_report_cv",
+        "render_report_cover_letter",
         "submitted_cv",
         "submitted_cover_letter",
         "submitted_answers",
         "submission_receipt",
     }.issubset({artifact.kind for artifact in artifacts})
-    assert all(artifact.immutable for artifact in artifacts)
+    draft_kinds = {
+        "rendered_cv",
+        "rendered_cover_letter",
+        "render_report_cv",
+        "render_report_cover_letter",
+    }
+    assert all(not artifact.immutable for artifact in artifacts if artifact.kind in draft_kinds)
+    assert all(artifact.immutable for artifact in artifacts if artifact.kind not in draft_kinds)
     final_receipt = next(
         artifact
         for artifact in artifacts
@@ -229,6 +263,265 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
             ),
             "submit-synthetic-duplicate",
         )
+
+
+def test_render_failure_is_persisted_and_cannot_be_approved(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    biography_path = copied_candidates_root / "example_candidate" / "biography.json"
+    biography = json.loads(biography_path.read_text(encoding="utf-8"))
+    biography["summary"] += " 🧪"
+    biography_path.write_text(json.dumps(biography, ensure_ascii=False), encoding="utf-8")
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+
+    generated = applications.generate_materials(
+        "example_candidate", _job(jobs, 502), "generate-materials-502"
+    )
+
+    assert generated.state is ApplicationState.REVIEW_FAILED
+    assert generated.review is not None and not generated.review.semantic_passed
+    artifacts = applications.list_artifacts("example_candidate", generated.application_id)
+    assert {item.kind for item in artifacts} == {
+        "render_report_cv",
+        "render_report_cover_letter",
+    }
+    assert all(item.metadata["valid"] is False for item in artifacts)
+    with pytest.raises(ApplicationConflictError, match="did not pass"):
+        applications.approve_materials(
+            "example_candidate", generated.application_id, "approve-materials-502"
+        )
+
+
+def test_tampered_rendered_cv_is_rejected_before_browser_upload(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    generated = applications.generate_materials(
+        "example_candidate", _job(jobs, 503), "generate-materials-503"
+    )
+    applications.approve_materials(
+        "example_candidate", generated.application_id, "approve-materials-503"
+    )
+    applications.start("example_candidate", generated.application_id, "start-503")
+    rendered_cv = next(
+        item
+        for item in applications.list_artifacts("example_candidate", generated.application_id)
+        if item.kind == "rendered_cv"
+    )
+    path = applications.artifact_path(
+        "example_candidate", generated.application_id, rendered_cv.artifact_id
+    )
+    path.write_bytes(path.read_bytes() + b"tampered")
+
+    with pytest.raises(ApplicationConflictError, match="rendered CV is missing or corrupted"):
+        applications.dry_run(
+            "example_candidate", generated.application_id, DryRunCommand(), "dry-run-503"
+        )
+
+
+def test_materials_can_be_regenerated_with_a_new_exact_snapshot_and_version(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    biography_path = copied_candidates_root / "example_candidate" / "biography.json"
+    biography = json.loads(biography_path.read_text(encoding="utf-8"))
+    biography["summary"] += " 🧪"
+    biography_path.write_text(json.dumps(biography, ensure_ascii=False), encoding="utf-8")
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    job_id = _job(jobs, 505)
+
+    failed = applications.generate_materials(
+        "example_candidate", job_id, "generate-materials-505-invalid"
+    )
+    assert failed.state is ApplicationState.REVIEW_FAILED
+
+    biography["summary"] = biography["summary"].removesuffix(" 🧪")
+    CandidateService(copied_candidates_root).update_section(
+        "example_candidate",
+        CandidateSectionUpdate(section="biography", data=biography),
+    )
+    regenerated = applications.generate_materials(
+        "example_candidate", job_id, "generate-materials-505-valid"
+    )
+
+    assert regenerated.state is ApplicationState.REVIEW_PENDING
+    assert {document.version for document in regenerated.documents} == {1, 2}
+    latest_documents = {
+        document.kind: document for document in regenerated.documents if document.version == 2
+    }
+    assert set(latest_documents) == {"cv", "cover_letter"}
+    artifacts = applications.list_artifacts("example_candidate", regenerated.application_id)
+    rendered_v2 = {
+        item.kind: item
+        for item in artifacts
+        if item.kind.startswith("rendered_") and item.version == 2
+    }
+    assert set(rendered_v2) == {"rendered_cv", "rendered_cover_letter"}
+    assert all(item.metadata["document_version"] == 2 for item in rendered_v2.values())
+    assert len({item.metadata["candidate_snapshot_id"] for item in rendered_v2.values()}) == 1
+
+    applications.approve_materials(
+        "example_candidate", regenerated.application_id, "approve-materials-505"
+    )
+    applications.start("example_candidate", regenerated.application_id, "start-505")
+    applications.dry_run(
+        "example_candidate", regenerated.application_id, DryRunCommand(), "dry-run-505"
+    )
+    applications.authorize("example_candidate", regenerated.application_id, "authorize-505")
+    submitted_cv = next(
+        item
+        for item in applications.list_artifacts("example_candidate", regenerated.application_id)
+        if item.kind == "submitted_cv"
+    )
+    assert submitted_cv.sha256 == rendered_v2["rendered_cv"].sha256
+
+
+def test_approval_revalidates_the_exact_reviewed_pdf(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    generated = applications.generate_materials(
+        "example_candidate", _job(jobs, 506), "generate-materials-506"
+    )
+    rendered_cv = next(
+        item
+        for item in applications.list_artifacts("example_candidate", generated.application_id)
+        if item.kind == "rendered_cv"
+    )
+    path = applications.artifact_path(
+        "example_candidate", generated.application_id, rendered_cv.artifact_id
+    )
+    path.write_bytes(path.read_bytes() + b"tampered")
+
+    with pytest.raises(ApplicationConflictError, match="rendered CV is missing or corrupted"):
+        applications.approve_materials(
+            "example_candidate", generated.application_id, "approve-materials-506"
+        )
+
+
+def test_authorization_and_submission_reject_package_identity_drift(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    generated = applications.generate_materials(
+        "example_candidate", _job(jobs, 507), "generate-materials-507"
+    )
+    applications.approve_materials(
+        "example_candidate", generated.application_id, "approve-materials-507"
+    )
+    applications.start("example_candidate", generated.application_id, "start-507")
+    applications.dry_run(
+        "example_candidate", generated.application_id, DryRunCommand(), "dry-run-507"
+    )
+
+    with sessions.begin() as session:
+        event_record = session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.application_id == generated.application_id,
+                ApplicationEvent.event_type == "FINAL_VALIDATION_STARTED",
+            )
+        )
+        assert event_record is not None
+        payload = dict(event_record.payload)
+        final_page = dict(payload["final_page"])
+        final_page["upload_hashes"] = ["0" * 64]
+        payload["final_page"] = final_page
+        event_record.payload = payload
+    with pytest.raises(ApplicationConflictError, match="submission gate denied"):
+        applications.authorize(
+            "example_candidate", generated.application_id, "authorize-507-invalid"
+        )
+
+    rendered_cv = next(
+        item
+        for item in applications.list_artifacts("example_candidate", generated.application_id)
+        if item.kind == "rendered_cv"
+    )
+    with sessions.begin() as session:
+        event_record = session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.application_id == generated.application_id,
+                ApplicationEvent.event_type == "FINAL_VALIDATION_STARTED",
+            )
+        )
+        assert event_record is not None
+        payload = dict(event_record.payload)
+        final_page = dict(payload["final_page"])
+        final_page["upload_hashes"] = [rendered_cv.sha256]
+        payload["final_page"] = final_page
+        event_record.payload = payload
+    authorization = applications.authorize(
+        "example_candidate", generated.application_id, "authorize-507-valid"
+    )
+    with sessions() as session:
+        artifact = session.scalar(
+            select(ApplicationArtifact).where(
+                ApplicationArtifact.application_id == generated.application_id,
+                ApplicationArtifact.kind == "rendered_cv",
+            )
+        )
+        assert artifact is not None
+        rendered_path = Path(artifact.storage_uri)
+        document = session.scalar(
+            select(ApplicationDocument).where(
+                ApplicationDocument.application_id == generated.application_id,
+                ApplicationDocument.kind == DocumentKind.CV,
+            )
+        )
+        assert document is not None
+        source_path = Path(document.storage_uri)
+    source_bytes = source_path.read_bytes()
+    source_path.write_bytes(source_bytes + b"tampered")
+
+    with pytest.raises(ApplicationConflictError, match="reviewed CV source"):
+        applications.submit_synthetic(
+            "example_candidate",
+            generated.application_id,
+            SyntheticSubmissionRequest(
+                authorization_id=authorization.authorization_id,
+                synthetic_fixture_acknowledged=True,
+            ),
+            "submit-507-source-tamper",
+        )
+
+    source_path.write_bytes(source_bytes)
+    rendered_path.write_bytes(rendered_path.read_bytes() + b"tampered")
+
+    with pytest.raises(ApplicationConflictError, match="rendered CV is missing or corrupted"):
+        applications.submit_synthetic(
+            "example_candidate",
+            generated.application_id,
+            SyntheticSubmissionRequest(
+                authorization_id=authorization.authorization_id,
+                synthetic_fixture_acknowledged=True,
+            ),
+            "submit-507",
+        )
+
+
+def test_candidate_artifact_symlink_cannot_cross_candidate_scope(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, _sessions = _services(copied_candidates_root, runtime_root)
+    job_id = _job(jobs, 508)
+    beta_root = runtime_root / "candidates" / "candidate_beta"
+    beta_root.mkdir(parents=True)
+    sentinel = beta_root / "sentinel.txt"
+    sentinel.write_text("candidate beta", encoding="utf-8")
+    (runtime_root / "candidates" / "example_candidate").symlink_to(
+        beta_root, target_is_directory=True
+    )
+
+    with pytest.raises(ApplicationConflictError, match="contains a symlink"):
+        applications.generate_materials("example_candidate", job_id, "generate-materials-508")
+    assert sentinel.read_text(encoding="utf-8") == "candidate beta"
+    assert tuple(beta_root.iterdir()) == (sentinel,)
 
 
 def test_captcha_creates_visible_resumable_human_action(

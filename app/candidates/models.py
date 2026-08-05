@@ -365,6 +365,8 @@ class ApprovedAnswers(StrictModel):
 
 class CVRules(StrictModel):
     max_pages: Annotated[int, Field(ge=1, le=5)]
+    template_id: Literal["technical_single_page", "technical_two_page"] = "technical_two_page"
+    template_version: Literal["1.0"] = "1.0"
     allowed_sections: tuple[NonEmptyStr, ...]
     forbidden_claims: tuple[NonEmptyStr, ...]
     require_evidence_ids: bool

@@ -5,6 +5,7 @@ from app.materials.contracts import (
     GenerationRequest,
     GenerationResult,
     MaterialReview,
+    RenderValidationReport,
     ValidationIssue,
 )
 from app.materials.validation import MaterialValidator
@@ -14,8 +15,14 @@ class IndependentMaterialReviewer:
     def __init__(self, validator: MaterialValidator | None = None) -> None:
         self._validator = validator or MaterialValidator()
 
-    def review(self, request: GenerationRequest, result: GenerationResult) -> MaterialReview:
+    def review(
+        self,
+        request: GenerationRequest,
+        result: GenerationResult,
+        render_reports: tuple[RenderValidationReport, ...] = (),
+    ) -> MaterialReview:
         issues = list(self._validator.validate(result).issues)
+        issues.extend(issue for report in render_reports for issue in report.issues)
         approved = {fact.fact_id: fact.text for fact in request.approved_facts}
         for document in result.documents:
             for claim in document.claims:
@@ -42,7 +49,10 @@ class IndependentMaterialReviewer:
                     message="At least one answer lacks a unique approved source.",
                 )
             )
-        documents_supported = not any(
+        renders_valid = len(render_reports) == len(result.documents) and all(
+            report.valid for report in render_reports
+        )
+        documents_supported = renders_valid and not any(
             issue.code in {"unsupported_claim", "wrong_company", "content_hash_mismatch"}
             for issue in issues
         )
@@ -57,4 +67,5 @@ class IndependentMaterialReviewer:
             documents_supported=documents_supported,
             answers_supported=answers_supported,
             issues=tuple(issues),
+            render_reports=render_reports,
         )

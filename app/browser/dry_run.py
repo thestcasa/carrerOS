@@ -15,7 +15,7 @@ from app.browser.contracts import (
     MappedField,
     UploadArtifact,
 )
-from app.browser.paths import CandidateSessionPaths
+from app.browser.paths import CandidatePathError, CandidateSessionPaths
 
 
 class BrowserDryRunError(ValueError):
@@ -59,7 +59,12 @@ class SyntheticBrowserDryRunner:
         self._paths = CandidateSessionPaths(runtime_root)
 
     def run(self, request: DryRunRequest) -> DryRunResult:
-        session_directory = self._paths.session_directory(request.candidate_id, request.session_id)
+        try:
+            session_directory = self._paths.session_directory(
+                request.candidate_id, request.session_id
+            )
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
         mapped: list[MappedField] = []
         human_actions: list[HumanActionResult] = []
         upload_hashes: list[str] = []
@@ -119,6 +124,16 @@ class SyntheticBrowserDryRunner:
         session_directory.mkdir(parents=True, exist_ok=True)
         screenshot_path = session_directory / "final-page.png"
         snapshot_path = session_directory / "final-page.json"
+        try:
+            validated_session = self._paths.session_directory(
+                request.candidate_id, request.session_id
+            )
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
+        if validated_session != session_directory or any(
+            path.is_symlink() for path in (screenshot_path, snapshot_path)
+        ):
+            raise BrowserDryRunError("browser output path contains a symlink")
         screenshot_path.write_bytes(_PNG_1PX)
         snapshot_path.write_text(
             json.dumps(final_page.model_dump(mode="json"), sort_keys=True) + "\n",
@@ -138,8 +153,18 @@ class SyntheticBrowserDryRunner:
         )
 
     def _validate_upload(self, request: DryRunRequest, artifact: UploadArtifact) -> None:
-        artifact_path = artifact.path.resolve()
-        allowed_root = self._paths.allowed_artifact_root(request.candidate_id).resolve()
+        try:
+            allowed_root = self._paths.allowed_artifact_root(request.candidate_id).resolve()
+        except CandidatePathError as exc:
+            raise BrowserDryRunError(str(exc)) from exc
+        raw_path = artifact.path.absolute()
+        if raw_path.is_symlink() or any(
+            parent.is_symlink()
+            for parent in raw_path.parents
+            if parent != allowed_root and parent.is_relative_to(allowed_root)
+        ):
+            raise BrowserDryRunError("upload path contains a symlink")
+        artifact_path = raw_path.resolve()
         if not artifact_path.is_relative_to(allowed_root):
             raise BrowserDryRunError("upload path is outside the candidate artifact allowlist")
         if artifact.sha256 not in request.allowed_upload_sha256:

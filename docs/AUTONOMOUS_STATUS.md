@@ -64,15 +64,22 @@
 - Candidate selection now persists as a validated same-site cookie. The dashboard, navigation,
   operational list routes, and job/application detail routes consistently use the query override or
   active candidate instead of silently hardcoding the fictional example profile.
+- Versioned, allowlisted PDF rendering now occurs before material approval. Page limits, complete
+  text extraction, supported glyphs, safe URLs, fixed layout, and source/output hashes fail closed.
+  The synthetic browser uploads that exact candidate-scoped PDF, the gate re-verifies it, and the
+  archive copies the same bytes without archive-time rerendering or truncation. Rendered drafts and
+  reports are downloadable with template, snapshot, page, and extraction metadata. Submission
+  authorizations are bound to the reviewed versions, browser hash, candidate snapshot, and verified
+  archive manifest, and that package digest is reconstructed immediately before consumption.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **122 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **142 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **26 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **27 Vitest tests**, and the Next.js production build pass
   for all required routes.
-- Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
+- Migrations: fresh SQLite upgrade and `alembic check` pass through `b4e1f59c2d73`; models and
   Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
@@ -89,6 +96,8 @@
 - Execute export/deletion and retention workflows; hosted authentication/encryption and separate
   browser workers remain deployment hardening.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
+- Complete role-specific template/content selection, richer cover-letter policy, and manual
+  rendered-material revision; DOCX remains an optional format.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
   worktree clean apart from the two preserved user-owned paths.
 
@@ -96,5 +105,5 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue discovery/material productionization or deletion with a durable tombstone and writer fence.
+3. Continue discovery productionization or deletion with a durable tombstone and writer fence.
 4. Run backend, migration, and frontend gates after each coherent phase.

@@ -474,6 +474,7 @@ class SubmissionAuthorizationRecord(Base, CandidateScopedMixin):
     )
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    package_sha256: Mapped[str | None] = mapped_column(String(64))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

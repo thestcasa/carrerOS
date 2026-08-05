@@ -16,6 +16,7 @@ from app.browser import (
     UploadArtifact,
 )
 from app.browser.fixtures import standard_application_form
+from app.browser.paths import CandidatePathError, CandidateSessionPaths
 
 
 def _request(
@@ -120,3 +121,55 @@ def test_candidate_session_path_rejects_traversal(tmp_path: Path) -> None:
     request = _request(tmp_path)
     with pytest.raises(ValidationError):
         DryRunRequest.model_validate({**request.model_dump(), "candidate_id": "../candidate_beta"})
+
+
+def test_candidate_session_path_rejects_cross_candidate_symlink(tmp_path: Path) -> None:
+    candidates_root = tmp_path / "candidates"
+    beta_root = candidates_root / "candidate_beta"
+    beta_root.mkdir(parents=True)
+    (candidates_root / "candidate_alpha").symlink_to(beta_root, target_is_directory=True)
+
+    with pytest.raises(CandidatePathError, match="contains a symlink"):
+        CandidateSessionPaths(tmp_path).session_directory("candidate_alpha", uuid4())
+
+
+def test_candidate_session_and_artifact_children_reject_symlinks(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidates" / "candidate_alpha"
+    outside = tmp_path / "outside"
+    candidate_root.mkdir(parents=True)
+    outside.mkdir()
+    (candidate_root / "sessions").symlink_to(outside, target_is_directory=True)
+
+    paths = CandidateSessionPaths(tmp_path)
+    with pytest.raises(CandidatePathError, match="contains a symlink"):
+        paths.session_directory("candidate_alpha", uuid4())
+
+    (candidate_root / "sessions").unlink()
+    (candidate_root / "application_archive").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(CandidatePathError, match="contains a symlink"):
+        paths.allowed_artifact_root("candidate_alpha")
+
+
+def test_browser_session_and_output_leaves_reject_symlinks(tmp_path: Path) -> None:
+    request = _request(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    session_path = (
+        tmp_path / "candidates" / request.candidate_id / "sessions" / str(request.session_id)
+    )
+    session_path.parent.mkdir()
+    session_path.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(BrowserDryRunError, match="contains a symlink"):
+        SyntheticBrowserDryRunner(tmp_path).run(request)
+    assert not tuple(outside.iterdir())
+
+    session_path.unlink()
+    session_path.mkdir()
+    external_snapshot = outside / "external.json"
+    external_snapshot.write_text("unchanged", encoding="utf-8")
+    (session_path / "final-page.json").symlink_to(external_snapshot)
+
+    with pytest.raises(BrowserDryRunError, match="output path contains a symlink"):
+        SyntheticBrowserDryRunner(tmp_path).run(request)
+    assert external_snapshot.read_text(encoding="utf-8") == "unchanged"

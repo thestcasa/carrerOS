@@ -11,6 +11,10 @@ function key(prefix: string) {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
 }
 
+function metadataString(value: unknown): string | null {
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
 export function ApplicationPageClient({
   candidateId,
   applicationId,
@@ -236,6 +240,12 @@ export function ApplicationPageClient({
             {artifacts.map((artifact) => (
               <li key={artifact.artifact_id}>
                 <span>{artifact.kind} v{artifact.version} · {artifact.immutable ? "immutable" : "draft"}</span>
+                {artifact.kind.startsWith("rendered_") || artifact.kind.startsWith("render_report_") ? (
+                  <small>
+                    Template {metadataString(artifact.metadata.template_id) ?? "unknown"}@
+                    {metadataString(artifact.metadata.template_version) ?? "unknown"} · snapshot {metadataString(artifact.metadata.candidate_snapshot_version) ?? "unknown"} · {metadataString(artifact.metadata.page_count) ?? "0"} page(s) · extraction {artifact.metadata.extraction_matches === true ? "matched" : "blocked"} · validation {artifact.metadata.valid === true ? "passed" : "blocked"}
+                  </small>
+                ) : null}
                 <code>{artifact.sha256}</code>
                 <button className="text-button" type="button" onClick={() => void download(artifact)}>
                   Download exact artifact

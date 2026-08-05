@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import io
 import json
 import re
 import shutil
@@ -13,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+from pypdf import PdfReader
 
 
 class ArchiveExistsError(FileExistsError):
@@ -106,61 +108,6 @@ def _jsonl_bytes(items: Any) -> bytes:
     return b"".join(canonical_json_bytes(item) for item in items)
 
 
-def _text_pdf(text: str) -> bytes:
-    """Render deterministic text into a small, valid single-page PDF.
-
-    This renderer is deliberately simple: material text remains the source of truth and the
-    resulting bytes are archived and hashed exactly as uploaded to the synthetic fixture.
-    """
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()[:54]
-    commands = ["BT", "/F1 10 Tf", "45 790 Td"]
-    for index, line in enumerate(lines or [""]):
-        safe = (
-            line.encode("latin-1", "replace")
-            .decode("latin-1")
-            .replace("\\", "\\\\")
-            .replace("(", "\\(")
-            .replace(")", "\\)")
-        )
-        if index:
-            commands.append("0 -13 Td")
-        commands.append(f"({safe[:115]}) Tj")
-    commands.append("ET")
-    stream = "\n".join(commands).encode("latin-1")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        (
-            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] "
-            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
-        ),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length "
-        + str(len(stream)).encode("ascii")
-        + b" >>\nstream\n"
-        + stream
-        + b"\nendstream",
-    ]
-    output = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for number, body in enumerate(objects, start=1):
-        offsets.append(len(output))
-        output.extend(f"{number} 0 obj\n".encode("ascii"))
-        output.extend(body)
-        output.extend(b"\nendobj\n")
-    xref = len(output)
-    output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
-    output.extend(b"0000000000 65535 f \n")
-    for offset in offsets[1:]:
-        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
-    output.extend(
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode(
-            "ascii"
-        )
-    )
-    return bytes(output)
-
-
 class ApplicationArchiveBuilder:
     def __init__(self, archives_root: Path) -> None:
         self._root = archives_root.resolve()
@@ -180,10 +127,22 @@ class ApplicationArchiveBuilder:
         job = data.job_snapshot if isinstance(data.job_snapshot, dict) else {}
         company = str(job.get("company") or "unknown-company")
         title = str(job.get("title") or "unknown-role")
-        job_id = str(job.get("id") or application_id)
-        candidate_root = self._root / candidate_id / str(datetime.now(UTC).year)
-        final_path = candidate_root / _slug(company, "company") / f"{_slug(title, 'job')}__{job_id}"
-        candidate_root.mkdir(parents=True, exist_ok=True)
+        job_id = str(job.get("external_id") or job.get("id") or application_id)
+        candidate_directory = self._root / candidate_id
+        candidate_root = candidate_directory / str(datetime.now(UTC).year)
+        company_directory = candidate_root / _slug(company, "company")
+        self._root.mkdir(parents=True, exist_ok=True)
+        for path, expected_parent in (
+            (candidate_directory, self._root),
+            (candidate_root, candidate_directory),
+            (company_directory, candidate_root),
+        ):
+            if path.is_symlink():
+                raise ValueError("archive candidate path contains a symlink")
+            path.mkdir(exist_ok=True)
+            if not path.is_dir() or path.resolve() != path or path.parent != expected_parent:
+                raise ValueError("archive candidate path is unsafe")
+        final_path = company_directory / f"{_slug(title, 'job')}__{_slug(job_id, 'job-id')}"
         if final_path.exists():
             if recover_existing and self.verify(final_path):
                 existing = ArchiveManifest.model_validate_json(
@@ -193,6 +152,7 @@ class ApplicationArchiveBuilder:
                     existing.candidate_id == candidate_id
                     and existing.application_id == application_id
                     and existing.status == "ready_to_submit"
+                    and self._matches_expected(final_path, data)
                 ):
                     return final_path
             raise ArchiveExistsError(f"archive already exists: {final_path}")
@@ -245,12 +205,15 @@ class ApplicationArchiveBuilder:
             write("scoring/validation_report.json", canonical_json_bytes(data.validation_report))
 
             document_hashes: dict[str, str] = {}
+            document_templates: dict[str, str] = {}
             references = data.generated_document_references
             if isinstance(references, list):
                 for reference in references:
                     if not isinstance(reference, dict):
                         continue
                     kind = str(reference.get("kind") or "")
+                    if kind in document_hashes:
+                        raise ValueError(f"duplicate rendered document reference: {kind}")
                     storage_uri = reference.get("storage_uri")
                     if not isinstance(storage_uri, str):
                         if kind in data.required_document_kinds:
@@ -261,7 +224,29 @@ class ApplicationArchiveBuilder:
                         if kind in data.required_document_kinds:
                             raise ValueError(f"required {kind} source file is missing")
                         continue
-                    pdf = _text_pdf(source.read_text(encoding="utf-8"))
+                    if reference.get("content_type") != "application/pdf":
+                        raise ValueError(f"required {kind} is not a validated rendered PDF")
+                    pdf = source.read_bytes()
+                    expected_hash = reference.get("sha256")
+                    template_id = reference.get("template_id")
+                    template_version = reference.get("template_version")
+                    if (
+                        not isinstance(expected_hash, str)
+                        or not isinstance(template_id, str)
+                        or not template_id
+                        or not isinstance(template_version, str)
+                        or not template_version
+                        or sha256_bytes(pdf) != expected_hash
+                        or not pdf.startswith(b"%PDF-")
+                    ):
+                        raise ValueError(f"required {kind} rendered PDF hash is invalid")
+                    try:
+                        if not PdfReader(io.BytesIO(pdf)).pages:
+                            raise ValueError
+                    except Exception as exc:
+                        raise ValueError(
+                            f"required {kind} rendered PDF is structurally invalid"
+                        ) from exc
                     if kind == "cv":
                         relative = "submitted_documents/cv_submitted.pdf"
                     elif kind == "cover_letter":
@@ -270,6 +255,7 @@ class ApplicationArchiveBuilder:
                         continue
                     write(relative, pdf)
                     document_hashes[kind] = hashes[relative]
+                    document_templates[kind] = f"{template_id}@{template_version}"
             missing_documents = set(data.required_document_kinds) - set(document_hashes)
             if missing_documents:
                 raise ValueError(
@@ -321,6 +307,10 @@ class ApplicationArchiveBuilder:
                     str(data.candidate_snapshot.get("profile_version") or "") or None
                 )
             score_value = scoring.get("total_score", scoring.get("score"))
+            validation = data.validation_report if isinstance(data.validation_report, dict) else {}
+            validation_passed = bool(
+                validation.get("documents_valid", validation.get("valid", validation.get("passed")))
+            )
             manifest = ArchiveManifest(
                 schema_version="2.0",
                 candidate_id=candidate_id,
@@ -339,7 +329,7 @@ class ApplicationArchiveBuilder:
                 created_at=datetime.now(UTC),
                 submitted_at=None,
                 cv={
-                    "template": "deterministic_text_v1",
+                    "template": document_templates.get("cv"),
                     "filename": "cv_submitted.pdf",
                     "sha256": document_hashes.get("cv"),
                 },
@@ -352,7 +342,7 @@ class ApplicationArchiveBuilder:
                 },
                 answers_file="answers/final_answers.json",
                 match_score=score_value if isinstance(score_value, (int, float)) else None,
-                validation_status="passed" if bool(data.validation_report) else "unknown",
+                validation_status="passed" if validation_passed else "failed",
                 submission_confirmation={"detected": False, "confirmation_id": None},
                 agent_version="deterministic-fixture-v1",
                 model_versions={},
@@ -363,7 +353,6 @@ class ApplicationArchiveBuilder:
             (temp_path / "manifest.json").write_bytes(
                 canonical_json_bytes(manifest.model_dump(mode="json"))
             )
-            final_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path.rename(final_path)
         except Exception:
             if temp_path.exists():
@@ -380,7 +369,14 @@ class ApplicationArchiveBuilder:
         event_log: Any | None = None,
     ) -> Path:
         """Create a complete confirmed archive version without mutating the pre-submit archive."""
-        source = archive_path.resolve()
+        raw_source = archive_path.absolute()
+        if raw_source.is_symlink() or any(
+            parent.is_symlink()
+            for parent in raw_source.parents
+            if parent != self._root and parent.is_relative_to(self._root)
+        ):
+            raise ValueError("pre-submit archive path contains a symlink")
+        source = raw_source.resolve()
         if not source.is_relative_to(self._root) or not self.verify(source):
             raise ValueError("pre-submit archive is missing, unsafe, or failed verification")
         if not confirmation_reference.strip():
@@ -388,6 +384,18 @@ class ApplicationArchiveBuilder:
         original = ArchiveManifest.model_validate_json(
             (source / "manifest.json").read_text(encoding="utf-8")
         )
+        expected_source = (
+            self._root
+            / original.candidate_id
+            / str(original.created_at.year)
+            / _slug(str(original.company.get("name") or ""), "company")
+            / (
+                f"{_slug(str(original.job.get('title') or ''), 'job')}__"
+                f"{_slug(str(original.job.get('external_job_id') or ''), 'job-id')}"
+            )
+        ).resolve()
+        if source != expected_source:
+            raise ValueError("pre-submit archive path does not match its manifest identity")
         destination = source.with_name(f"{source.name}__confirmed_v2")
         if destination.exists():
             if self.verify(destination):
@@ -454,16 +462,49 @@ class ApplicationArchiveBuilder:
         return destination
 
     @staticmethod
+    def _matches_expected(archive_path: Path, data: ApplicationArchiveData) -> bool:
+        try:
+            manifest = ArchiveManifest.model_validate_json(
+                (archive_path / "manifest.json").read_text(encoding="utf-8")
+            )
+            if (
+                archive_path / "candidate_snapshot" / "profile.json"
+            ).read_bytes() != canonical_json_bytes(data.candidate_snapshot):
+                return False
+        except (OSError, ValueError, TypeError):
+            return False
+        expected: dict[str, str] = {}
+        references = data.generated_document_references
+        if not isinstance(references, list):
+            return not data.required_document_kinds
+        for reference in references:
+            if not isinstance(reference, dict):
+                return False
+            kind = reference.get("kind")
+            digest = reference.get("sha256")
+            if not isinstance(kind, str) or not isinstance(digest, str) or kind in expected:
+                return False
+            expected[kind] = digest
+        return manifest.cv.get("sha256") == expected.get("cv") and manifest.cover_letter.get(
+            "sha256"
+        ) == expected.get("cover_letter")
+
+    @staticmethod
     def verify(archive_path: Path) -> bool:
+        if archive_path.is_symlink() or not archive_path.is_dir():
+            return False
         try:
             manifest = ArchiveManifest.model_validate_json(
                 (archive_path / "manifest.json").read_text(encoding="utf-8")
             )
         except (OSError, ValueError):
             return False
+        paths = tuple(archive_path.rglob("*"))
+        if any(path.is_symlink() for path in paths):
+            return False
         actual_files = {
             path.relative_to(archive_path).as_posix()
-            for path in archive_path.rglob("*")
+            for path in paths
             if path.is_file() and path.name != "manifest.json"
         }
         if actual_files != set(manifest.files):

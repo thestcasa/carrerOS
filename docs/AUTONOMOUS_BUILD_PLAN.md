@@ -146,6 +146,25 @@ Status: complete. Candidate-card navigation selects the active profile, all oper
 it explicitly, server pages fall back to the validated cookie, and the dashboard loads and labels
 the same candidate. Frontend regression coverage proves cross-route propagation.
 
+### Phase 5C — rendered document identity
+
+1. Render versioned PDFs before material approval without network or dynamic template execution.
+2. Validate page count, complete text extraction, supported glyphs, safe URLs, fixed non-overlapping
+   layout, source hash, and output hash; persist a fail-closed report.
+3. Upload only the candidate/application-scoped rendered PDF and verify its exact stored hash at
+   browser and gate boundaries.
+4. Copy the same rendered bytes into the immutable archive; never rerender or truncate at archive
+   time.
+5. Bind authorization to a digest of the reviewed versions, browser upload, candidate snapshot,
+   and verified archive; reconstruct and compare that digest before authorization consumption.
+6. Expose rendered drafts, template/version, page count, extraction result, and exact downloads in
+   the application UI.
+
+Status: complete for deterministic PDF output. CV template selection is versioned and allowlisted;
+DOCX remains optional. Tests cover pagination without truncation, glyph/URL/template/page failures,
+persisted render denial and regeneration, exact-version approval, candidate/symlink isolation,
+authorization-package drift, exact browser upload hash, and byte-identical archives.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

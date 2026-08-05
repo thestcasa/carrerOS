@@ -140,3 +140,25 @@ def test_playwright_worker_rejects_symlinked_session_directory(tmp_path: Path) -
 
     with pytest.raises(BrowserDryRunError, match="contains a symlink"):
         worker.run(request)
+
+
+def test_playwright_worker_rejects_symlinked_profile_directory(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    session_id = uuid4()
+    session_root = runtime_root / "candidates" / "example_candidate" / "sessions" / str(session_id)
+    session_root.mkdir(parents=True)
+    outside = tmp_path / "outside-profile"
+    outside.mkdir()
+    (session_root / "playwright-profile").symlink_to(outside, target_is_directory=True)
+    fixture_url = "http://127.0.0.1:8090/application"
+    worker = RestrictedPlaywrightWorker(runtime_root, frozenset({fixture_url}))
+    request = PlaywrightDryRunRequest(
+        application_id=uuid4(),
+        candidate_id="example_candidate",
+        session_id=session_id,
+        fixture_url=fixture_url,
+        answers={},
+    )
+
+    with pytest.raises(BrowserDryRunError, match="profile path contains a symlink"):
+        worker.run(request)

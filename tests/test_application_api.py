@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -117,6 +118,21 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
         assert generated.status_code == 200, generated.text
         application_id = generated.json()["application_id"]
         assert generated.json()["state"] == "review_pending"
+        draft_artifacts = client.get(
+            f"/api/applications/{application_id}/artifacts?candidate_id=example_candidate",
+            headers=auth,
+        )
+        assert draft_artifacts.status_code == 200
+        rendered_cv = next(item for item in draft_artifacts.json() if item["kind"] == "rendered_cv")
+        rendered_download = client.get(
+            f"/api/applications/{application_id}/artifacts/{rendered_cv['artifact_id']}"
+            "?candidate_id=example_candidate",
+            headers=auth,
+        )
+        assert rendered_download.status_code == 200
+        assert rendered_download.content.startswith(b"%PDF-1.4")
+        assert hashlib.sha256(rendered_download.content).hexdigest() == rendered_cv["sha256"]
+        assert rendered_cv["metadata"]["extraction_matches"] is True
 
         for suffix, endpoint, body in (
             ("approve", "approve-materials", None),
