@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -60,10 +61,53 @@ class GlobalJob(Base, TimestampMixin):
     company: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     location: Mapped[str | None] = mapped_column(String(255))
+    normalized_title: Mapped[str | None] = mapped_column(String(255), index=True)
+    normalized_location: Mapped[str | None] = mapped_column(String(255))
+    company_domain: Mapped[str | None] = mapped_column(String(255), index=True)
+    requisition_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    application_url: Mapped[str | None] = mapped_column(Text)
+    ats_platform: Mapped[str | None] = mapped_column(String(50), index=True)
+    remote_policy: Mapped[str | None] = mapped_column(String(50))
+    employment_type: Mapped[str | None] = mapped_column(String(50))
+    seniority: Mapped[str | None] = mapped_column(String(50))
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    description_normalized: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text, nullable=False)
+    required_skills: Mapped[list[str]] = mapped_column(JSON, default=list)
+    preferred_skills: Mapped[list[str]] = mapped_column(JSON, default=list)
+    required_languages: Mapped[list[str]] = mapped_column(JSON, default=list)
+    salary_min: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    salary_max: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    salary_currency: Mapped[str | None] = mapped_column(String(3))
+    salary_period: Mapped[str | None] = mapped_column(String(50))
+    source_trust_level: Mapped[str] = mapped_column(String(32), default="unverified")
+    verified_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    semantic_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    security_findings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class JobVersion(Base):
+    """Append-only normalized snapshots of external job data."""
+
+    __tablename__ = "job_versions"
+    __table_args__ = (
+        UniqueConstraint("job_id", "version", name="uq_job_version"),
+        UniqueConstraint("job_id", "payload_sha256", name="uq_job_version_payload"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("global_jobs.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    source_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class CandidateJobScore(Base, TimestampMixin, CandidateScopedMixin):
@@ -72,6 +116,7 @@ class CandidateJobScore(Base, TimestampMixin, CandidateScopedMixin):
         UniqueConstraint(
             "candidate_id", "job_id", "scoring_version", name="uq_candidate_job_score"
         ),
+        UniqueConstraint("candidate_id", "job_id", "id", name="uq_candidate_job_score_scope"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -85,10 +130,62 @@ class CandidateJobScore(Base, TimestampMixin, CandidateScopedMixin):
     meets_threshold: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
 
+class CandidateJobDecision(Base, TimestampMixin, CandidateScopedMixin):
+    """Candidate-owned inbox state and idempotent command receipt for a global job."""
+
+    __tablename__ = "candidate_job_decisions"
+    __table_args__ = (UniqueConstraint("candidate_id", "job_id", name="uq_candidate_job_decision"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("global_jobs.id"), nullable=False, index=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="discovered")
+    verified_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CandidateJobCommand(Base, CandidateScopedMixin):
+    __tablename__ = "candidate_job_commands"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "idempotency_key", name="uq_candidate_job_command"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("global_jobs.id"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    command: Mapped[str] = mapped_column(String(32), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CandidateDiscoveryCommand(Base, CandidateScopedMixin):
+    """Durable request receipt for candidate-scoped discovery commands."""
+
+    __tablename__ = "candidate_discovery_commands"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "idempotency_key", name="uq_candidate_discovery_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Application(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "applications"
     __table_args__ = (
         UniqueConstraint("candidate_id", "job_id", name="uq_candidate_application_job"),
+        UniqueConstraint("candidate_id", "id", name="uq_application_scope"),
+        ForeignKeyConstraint(
+            ["candidate_id", "job_id", "score_id"],
+            [
+                "candidate_job_scores.candidate_id",
+                "candidate_job_scores.job_id",
+                "candidate_job_scores.id",
+            ],
+            name="fk_application_candidate_score",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -103,7 +200,11 @@ class Application(Base, TimestampMixin, CandidateScopedMixin):
         Enum(ApplicationOutcome, native_enum=False), default=ApplicationOutcome.PENDING
     )
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     terminal_reason: Mapped[str | None] = mapped_column(Text)
+    archive_uri: Mapped[str | None] = mapped_column(Text)
+    confirmation_reference: Mapped[str | None] = mapped_column(String(255))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ApplicationDocument(Base, TimestampMixin, CandidateScopedMixin):
@@ -111,6 +212,11 @@ class ApplicationDocument(Base, TimestampMixin, CandidateScopedMixin):
     __table_args__ = (
         UniqueConstraint(
             "candidate_id", "application_id", "kind", "version", name="uq_application_document"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_application_document_scope",
         ),
     )
 
@@ -131,6 +237,11 @@ class ApplicationAnswer(Base, TimestampMixin, CandidateScopedMixin):
     __table_args__ = (
         UniqueConstraint(
             "candidate_id", "application_id", "question_key", name="uq_application_answer"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_application_answer_scope",
         ),
     )
 
@@ -153,6 +264,11 @@ class ApplicationEvent(Base, CandidateScopedMixin):
             "candidate_id", "application_id", "idempotency_key", name="uq_application_event_key"
         ),
         Index("ix_application_events_timeline", "candidate_id", "application_id", "occurred_at"),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_application_event_scope",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -169,7 +285,14 @@ class ApplicationEvent(Base, CandidateScopedMixin):
 
 class SecurityEvent(Base, CandidateScopedMixin):
     __tablename__ = "security_events"
-    __table_args__ = (Index("ix_security_events_candidate_time", "candidate_id", "occurred_at"),)
+    __table_args__ = (
+        Index("ix_security_events_candidate_time", "candidate_id", "occurred_at"),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_security_event_application_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -184,6 +307,13 @@ class SecurityEvent(Base, CandidateScopedMixin):
 
 class BrowserSession(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "browser_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_browser_session_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(
@@ -197,6 +327,13 @@ class BrowserSession(Base, TimestampMixin, CandidateScopedMixin):
 
 class HumanAction(Base, CandidateScopedMixin):
     __tablename__ = "human_actions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_human_action_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(
@@ -206,11 +343,24 @@ class HumanAction(Base, CandidateScopedMixin):
     action: Mapped[HumanActionKind] = mapped_column(Enum(HumanActionKind, native_enum=False))
     reason: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    kind: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    browser_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("browser_sessions.id"))
+    screenshot_uri: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Interview(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "interviews"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_interview_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(
@@ -224,6 +374,13 @@ class Interview(Base, TimestampMixin, CandidateScopedMixin):
 
 class Offer(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "offers"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_offer_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(
@@ -241,6 +398,13 @@ class AgentReview(Base, TimestampMixin, CandidateScopedMixin):
     """Persisted independent review result used by the gate's evidence trail."""
 
     __tablename__ = "agent_reviews"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_agent_review_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(
@@ -249,3 +413,146 @@ class AgentReview(Base, TimestampMixin, CandidateScopedMixin):
     decision: Mapped[ReviewDecision] = mapped_column(Enum(ReviewDecision, native_enum=False))
     semantic_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     report: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SubmissionAuthorizationRecord(Base, CandidateScopedMixin):
+    """Durable, one-time record of a gate-issued final submission authorization."""
+
+    __tablename__ = "submission_authorizations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_submission_authorization_scope",
+        ),
+    )
+
+    authorization_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id"), nullable=False, index=True
+    )
+    workflow_state: Mapped[ApplicationState] = mapped_column(
+        Enum(ApplicationState, native_enum=False), nullable=False
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CandidateSnapshotRecord(Base, CandidateScopedMixin):
+    __tablename__ = "candidate_snapshot_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "application_id", "profile_version", name="uq_snapshot_profile"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_candidate_snapshot_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id"), nullable=False, index=True
+    )
+    profile_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ApplicationArtifact(Base, CandidateScopedMixin):
+    __tablename__ = "application_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "application_id", "kind", "version", name="uq_application_artifact"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_application_artifact_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    artifact_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CandidateSettingsRecord(Base, TimestampMixin, CandidateScopedMixin):
+    __tablename__ = "candidate_settings"
+    __table_args__ = (UniqueConstraint("candidate_id", name="uq_candidate_settings"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    automation_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="dry_run")
+    discovery_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    emergency_stopped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allowed_ats_adapters: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tested_ats_adapters: Mapped[list[str]] = mapped_column(JSON, default=list)
+    dry_run_acceptance_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    explicit_autonomy_confirmation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    maximum_applications_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    maximum_applications_per_week: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    maximum_applications_per_company_30_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3
+    )
+
+
+class NotificationRecord(Base, CandidateScopedMixin):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_notification_application_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("applications.id"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False, default="dashboard")
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    immediate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CorrespondenceRecord(Base, CandidateScopedMixin):
+    __tablename__ = "correspondence_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "external_message_id", name="uq_correspondence_external_message"
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_correspondence_application_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id"), nullable=False, index=True
+    )
+    external_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    sender: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

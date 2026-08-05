@@ -12,12 +12,18 @@ export function AppShell({ children }: { children: ReactNode }) {
         <nav aria-label="Primary navigation">
           <Link href="/">Overview</Link>
           <Link href="/candidates">Candidates</Link>
+          <Link href="/jobs">Jobs</Link>
+          <Link href="/applications">Applications</Link>
+          <Link href="/actions">Actions</Link>
+          <Link href="/security">Security</Link>
+          <Link href="/analytics">Analytics</Link>
+          <Link href="/settings">Settings</Link>
         </nav>
         <span className="environment-label">Local control plane</span>
       </header>
       <main>{children}</main>
       <footer>
-        Milestone 1 · No live applications or browser submission enabled
+        Local control plane · External submission remains safety-gated
       </footer>
     </div>
   );

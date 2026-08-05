@@ -4,7 +4,23 @@
 
 This repository was empty when Milestone 1 began. `CareerOS_PROJECT_SPEC(1).md` became available during final verification and is treated as the product source of truth, with the current task instructions taking precedence where they intentionally narrow scope. In particular, this milestone contains only fictional candidate data and does not create the real pilot profile described in the master specification.
 
-Milestone 1 builds the configuration, persistence, decision, workflow, audit, API, web control plane, and test foundations. It deliberately excludes browser automation, Playwright submission, live applications, CAPTCHA handling, anti-bot workarounds, and ATS manipulation.
+The current implementation integrates configuration, persistence, discovery, scoring, materials,
+synthetic form filling, human actions, gate authorization, immutable archives, application history,
+security/settings, analytics, and local authentication. It deliberately excludes live
+applications, CAPTCHA bypass, anti-bot workarounds, and ATS manipulation. Real pilot data is not
+committed; it must be onboarded privately and remains blocked until approved.
+
+## Current integrated surface
+
+The Next.js control plane exposes the dashboard, candidate onboarding/editor/readiness, job inbox
+and analysis, application pipeline/detail, human actions, security ledger, automation settings,
+and analytics. Its authenticated API client never reads local candidate or artifact paths.
+
+The application service persists candidate snapshots, generated evidence-backed materials,
+independent review, synthetic browser sessions, screenshots, state transitions, one-time gate
+authorizations, and backend-confirmed outcomes. Composite foreign keys enforce that application
+children and scores belong to the same candidate. Discovery commands and workflow transitions use
+durable idempotency receipts.
 
 ## Safety boundary
 
@@ -108,7 +124,11 @@ Required conditions include completed configuration validation, candidate thresh
 
 ## Audit archive
 
-The archive builder writes a new, immutable application archive containing canonical JSON snapshots of the candidate, job, scoring, document references, answers, validation report, and event log. A manifest records schema version, application and candidate IDs, creation time, and SHA-256 for every payload. Archive creation is exclusive and refuses to overwrite an existing archive. Verification recomputes every hash and detects additions, deletions, or modifications.
+The archive builder writes the specification hierarchy under candidate/year/company/job. It stores
+the candidate snapshot, raw/extracted/normalized job evidence, scoring, exact PDF bytes for the
+synthetic submitted documents, final answers, pre-submit/final-page captures, receipt, and JSONL
+audit ledgers. The manifest hashes every file. Creation is exclusive; recursive verification
+detects additions, deletions, or modifications.
 
 ## Deployment foundation
 
@@ -118,7 +138,48 @@ health-checked. Docker Compose starts PostgreSQL, Redis, the API, and the standa
 Next.js frontend with health-ordered dependencies. The API applies Alembic migrations
 before serving. Backend and frontend quality gates run independently.
 
+## Discovery and job analysis
+
+External ATS payloads enter through strict platform adapters and are normalized before they
+reach persistence or candidate logic. Adapter URLs must use HTTPS and match the exact official
+ATS domain (or a subdomain); credentials, fragments, cross-domain application links, and malformed
+authorities fail closed. Description text is treated as untrusted and scanned for instruction
+override, secret-exfiltration, safety-bypass, local-file, and hidden-ATS-content signals.
+
+`global_jobs` stores the current candidate-neutral normalized view. `job_versions` is append-only
+and records every content change by canonical payload hash, while repeated unchanged discovery is
+idempotent. Candidate evaluation is stored separately in `candidate_job_scores`, allowing the same
+global job to receive different classifications, scores, evidence, blockers, and proposed actions
+for different candidate configurations. Candidate thresholds and weights remain configuration,
+not engine constants.
+
+Candidate inbox state is isolated in `candidate_job_decisions`. Every analyze, verify, shortlist,
+or skip mutation records a durable `candidate_job_commands` receipt keyed by candidate and caller
+idempotency key; discovery has its own durable receipt. Reuse with different input fails with a
+stable conflict. Injection findings block analysis and enter the candidate security ledger. Worker and scheduler are distinct Compose processes that
+advertise health through Redis, and external ports bind to localhost by default.
+
 ## Trust and privacy decisions
+
+## Materials and synthetic browser dry runs
+
+The materials boundary consumes explicit approved facts and exact approved-answer keys. Every
+generated claim carries evidence IDs; hashes, target-company validation, and independent review
+fail closed before an immutable draft version can progress. Draft storage uses candidate and
+application path segments, exclusive version creation, and content-hash verification.
+
+The browser dry-run boundary accepts a finalized structured package, maps only known synthetic
+fields, validates uploads against allowlisted artifact paths, re-reads filled values, and extracts
+the final page without a submit operation. CAPTCHA and OTP markers persist a visible human action,
+screenshot, page snapshot, and same-session reference. Completion resumes that recorded session
+before final gate validation. No live final click exists in this build.
+
+## Local authorization
+
+Runtime defaults require a signed local bearer session plus CSRF for mutations. Candidate IDs from
+paths, queries, and bodies must be session-owned. Artifact bytes are served only after candidate
+authorization and hash verification. Local-session issuance assumes localhost trust; it is not a
+substitute for hosted multi-user identity and encrypted storage.
 
 - Candidate data is configuration, never an engine constant.
 - Generated claims must cite candidate evidence IDs.

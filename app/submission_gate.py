@@ -64,6 +64,7 @@ class SubmissionAuthorization:
     authorization_id: UUID
     candidate_id: str
     application_id: UUID
+    workflow_state: ApplicationState
     issued_at: datetime
     expires_at: datetime
 
@@ -73,6 +74,7 @@ class SubmissionAuthorization:
         issuer: Any,
         candidate_id: str,
         application_id: UUID,
+        workflow_state: ApplicationState,
         issued_at: datetime,
         expires_at: datetime,
     ) -> None:
@@ -81,6 +83,7 @@ class SubmissionAuthorization:
         object.__setattr__(self, "authorization_id", uuid4())
         object.__setattr__(self, "candidate_id", candidate_id)
         object.__setattr__(self, "application_id", application_id)
+        object.__setattr__(self, "workflow_state", workflow_state)
         object.__setattr__(self, "issued_at", issued_at)
         object.__setattr__(self, "expires_at", expires_at)
 
@@ -133,6 +136,19 @@ class SubmissionGate:
         }
         reasons.extend(code for code, value in required_flags.items() if value is not True)
 
+        if gate_input.duplicate_application is not False:
+            reasons.append("duplicate_application_detected_or_missing")
+        if gate_input.captcha_pending is not False:
+            reasons.append("captcha_pending_or_missing")
+        if gate_input.unsupported_claims_count is None:
+            reasons.append("unsupported_claims_count_missing")
+        elif gate_input.unsupported_claims_count != 0:
+            reasons.append("unsupported_claims_present")
+        if gate_input.unresolved_sensitive_questions_count is None:
+            reasons.append("sensitive_question_count_missing")
+        elif gate_input.unresolved_sensitive_questions_count != 0:
+            reasons.append("unresolved_sensitive_questions_present")
+
         if gate_input.candidate_score is None or gate_input.application_threshold is None:
             reasons.append("score_or_threshold_missing")
         elif gate_input.candidate_score < gate_input.application_threshold:
@@ -155,6 +171,7 @@ class SubmissionGate:
             issuer=_GATE_ISSUER,
             candidate_id=gate_input.candidate_id,
             application_id=gate_input.application_id,
+            workflow_state=ApplicationState.READY_TO_SUBMIT,
             issued_at=now,
             expires_at=now + self._authorization_ttl,
         )

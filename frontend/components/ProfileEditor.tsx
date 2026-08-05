@@ -7,9 +7,20 @@ import type { CandidateDetail, EditableSection, JsonObject, JsonValue } from "@/
 const sectionMeta: Record<EditableSection, { label: string; description: string }> = {
   identity: { label: "Identity", description: "Contact and location details used in applications." },
   biography: { label: "Biography", description: "Approved professional summary and evidence highlights." },
+  education: { label: "Education", description: "Qualifications with stable IDs and verified dates." },
+  experience: { label: "Experience", description: "Professional evidence, achievements, dates, and skills." },
+  projects: { label: "Projects", description: "Candidate-owned project evidence and outcomes." },
+  skills: { label: "Skills", description: "Evidence-backed skill categories." },
+  languages: { label: "Languages", description: "Explicit candidate-approved proficiency levels." },
   career_strategy: { label: "Career strategy", description: "Target roles, domains, and candidate objectives." },
+  scoring_rules: { label: "Scoring rules", description: "Candidate-specific thresholds and dimension weights." },
   preferences: { label: "Preferences", description: "Locations, work modes, employment types, and salary bounds." },
   legal_status: { label: "Legal status", description: "Explicit work authorization and sponsorship declarations." },
+  approved_answers: { label: "Approved answers", description: "Reusable answers that remain evidence-bound." },
+  cv_rules: { label: "CV rules", description: "Candidate-controlled document limits and prohibited claims." },
+  cover_letter_rules: { label: "Cover letter rules", description: "Candidate-controlled generation policy." },
+  companies: { label: "Company rules", description: "Target and blocked companies." },
+  roles: { label: "Role rules", description: "Target and blocked roles." },
 };
 
 const sections = Object.keys(sectionMeta) as EditableSection[];
@@ -63,6 +74,24 @@ function Field({
   }
 
   if (Array.isArray(value)) {
+    const structured = value.some((item) => item !== null && typeof item === "object");
+    if (structured) return (
+      <label className="form-field" htmlFor={id}>
+        <span>{label}</span>
+        <textarea id={id} rows={Math.max(8, value.length * 8)} defaultValue={JSON.stringify(value, null, 2)} onBlur={(event) => {
+          try {
+            const parsed: unknown = JSON.parse(event.target.value);
+            if (!Array.isArray(parsed)) throw new Error("Expected an array");
+            event.target.setCustomValidity("");
+            onChange(path, parsed as JsonValue);
+          } catch {
+            event.target.setCustomValidity("Enter a valid JSON array. Existing structured data has not been changed.");
+            event.target.reportValidity();
+          }
+        }} />
+        <small>Structured entries use JSON so stable IDs and nested evidence cannot be flattened.</small>
+      </label>
+    );
     return (
       <label className="form-field" htmlFor={id}>
         <span>{label}</span>

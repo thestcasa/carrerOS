@@ -1,0 +1,141 @@
+# Autonomous Build Plan
+
+## Objective
+
+Implement and verify the complete definition of done in `CareerOS_PROJECT_SPEC(1).md` from
+the current repository state. Preserve the deterministic `SubmissionGate` boundary, candidate
+isolation, immutable history, truthful provenance, and the prohibition on live applications,
+CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate data.
+
+## Repository baseline
+
+- Branch: `autonomous-build`.
+- Milestone 1 is substantially complete: strict fictional candidate configuration, readiness,
+  snapshots, candidate APIs and core UI, candidate-scoped persistence, state machine, isolated
+  agent contracts/fakes, deny-by-default gate, immutable archive skeleton, and local stack shell.
+- The authoritative spec's Milestones 2–8 and most full-product acceptance tests remain.
+- Existing local changes in `scripts/run-autonomous-build.sh` and `artifacts/` predate this build;
+  they are user-owned and excluded from implementation commits.
+- The inherited worktree contains uncommitted, passing foundations for discovery, materials,
+  synthetic browser dry runs, operations, correspondence, and local-auth primitives. These are
+  preserved and integrated instead of recreated.
+- The current runtime is Python 3.14.4. The previously recorded FastAPI `TestClient` hang no
+  longer reproduces: the complete 87-test backend suite passes.
+- Docker is unavailable in this environment. Frontend dependencies are currently a partial
+  `node_modules` install; TypeScript can run directly, but npm quality scripts require a clean
+  dependency installation before final verification.
+- The specification contains real pilot data, but repository safety rules prohibit committing
+  it. Pilot behavior will be proven with fictional configuration and documented onboarding
+  blockers rather than copying personal data into version control.
+
+## Execution order
+
+### Phase 1 — Milestone 2: discovery, analysis, and jobs inbox
+
+1. Add versioned normalized job contracts and persistence without breaking Milestone 1 data.
+2. Add deterministic URL/domain validation, prompt-injection scanning, description
+   normalization, duplicate fingerprints, and candidate application duplicate hashes.
+3. Add Greenhouse, Lever, and Ashby adapters behind an allowlisted adapter protocol. Tests use
+   deterministic fixtures; no live provider access is required.
+4. Add candidate-configured classification, salary checks, hard blockers, dimensional scoring,
+   bonuses/penalties, evidence, and distinct per-candidate results.
+5. Add candidate-aware job repositories and APIs for discovery, list/detail, verify, analyze,
+   shortlist, and skip with idempotency and stable error codes.
+6. Add `/jobs` inbox/detail pages, discovery status/controls, evidence, blockers, freshness,
+   security findings, and score explanations. No bulk submission.
+7. Add worker/scheduler process boundaries and persistent runtime volumes to Compose.
+
+### Phase 2 — Milestone 3: materials and preview
+
+1. Implement approved-fact selection, claim provenance, CV/cover-letter/answer generation,
+   templates, deterministic rendering and validation, and independent semantic review.
+2. Persist immutable draft versions and manual edits without overwriting history.
+3. Add material preview, download, provenance, validation/review, and version UI.
+
+### Phase 2A — integration and tenant-safety repair
+
+Before expanding UI surface area, close the cross-cutting gaps exposed by the baseline audit:
+
+1. Bind every candidate-owned child record to the same candidate as its parent at the database
+   boundary and add adversarial isolation regression tests.
+2. Persist one-time submission authorization consumption so process restarts cannot replay a
+   final submission.
+3. Wire local session ownership, CSRF checks, stable idempotency, and rate limiting into the API;
+   never trust a query/body `candidate_id` without matching authenticated scope.
+4. Build a persistence-backed application service that integrates materials, human actions,
+   security events, settings, analytics, correspondence, artifacts, and audit history.
+
+Status: tenant constraints, durable authorization, local auth/CSRF, applications, human actions,
+security, settings, analytics, and artifacts are integrated. Correspondence remains the next item.
+
+### Phase 3 — Milestone 4: browser dry run and human action
+
+1. Add a restricted Playwright worker and synthetic ATS fixture server.
+2. Add candidate-isolated persistent sessions, field mapping, allowlisted uploads, final-page
+   extraction, CAPTCHA/OTP detection, and human actions. Synthetic runs never click a real final
+   submit control.
+3. Add human-action APIs and queue/takeover UI with same-session resumption.
+
+Status: deterministic synthetic sessions, snapshots/screenshots, APIs, queue, and resumption are
+complete. A real Playwright fixture-server worker remains.
+
+### Phase 4 — Milestones 5 and 6: controlled submission and operations
+
+1. Complete the required pre-submit archive and one-time, short-lived authorization consumption.
+2. Implement only synthetic/test submission execution in this build unless a separately
+   authorized safe environment exists; never submit a live application.
+3. Add confirmation-aware application detail/pipeline, exact artifact viewers, notifications,
+   rate limits, approval/autonomous modes, emergency stop, settings, dashboard, and analytics.
+4. Prove the UI cannot claim success without backend confirmation and cannot enable autonomy
+   while readiness is blocked.
+
+Status: synthetic-only submission, archives, one-time authorization, primary operational routes,
+and both frontend safety regression tests are complete. Notifications and durable scheduling remain.
+
+### Phase 5 — Milestones 7 and 8: correspondence and hardening
+
+1. Add provider-neutral correspondence ingestion/classification with deterministic Gmail
+   fixtures, status updates, correspondence UI, and interview packages. No automatic replies.
+2. Add local authentication, tenant-aware authorization, encrypted secret interfaces,
+   candidate export/deletion, signed artifact access, administrative audit, CSRF/session/rate
+   protections, and isolated worker ownership needed before hosted deployment.
+
+### Phase 6 — definition-of-done verification
+
+1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.
+2. Verify Alembic upgrade/check, backend format/lint/type/tests, frontend lint/type/tests/build,
+   integration/security/browser/accessibility tests, fictional local workflow, and Compose when
+   Docker is available.
+3. Review the complete diff for regression, secrets, generated files, personal data, and scope.
+4. Update architecture, setup, operations, onboarding, security, adapter, and status documents.
+5. Commit only coherent passing milestones with Conventional Commit subjects and finish with a
+   clean working tree apart from preserved pre-existing user changes.
+
+## Conservative decisions
+
+- External HTML and job text always remain untrusted data; adapters only extract structured
+  fields and cannot invoke tools or alter policy.
+- Missing or ambiguous values fail closed and create blockers or human actions.
+- All network-facing provider behavior is exercised through deterministic fixtures unless a
+  read-only provider call is explicitly safe and necessary.
+- Backend validation and state are authoritative; the frontend never duplicates submission
+  authorization logic or optimistically reports success.
+- Major schema/API changes are migration-backed and backward-compatible where practical.
+- The specification's named pilot data is not copied into version control because the repository
+  instructions explicitly prohibit real candidate data. Pilot readiness is represented as an
+  onboarding/configuration task and all executable acceptance paths use fictional `.invalid`
+  identities.
+
+## Quality gates per coherent slice
+
+```text
+ruff format --check app tests migrations
+ruff check app tests migrations
+mypy app tests
+pytest
+alembic upgrade head
+alembic check
+cd frontend && npm run lint && npm run typecheck && npm test && npm run build
+```
+
+Relevant focused tests run first after each edit; the full set runs before every milestone commit.

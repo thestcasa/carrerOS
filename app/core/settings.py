@@ -13,6 +13,9 @@ class Settings:
     redis_url: str
     candidates_root: Path
     cors_origins: tuple[str, ...]
+    runtime_root: Path = Path.cwd() / "runtime"
+    auth_required: bool = False
+    local_token_secret: str | None = None
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -22,4 +25,7 @@ class Settings:
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             candidates_root=Path(os.getenv("CANDIDATES_ROOT", Path.cwd() / "candidates")),
             cors_origins=tuple(origin.strip() for origin in origins.split(",") if origin.strip()),
+            runtime_root=Path(os.getenv("RUNTIME_ROOT", Path.cwd() / "runtime")),
+            auth_required=os.getenv("AUTH_REQUIRED", "true").casefold() == "true",
+            local_token_secret=os.getenv("LOCAL_TOKEN_SECRET"),
         )

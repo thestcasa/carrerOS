@@ -17,12 +17,14 @@ class _HealthyServices:
         return HealthReport(status="ok", api=available, database=available, redis=available)
 
 
-def _client(candidates_root: Path) -> TestClient:
+def _client(candidates_root: Path, *, auth_required: bool = False) -> TestClient:
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://unused:6379/0",
         candidates_root=candidates_root,
         cors_origins=("http://localhost:3000",),
+        auth_required=auth_required,
+        local_token_secret="fictional-local-token-secret-at-least-32-bytes",
     )
     return TestClient(
         create_app(
@@ -118,3 +120,36 @@ def test_missing_candidate_returns_stable_error(copied_candidates_root: Path) ->
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "candidate_not_found"
+
+
+def test_authenticated_onboarding_refreshes_candidate_ownership(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root, auth_required=True) as client:
+        login = client.post("/api/auth/local-session", json={})
+        tokens = login.json()
+        headers = {
+            "Authorization": f"Bearer {tokens['session_token']}",
+            "X-CSRF-Token": tokens["csrf_token"],
+        }
+        created = client.post(
+            "/api/candidates",
+            headers=headers,
+            json={"candidate_id": "fictional_friend", "display_name": "Fictional Friend"},
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["readiness"]["status"] == "not_ready"
+        assert (
+            client.get(
+                "/api/candidates/fictional_friend",
+                headers={"Authorization": f"Bearer {tokens['session_token']}"},
+            ).status_code
+            == 403
+        )
+        refreshed = client.post("/api/auth/local-session", json={}).json()
+        detail = client.get(
+            "/api/candidates/fictional_friend",
+            headers={"Authorization": f"Bearer {refreshed['session_token']}"},
+        )
+        assert detail.status_code == 200
+        assert detail.json()["config"]["identity"]["email"].endswith(".invalid")

@@ -1,16 +1,42 @@
 from __future__ import annotations
 
-from typing import Annotated, cast
+import json
+import secrets
+from collections.abc import Iterator
+from datetime import timedelta
+from typing import Annotated, Any, cast
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
+from app.applications import (
+    AnalyticsOverview,
+    ApplicationConflictError,
+    ApplicationDetail,
+    ApplicationNotFoundError,
+    ApplicationService,
+    ApplicationSummary,
+    ArtifactView,
+    AuthorizationView,
+    DryRunCommand,
+    HumanActionView,
+    SecurityEventView,
+    SettingsUpdate,
+    SettingsView,
+    SyntheticSubmissionRequest,
+)
+from app.applications.contracts import EventView, SubmissionResultView
+from app.auth.tokens import LocalTokenService, TokenValidationError
 from app.candidates.loader import CandidateConfigError
 from app.candidates.readiness import ReadinessReport
 from app.candidates.service import (
+    CandidateCreateRequest,
     CandidateDetail,
+    CandidateImportRequest,
     CandidateNotFoundError,
     CandidateSectionUpdate,
     CandidateService,
@@ -21,8 +47,16 @@ from app.candidates.service import (
 )
 from app.candidates.snapshot import CandidateSnapshot
 from app.core.settings import Settings
-from app.db import build_engine
+from app.db import build_engine, build_session_factory
 from app.health import HealthChecker, HealthProbe, HealthReport
+from app.job_service import (
+    DiscoveryRequest,
+    DiscoveryResult,
+    JobCommandConflictError,
+    JobNotFoundError,
+    JobService,
+    JobView,
+)
 
 
 def _candidate_service(request: Request) -> CandidateService:
@@ -33,8 +67,32 @@ def _health_checker(request: Request) -> HealthChecker:
     return cast(HealthChecker, request.app.state.health_checker)
 
 
+def _job_service(request: Request) -> JobService:
+    return cast(JobService, request.app.state.job_service)
+
+
+def _application_service(request: Request) -> ApplicationService:
+    return cast(ApplicationService, request.app.state.application_service)
+
+
 CandidateServiceDependency = Annotated[CandidateService, Depends(_candidate_service)]
 HealthCheckerDependency = Annotated[HealthChecker, Depends(_health_checker)]
+JobServiceDependency = Annotated[JobService, Depends(_job_service)]
+ApplicationServiceDependency = Annotated[ApplicationService, Depends(_application_service)]
+
+
+class _LocalSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str | None = None
+
+
+class _LocalSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_token: str
+    csrf_token: str
+    candidate_ids: tuple[str, ...]
 
 
 def _error(code: str, message: str, status_code: int) -> JSONResponse:
@@ -50,6 +108,12 @@ def _candidate_router() -> APIRouter:
     @router.get("", response_model=tuple[CandidateSummary, ...])
     def list_candidates(service: CandidateServiceDependency) -> tuple[CandidateSummary, ...]:
         return service.list_candidates()
+
+    @router.post("", response_model=CandidateDetail)
+    def create_candidate(
+        candidate: CandidateCreateRequest, service: CandidateServiceDependency
+    ) -> CandidateDetail:
+        return service.create(candidate)
 
     @router.get("/{candidate_id}", response_model=CandidateDetail)
     def get_candidate(candidate_id: str, service: CandidateServiceDependency) -> CandidateDetail:
@@ -81,6 +145,284 @@ def _candidate_router() -> APIRouter:
     ) -> CandidateSnapshot:
         return service.snapshot(candidate_id)
 
+    @router.post("/{candidate_id}/import", response_model=CandidateUpdateResult)
+    def import_candidate_section(
+        candidate_id: str,
+        imported: CandidateImportRequest,
+        service: CandidateServiceDependency,
+    ) -> CandidateUpdateResult:
+        return service.update_section(
+            candidate_id,
+            CandidateSectionUpdate(section=imported.section, data=imported.data),
+        )
+
+    @router.get("/{candidate_id}/export", response_model=dict[str, Any])
+    def export_candidate(candidate_id: str, service: CandidateServiceDependency) -> dict[str, Any]:
+        return service.export(candidate_id)
+
+    return router
+
+
+def _job_router() -> APIRouter:
+    router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+    @router.post("/discover", response_model=DiscoveryResult)
+    def discover_jobs(
+        request: DiscoveryRequest,
+        service: JobServiceDependency,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> DiscoveryResult:
+        return service.discover(request, idempotency_key)
+
+    @router.get("", response_model=tuple[JobView, ...])
+    def list_jobs(
+        service: JobServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[JobView, ...]:
+        return service.list_jobs(candidate_id)
+
+    @router.get("/{job_id}", response_model=JobView)
+    def get_job(
+        job_id: UUID,
+        service: JobServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> JobView:
+        return service.get_job(candidate_id, job_id)
+
+    @router.post("/{job_id}/analyze", response_model=JobView)
+    def analyze_job(
+        job_id: UUID,
+        service: JobServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> JobView:
+        return service.analyze(candidate_id, job_id, idempotency_key)
+
+    @router.post("/{job_id}/generate-materials", response_model=ApplicationDetail)
+    def generate_materials(
+        job_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> ApplicationDetail:
+        return service.generate_materials(candidate_id, job_id, idempotency_key)
+
+    for command_name in ("verify", "shortlist", "skip"):
+
+        def run_command(
+            job_id: UUID,
+            service: JobServiceDependency,
+            candidate_id: Annotated[str, Query(min_length=1)],
+            idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+            _command: str = command_name,
+        ) -> JobView:
+            return service.command(candidate_id, job_id, cast(Any, _command), idempotency_key)
+
+        router.add_api_route(
+            f"/{{job_id}}/{command_name}", run_command, methods=["POST"], response_model=JobView
+        )
+
+    return router
+
+
+def _application_router() -> APIRouter:
+    router = APIRouter(prefix="/api/applications", tags=["applications"])
+
+    @router.get("", response_model=tuple[ApplicationSummary, ...])
+    def list_applications(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[ApplicationSummary, ...]:
+        return service.list_applications(candidate_id)
+
+    @router.get("/{application_id}", response_model=ApplicationDetail)
+    def get_application(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> ApplicationDetail:
+        return service.get_application(candidate_id, application_id)
+
+    @router.post("/{application_id}/approve-materials", response_model=ApplicationDetail)
+    def approve_materials(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> ApplicationDetail:
+        return service.approve_materials(candidate_id, application_id, idempotency_key)
+
+    @router.post("/{application_id}/start", response_model=ApplicationDetail)
+    def start_application(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> ApplicationDetail:
+        return service.start(candidate_id, application_id, idempotency_key)
+
+    @router.post("/{application_id}/dry-run", response_model=ApplicationDetail)
+    def dry_run_application(
+        application_id: UUID,
+        command: DryRunCommand,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> ApplicationDetail:
+        return service.dry_run(candidate_id, application_id, command, idempotency_key)
+
+    @router.post("/{application_id}/authorize", response_model=AuthorizationView)
+    def authorize_application(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> AuthorizationView:
+        return service.authorize(candidate_id, application_id, idempotency_key)
+
+    @router.post("/{application_id}/submit", response_model=SubmissionResultView)
+    def submit_application(
+        application_id: UUID,
+        submission: SyntheticSubmissionRequest,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> SubmissionResultView:
+        return service.submit_synthetic(candidate_id, application_id, submission, idempotency_key)
+
+    @router.post("/{application_id}/withdraw", response_model=ApplicationDetail)
+    def withdraw_application(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> ApplicationDetail:
+        return service.withdraw(candidate_id, application_id, idempotency_key)
+
+    @router.get("/{application_id}/archive", response_model=tuple[ArtifactView, ...])
+    @router.get("/{application_id}/artifacts", response_model=tuple[ArtifactView, ...])
+    def application_artifacts(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[ArtifactView, ...]:
+        return service.list_artifacts(candidate_id, application_id)
+
+    @router.get("/{application_id}/events", response_model=tuple[EventView, ...])
+    def application_events(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[EventView, ...]:
+        return service.get_application(candidate_id, application_id).events
+
+    @router.get("/{application_id}/artifacts/{artifact_id}")
+    def download_artifact(
+        application_id: UUID,
+        artifact_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> FileResponse:
+        path = service.artifact_path(candidate_id, application_id, artifact_id)
+        return FileResponse(path, filename=path.name)
+
+    return router
+
+
+def _operations_router() -> APIRouter:
+    router = APIRouter(prefix="/api", tags=["operations"])
+
+    @router.get("/human-actions", response_model=tuple[HumanActionView, ...])
+    def human_actions(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[HumanActionView, ...]:
+        return service.list_human_actions(candidate_id)
+
+    @router.post("/human-actions/{action_id}/open-session", response_model=HumanActionView)
+    def open_human_session(
+        action_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> HumanActionView:
+        actions = service.list_human_actions(candidate_id)
+        match = next((item for item in actions if item.action_id == action_id), None)
+        if match is None:
+            raise ApplicationNotFoundError("human action not found")
+        return match
+
+    @router.post("/human-actions/{action_id}/complete", response_model=HumanActionView)
+    def complete_human_action(
+        action_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> HumanActionView:
+        return service.complete_human_action(candidate_id, action_id, idempotency_key)
+
+    @router.post("/human-actions/{action_id}/cancel", response_model=HumanActionView)
+    def cancel_human_action(
+        action_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> HumanActionView:
+        return service.complete_human_action(candidate_id, action_id, idempotency_key, cancel=True)
+
+    @router.get("/security-events", response_model=tuple[SecurityEventView, ...])
+    def security_events(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> tuple[SecurityEventView, ...]:
+        return service.list_security_events(candidate_id)
+
+    @router.post("/security-events/{event_id}/resolve", response_model=SecurityEventView)
+    def resolve_security_event(
+        event_id: UUID,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> SecurityEventView:
+        return service.resolve_security_event(candidate_id, event_id)
+
+    @router.get("/settings", response_model=SettingsView)
+    def settings(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> SettingsView:
+        return service.get_settings(candidate_id)
+
+    @router.patch("/settings", response_model=SettingsView)
+    def update_settings(
+        update: SettingsUpdate, service: ApplicationServiceDependency
+    ) -> SettingsView:
+        return service.update_settings(update)
+
+    @router.post("/automation/emergency-stop", response_model=SettingsView)
+    def emergency_stop(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> SettingsView:
+        return service.emergency_stop(candidate_id)
+
+    @router.get("/analytics/overview", response_model=AnalyticsOverview)
+    def analytics(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> AnalyticsOverview:
+        return service.analytics(candidate_id)
+
+    @router.get("/events/stream")
+    def event_stream(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> StreamingResponse:
+        overview = service.analytics(candidate_id)
+
+        def events() -> Iterator[str]:
+            yield f"event: snapshot\ndata: {json.dumps(overview.model_dump(mode='json'))}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
     return router
 
 
@@ -88,27 +430,147 @@ def create_app(
     *,
     settings: Settings | None = None,
     candidate_service: CandidateService | None = None,
+    job_service: JobService | None = None,
+    application_service: ApplicationService | None = None,
     health_checker: HealthChecker | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
     application = FastAPI(title="Career OS", version="0.2.0")
-    application.state.candidate_service = candidate_service or CandidateService(
+    resolved_candidate_service = candidate_service or CandidateService(
         resolved_settings.candidates_root
     )
-    application.state.health_checker = health_checker or HealthProbe(
-        build_engine(resolved_settings.database_url), resolved_settings.redis_url
+    engine = build_engine(resolved_settings.database_url)
+    session_factory = build_session_factory(engine)
+    application.state.candidate_service = resolved_candidate_service
+    application.state.job_service = job_service or JobService(
+        session_factory, resolved_candidate_service
     )
+    application.state.application_service = application_service or ApplicationService(
+        session_factory, resolved_candidate_service, resolved_settings.runtime_root
+    )
+    application.state.health_checker = health_checker or HealthProbe(
+        engine, resolved_settings.redis_url
+    )
+    secret = (
+        resolved_settings.local_token_secret.encode("utf-8")
+        if resolved_settings.local_token_secret
+        else secrets.token_bytes(32)
+    )
+    if len(secret) < 32:
+        raise ValueError("LOCAL_TOKEN_SECRET must contain at least 32 bytes")
+    token_service = LocalTokenService(secret)
+    application.state.token_service = token_service
+    application.state.auth_required = resolved_settings.auth_required
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["Content-Type", "Idempotency-Key"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-CSRF-Token",
+        ],
     )
+
+    @application.middleware("http")
+    async def candidate_authorization(request: Request, call_next: Any) -> Any:
+        if not application.state.auth_required or request.url.path in {
+            "/health",
+            "/api/health",
+            "/api/auth/local-session",
+            "/docs",
+            "/openapi.json",
+        }:
+            return await call_next(request)
+        authorization = request.headers.get("Authorization", "")
+        if not authorization.startswith("Bearer "):
+            return _error("authentication_required", "A local session token is required.", 401)
+        try:
+            claims = token_service.verify_session(authorization.removeprefix("Bearer "))
+            is_candidate_creation = (
+                request.method == "POST" and request.url.path.rstrip("/") == "/api/candidates"
+            )
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                csrf_token = request.headers.get("X-CSRF-Token")
+                if not csrf_token:
+                    return _error("csrf_required", "A CSRF token is required.", 403)
+                token_service.verify_csrf(csrf_token, session_id=claims.session_id)
+            candidate_ids: set[str] = set(request.query_params.getlist("candidate_id"))
+            parts = request.url.path.strip("/").split("/")
+            if len(parts) >= 3 and parts[:2] == ["api", "candidates"]:
+                candidate_ids.add(parts[2])
+            if request.method not in {"GET", "HEAD", "OPTIONS"} and not is_candidate_creation:
+                body = await request.body()
+                if body:
+                    try:
+                        payload = json.loads(body)
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict) and isinstance(payload.get("candidate_id"), str):
+                        candidate_ids.add(payload["candidate_id"])
+            for candidate_id in candidate_ids:
+                token_service.require_candidate(claims, candidate_id)
+            request.state.session_claims = claims
+        except (PermissionError, TokenValidationError) as exc:
+            return _error("authorization_denied", str(exc), 403)
+        return await call_next(request)
+
+    @application.post(
+        "/api/auth/local-session",
+        response_model=_LocalSessionResponse,
+        tags=["authentication"],
+    )
+    def local_session(request: _LocalSessionRequest) -> _LocalSessionResponse:
+        available = tuple(
+            item.candidate_id for item in resolved_candidate_service.list_candidates()
+        )
+        candidate_ids = (
+            (request.candidate_id,)
+            if request.candidate_id is not None and request.candidate_id in available
+            else available
+        )
+        if request.candidate_id is not None and request.candidate_id not in available:
+            raise CandidateNotFoundError(f"candidate not found: {request.candidate_id}")
+        session_id = secrets.token_urlsafe(18)
+        return _LocalSessionResponse(
+            session_token=token_service.issue_session(
+                session_id=session_id,
+                user_id="local-user",
+                candidate_ids=candidate_ids,
+                lifetime=timedelta(hours=8),
+            ),
+            csrf_token=token_service.issue_csrf(
+                session_id=session_id,
+                lifetime=timedelta(hours=8),
+            ),
+            candidate_ids=candidate_ids,
+        )
 
     @application.exception_handler(CandidateNotFoundError)
     async def candidate_not_found(_request: Request, exc: CandidateNotFoundError) -> JSONResponse:
         return _error("candidate_not_found", str(exc), 404)
+
+    @application.exception_handler(JobNotFoundError)
+    async def job_not_found(_request: Request, exc: JobNotFoundError) -> JSONResponse:
+        return _error("job_not_found", str(exc), 404)
+
+    @application.exception_handler(JobCommandConflictError)
+    async def job_command_conflict(_request: Request, exc: JobCommandConflictError) -> JSONResponse:
+        return _error("idempotency_conflict", str(exc), 409)
+
+    @application.exception_handler(ApplicationNotFoundError)
+    async def application_not_found(
+        _request: Request, exc: ApplicationNotFoundError
+    ) -> JSONResponse:
+        return _error("application_not_found", str(exc), 404)
+
+    @application.exception_handler(ApplicationConflictError)
+    async def application_conflict(
+        _request: Request, exc: ApplicationConflictError
+    ) -> JSONResponse:
+        return _error("application_conflict", str(exc), 409)
 
     @application.exception_handler(CandidateUpdateError)
     async def candidate_update_failed(_request: Request, exc: CandidateUpdateError) -> JSONResponse:
@@ -137,6 +599,9 @@ def create_app(
         return checker.check()
 
     application.include_router(_candidate_router())
+    application.include_router(_job_router())
+    application.include_router(_application_router())
+    application.include_router(_operations_router())
     return application
 
 

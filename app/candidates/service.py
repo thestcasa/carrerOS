@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -13,26 +14,63 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.models import (
+    ApprovedAnswers,
     Biography,
     CandidateConfig,
     CareerStrategy,
+    CompanyRules,
+    CoverLetterRules,
+    CVRules,
+    Education,
+    Experience,
     Identity,
+    Languages,
     LegalStatus,
     Preferences,
+    Projects,
+    RoleRules,
+    ScoringRules,
+    Skills,
 )
 from app.candidates.readiness import ReadinessReport, assess_readiness
 from app.candidates.snapshot import CandidateSnapshot, build_candidate_snapshot
 
 CandidateSection = Literal[
-    "identity", "biography", "career_strategy", "preferences", "legal_status"
+    "identity",
+    "biography",
+    "education",
+    "experience",
+    "projects",
+    "skills",
+    "languages",
+    "career_strategy",
+    "scoring_rules",
+    "preferences",
+    "legal_status",
+    "approved_answers",
+    "cv_rules",
+    "cover_letter_rules",
+    "companies",
+    "roles",
 ]
 
 _SECTION_MODELS: dict[CandidateSection, type[BaseModel]] = {
     "identity": Identity,
     "biography": Biography,
+    "education": Education,
+    "experience": Experience,
+    "projects": Projects,
+    "skills": Skills,
+    "languages": Languages,
     "career_strategy": CareerStrategy,
+    "scoring_rules": ScoringRules,
     "preferences": Preferences,
     "legal_status": LegalStatus,
+    "approved_answers": ApprovedAnswers,
+    "cv_rules": CVRules,
+    "cover_letter_rules": CoverLetterRules,
+    "companies": CompanyRules,
+    "roles": RoleRules,
 }
 
 
@@ -90,6 +128,20 @@ class CandidateValidationReport(BaseModel):
     issues: tuple[dict[str, Any], ...]
 
 
+class CandidateCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str
+    display_name: str
+
+
+class CandidateImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: CandidateSection
+    data: dict[str, Any]
+
+
 def _next_patch_version(version: str) -> str:
     major, minor, patch = (int(part) for part in version.split("."))
     return f"{major}.{minor}.{patch + 1}"
@@ -100,6 +152,87 @@ class CandidateService:
         self._root = candidates_root.resolve()
         self._loader = CandidateLoader(self._root)
         self._write_lock = threading.RLock()
+
+    def create(self, request: CandidateCreateRequest) -> CandidateDetail:
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", request.candidate_id) is None:
+            raise CandidateUpdateError("candidate_id must be a safe lowercase identifier")
+        if not request.display_name.strip():
+            raise CandidateUpdateError("display_name must not be empty")
+        source = self._root / "example_candidate"
+        destination = self._root / request.candidate_id
+        if destination.exists():
+            raise CandidateUpdateError("candidate already exists")
+        if not source.is_dir():
+            raise CandidateUpdateError("fictional onboarding template is unavailable")
+        shutil.copytree(source, destination, ignore=shutil.ignore_patterns(".history"))
+        try:
+            profile_path = destination / "profile.yaml"
+            profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+            profile["candidate_id"] = request.candidate_id
+            profile["display_name"] = request.display_name.strip()
+            profile["profile_version"] = "0.1.0"
+            profile["workflow"].update(
+                {
+                    "discovery_enabled": False,
+                    "automatic_submission_enabled": False,
+                    "email_tracking_enabled": False,
+                }
+            )
+            profile["validation"] = {
+                "profile_approved": False,
+                "legal_status_approved": False,
+                "automatic_answers_approved": False,
+                "cv_templates_approved": False,
+            }
+            profile_path.write_text(
+                yaml.safe_dump(profile, sort_keys=False, allow_unicode=True), encoding="utf-8"
+            )
+            identity_path = destination / "identity.json"
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+            identity.update(
+                {
+                    "candidate_id": request.candidate_id,
+                    "full_name": request.display_name.strip(),
+                    "email": f"onboarding@{request.candidate_id}.invalid",
+                    "phone": "UNAPPROVED",
+                    "city": "UNAPPROVED",
+                    "country_code": "ZZ",
+                }
+            )
+            identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+            biography_path = destination / "biography.json"
+            biography_path.write_text(
+                json.dumps(
+                    {
+                        "summary": "Unapproved onboarding draft; replace with candidate facts.",
+                        "highlights": ["Unapproved draft evidence"],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            legal_path = destination / "legal_status.json"
+            legal_path.write_text(
+                json.dumps(
+                    {
+                        "jurisdictions": ["UNAPPROVED"],
+                        "work_authorization_confirmed": False,
+                        "requires_sponsorship": False,
+                        "approved_for_automated_use": False,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return self.get_detail(request.candidate_id)
+        except Exception:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
+
+    def export(self, candidate_id: str) -> dict[str, Any]:
+        return self.get_config(candidate_id).model_dump(mode="json")
 
     def list_candidates(self) -> tuple[CandidateSummary, ...]:
         if not self._root.is_dir():

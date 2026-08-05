@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TypedDict
+from uuid import uuid4
 
+import pytest
+
+from app.agents.contracts import (
+    DocumentGenerationRequest,
+    DocumentGenerationResponse,
+    IndependentReviewRequest,
+    IndependentReviewResponse,
+    JobAnalysisRequest,
+    JobAnalysisResponse,
+)
 from app.agents.fakes import (
     FakeDocumentGenerationAgent,
     FakeIndependentReviewAgent,
     FakeJobAnalysisAgent,
 )
 from app.domain.enums import DocumentKind, ReviewDecision
-from app.orchestrator import ApplicationOrchestrator
+from app.orchestrator import AgentResponseCorrelationError, ApplicationOrchestrator
 
 
 class _PreparationArguments(TypedDict):
@@ -24,13 +36,38 @@ class _PreparationArguments(TypedDict):
     requested_documents: tuple[DocumentKind, ...]
 
 
-def test_fake_agents_are_deterministic_and_independent() -> None:
-    orchestrator = ApplicationOrchestrator(
-        FakeJobAnalysisAgent(score=88),
-        FakeDocumentGenerationAgent(),
-        FakeIndependentReviewAgent(),
-    )
-    arguments: _PreparationArguments = {
+@dataclass(frozen=True, slots=True)
+class _MismatchedAnalysisAgent:
+    field: str
+
+    def analyze(self, request: JobAnalysisRequest) -> JobAnalysisResponse:
+        response = FakeJobAnalysisAgent().analyze(request)
+        value = uuid4() if self.field == "request_id" else "candidate_beta"
+        return response.model_copy(update={self.field: value})
+
+
+@dataclass(frozen=True, slots=True)
+class _MismatchedDocumentAgent:
+    field: str
+
+    def generate(self, request: DocumentGenerationRequest) -> DocumentGenerationResponse:
+        response = FakeDocumentGenerationAgent().generate(request)
+        value = uuid4() if self.field == "request_id" else "candidate_beta"
+        return response.model_copy(update={self.field: value})
+
+
+@dataclass(frozen=True, slots=True)
+class _MismatchedReviewAgent:
+    field: str
+
+    def review(self, request: IndependentReviewRequest) -> IndependentReviewResponse:
+        response = FakeIndependentReviewAgent().review(request)
+        value = uuid4() if self.field == "request_id" else "candidate_beta"
+        return response.model_copy(update={self.field: value})
+
+
+def _preparation_arguments() -> _PreparationArguments:
+    return {
         "candidate_id": "candidate_alpha",
         "candidate_snapshot_json": '{"candidate_id":"candidate_alpha"}',
         "job_snapshot_json": '{"job_id":"fictional-job-1"}',
@@ -42,6 +79,15 @@ def test_fake_agents_are_deterministic_and_independent() -> None:
         "scoring_weights": (("skills", 1.0),),
         "requested_documents": (DocumentKind.CV,),
     }
+
+
+def test_fake_agents_are_deterministic_and_independent() -> None:
+    orchestrator = ApplicationOrchestrator(
+        FakeJobAnalysisAgent(score=88),
+        FakeDocumentGenerationAgent(),
+        FakeIndependentReviewAgent(),
+    )
+    arguments = _preparation_arguments()
 
     first = orchestrator.prepare(**arguments)
     second = orchestrator.prepare(**arguments)
@@ -73,3 +119,21 @@ def test_independent_review_failure_is_explicit() -> None:
 
     assert result.review.semantic_review_passed is False
     assert result.review.decision is ReviewDecision.FAIL
+
+
+@pytest.mark.parametrize("field", ["request_id", "candidate_id"])
+@pytest.mark.parametrize("stage", ["analysis", "generation", "review"])
+def test_agent_response_must_match_request_and_candidate(stage: str, field: str) -> None:
+    analysis_agent = (
+        _MismatchedAnalysisAgent(field) if stage == "analysis" else FakeJobAnalysisAgent()
+    )
+    document_agent = (
+        _MismatchedDocumentAgent(field) if stage == "generation" else FakeDocumentGenerationAgent()
+    )
+    review_agent = (
+        _MismatchedReviewAgent(field) if stage == "review" else FakeIndependentReviewAgent()
+    )
+    orchestrator = ApplicationOrchestrator(analysis_agent, document_agent, review_agent)
+
+    with pytest.raises(AgentResponseCorrelationError, match=field):
+        orchestrator.prepare(**_preparation_arguments())

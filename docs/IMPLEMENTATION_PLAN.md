@@ -28,12 +28,39 @@ jobs inbox; and a job-detail view with evidence, score, blockers, salary, and so
 verification. It also introduces PostgreSQL repositories and durable scheduling. It does
 not add browser automation or live submission.
 
-## Later milestones
+### Milestone 2 progress
 
-- Job ingestion and normalization with provenance and deduplication.
-- Human review UI and explicit approval workflows.
-- Restricted browser execution that consumes gate authorizations and stops at CAPTCHA/anti-bot challenges.
-- Observability, retention controls, security hardening, and deployment automation.
+- [x] Strict normalized discovery contracts and fixture-backed Greenhouse, Lever, and Ashby
+  payload adapters.
+- [x] HTTPS/domain allowlisting, prompt-injection scanning, semantic fingerprints, and
+  candidate-scoped duplicate hashes.
+- [x] Append-only job versions and expanded normalized job persistence with Alembic migration.
+- [x] Candidate-configured deterministic classification, scoring, hard blockers, and evidence.
+- [x] Candidate-aware discovery/list/detail/analyze service and initial jobs inbox/detail UI.
+- [x] Persist job-command idempotency receipts and candidate inbox decisions.
+- [x] Add verification, shortlist, skip, and discovery controls/API actions.
+- [x] Add worker/scheduler process boundaries and Redis heartbeat coordination.
+- [x] Add durable discovery receipts, persisted injection events, and passing API/frontend
+  contract coverage under the available Python 3.14 runtime.
+
+## Milestone 3 and later
+
+- [x] Deterministic approved-fact generation, provenance, validation/review, and immutable draft
+  artifact backend foundation.
+- [x] Persist material metadata through the application API and complete preview/version UI.
+- [x] Synthetic restricted browser dry-run contracts that stop at CAPTCHA/OTP and cannot click.
+- [x] Persist synthetic browser sessions/screenshots/human actions and complete queue/resume UI.
+- [x] Add synthetic one-time submission authorization consumption, emergency stop, rate limits,
+  autonomy guard, backend confirmation truthfulness, notifications, digest, and analytics.
+- [x] Add provider-neutral correspondence classification and interview-package foundations.
+- [x] Add signed local sessions/artifacts, candidate ownership, CSRF, administrative audit, and
+  export/deletion planning foundations.
+- [x] Integrate materials, synthetic application workflow, artifacts, human actions, security,
+  settings, analytics, local auth, and the primary required web routes.
+- [ ] Complete the Playwright fixture-server worker, persistent workflow queue, correspondence
+  persistence/UI, notification delivery, retention/deletion execution, and hosted security.
+- [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
+  external runtimes are available.
 
 ## Acceptance criteria for Milestone 1
 

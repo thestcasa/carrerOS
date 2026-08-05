@@ -77,6 +77,32 @@ def test_submission_is_denied_after_semantic_review_failure() -> None:
     assert "semantic_review_failed_or_missing" in decision.reasons
 
 
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"duplicate_application": True}, "duplicate_application_detected_or_missing"),
+        ({"duplicate_application": None}, "duplicate_application_detected_or_missing"),
+        ({"captcha_pending": True}, "captcha_pending_or_missing"),
+        ({"captcha_pending": None}, "captcha_pending_or_missing"),
+        ({"unsupported_claims_count": 1}, "unsupported_claims_present"),
+        ({"unsupported_claims_count": None}, "unsupported_claims_count_missing"),
+        (
+            {"unresolved_sensitive_questions_count": 1},
+            "unresolved_sensitive_questions_present",
+        ),
+        ({"unresolved_sensitive_questions_count": None}, "sensitive_question_count_missing"),
+    ],
+)
+def test_submission_is_denied_for_zero_tolerance_safety_failures(
+    override: dict[str, object], reason: str
+) -> None:
+    decision = SubmissionGate().evaluate(_passing_input(**override))
+
+    assert decision.permitted is False
+    assert decision.authorization is None
+    assert reason in decision.reasons
+
+
 def test_gate_issues_bound_short_lived_authorization_only_on_success() -> None:
     gate_input = _passing_input()
     decision = SubmissionGate(authorization_ttl=timedelta(minutes=2)).evaluate(gate_input)
@@ -95,6 +121,7 @@ def test_authorization_cannot_be_constructed_outside_gate() -> None:
             issuer=object(),
             candidate_id="candidate_alpha",
             application_id=uuid4(),
+            workflow_state=ApplicationState.READY_TO_SUBMIT,
             issued_at=now,
             expires_at=now + timedelta(minutes=1),
         )
