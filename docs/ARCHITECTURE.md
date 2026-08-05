@@ -187,6 +187,17 @@ the final page without a submit operation. CAPTCHA and OTP markers persist a vis
 screenshot, page snapshot, and same-session reference. Completion resumes that recorded session
 before final gate validation. No live final click exists in this build.
 
+Synthetic confirmation is produced by a backend-owned executor dependency; clients provide only
+the one-time authorization and acknowledge the synthetic fixture. Authorization consumption uses
+a conditional database update so concurrent workers cannot both claim the same record, while a
+matching idempotency-key retry returns the persisted outcome.
+
+Authorization runs a no-write gate preflight before sealing artifacts. Required CV and cover-letter
+sources fail closed instead of being skipped. A successful execution never rewrites its pre-submit
+archive: it creates a separately hashed confirmed v2 archive containing backend confirmation HTML,
+a screenshot, a final receipt, a refreshed audit, and a final manifest. Both versions remain
+recursively verifiable.
+
 ## Local authorization
 
 Runtime defaults require a signed local bearer session plus CSRF for mutations. Candidate IDs from

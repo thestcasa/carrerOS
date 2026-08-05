@@ -93,6 +93,11 @@ Status: synthetic-only submission, archives, one-time authorization, primary ope
 both frontend safety regression tests, notifications, transactional rate limits, durable task
 scheduling, and administrative audit are complete.
 
+Hardening update: confirmation evidence is backend-owned, authorization claiming is an atomic
+conditional update with durable replay, denied gate preflights do not seal orphan archives, exact
+required submitted documents fail closed, and successful runs create a copy-on-write confirmed v2
+archive while preserving the pre-submit v1 archive.
+
 ### Phase 5 — Milestones 7 and 8: correspondence and hardening
 
 1. Add provider-neutral correspondence ingestion/classification with deterministic Gmail

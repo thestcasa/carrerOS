@@ -4,7 +4,7 @@
 
 - Build status: **IN PROGRESS**
 - Active phase: candidate onboarding import, browser fixture hardening, and final verification
-- Branch baseline: `autonomous-build`; latest committed baseline was `5cbb3cc`
+- Branch baseline: `autonomous-build`; latest completed milestone commit is `0faa8f7`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
 
@@ -44,10 +44,15 @@
 - Fictional onboarding creates an empty unapproved evidence draft rather than inheriting approved
   facts from the example candidate. Readiness checks fact approvals, sensitive answers, document
   rules, availability, legal verification, and configured optional domains.
+- Synthetic confirmation is backend-owned rather than caller-asserted. Authorization consumption
+  is claimed atomically and matching command retries replay the durable outcome. Confirmed
+  applications create a verified copy-on-write v2 archive with confirmation HTML, screenshot,
+  receipt, final manifest, and refreshed audit while preserving the pre-submit v1 archive. Gate
+  denials occur before archive sealing and missing exact submitted documents fail closed.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **105 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **108 pytest tests pass** on Python
   3.14.4 (one upstream Starlette `httpx` deprecation warning).
   Python 3.14.4 (one upstream Starlette `httpx` deprecation warning).
 - Frontend: ESLint, strict TypeScript, **15 Vitest tests**, and the Next.js production build pass

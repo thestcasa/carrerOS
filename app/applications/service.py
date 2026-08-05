@@ -3,13 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications.contracts import (
@@ -109,6 +109,7 @@ class ApplicationService:
         session_factory: sessionmaker[Session],
         candidate_service: CandidateService,
         runtime_root: Path,
+        synthetic_confirmation: Callable[[str, UUID], str | None] | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
@@ -119,6 +120,9 @@ class ApplicationService:
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
         self._consumer = AuthorizationConsumer(session_factory)
         self._correspondence = CorrespondenceService()
+        self._synthetic_confirmation = synthetic_confirmation or (
+            lambda _candidate_id, application_id: f"synthetic-confirmation-{application_id}"
+        )
 
     def list_applications(self, candidate_id: str) -> tuple[ApplicationSummary, ...]:
         self._candidates.get_config(candidate_id)
@@ -536,12 +540,6 @@ class ApplicationService:
             rate_limits_allowed = job is not None and self._rate_limits_allow(
                 session, candidate_id, job.company, settings, now
             )
-            if application.archive_uri is None:
-                application.archive_uri = str(
-                    self._create_archive(
-                        session, config, application, job, score, documents, answers
-                    )
-                )
             gate_input = SubmissionGateInput(
                 candidate_id=candidate_id,
                 application_id=application_id,
@@ -565,12 +563,12 @@ class ApplicationService:
                     str(item).startswith("language_incompatible")
                     for item in score.rationale.get("hard_blockers", [])
                 ),
-                availability_compatible=True,
+                availability_compatible=config.preferences.full_time_start is not None,
                 legal_status_approved=config.manifest.validation.legal_status_approved,
                 work_authorization_answer_approved=config.legal_status.approved_for_automated_use,
                 salary_policy_compatible=score is not None
                 and "salary_below_minimum" not in score.rationale.get("hard_blockers", []),
-                candidate_snapshot_valid=True,
+                candidate_snapshot_valid=config.manifest.validation.profile_approved,
                 cv_render_valid=any(
                     item.kind is DocumentKind.CV and item.validated for item in documents
                 ),
@@ -588,12 +586,12 @@ class ApplicationService:
                 target_domain_validated=job is not None and job.application_url is not None,
                 final_page_matches_job=browser_session is not None
                 and browser_session.status == "ready",
-                pre_submit_archive_created=application.archive_uri is not None,
+                pre_submit_archive_created=True,
                 rate_limits_allowed=rate_limits_allowed,
-                configuration_valid=True,
+                configuration_valid=self._candidates.readiness(candidate_id).status == "ready",
                 candidate_score=int(score.total_score) if score else None,
                 application_threshold=config.scoring_rules.application_threshold,
-                answers_complete=True,
+                answers_complete=bool(answers),
                 answers_supported=all(item.supported for item in answers),
                 documents_valid=bool(documents) and all(item.validated for item in documents),
                 semantic_review_passed=review.semantic_passed if review else False,
@@ -602,7 +600,22 @@ class ApplicationService:
                 human_review_required=True,
                 human_review_approved=application.state is ApplicationState.READY_TO_SUBMIT,
             )
-            decision = SubmissionGate(authorization_ttl=timedelta(minutes=5)).evaluate(gate_input)
+            gate = SubmissionGate(authorization_ttl=timedelta(minutes=5))
+            preflight = gate.evaluate(gate_input)
+            if preflight.authorization is None:
+                raise ApplicationConflictError(
+                    "submission gate denied: " + ", ".join(preflight.reasons)
+                )
+            if application.archive_uri is None:
+                application.archive_uri = str(
+                    self._create_archive(
+                        session, config, application, job, score, documents, answers
+                    )
+                )
+            archive_ready = self._archives.verify(Path(application.archive_uri))
+            decision = gate.evaluate(
+                gate_input.model_copy(update={"pre_submit_archive_created": archive_ready})
+            )
             if decision.authorization is None:
                 raise ApplicationConflictError(
                     "submission gate denied: " + ", ".join(decision.reasons)
@@ -639,6 +652,29 @@ class ApplicationService:
         idempotency_key: str,
     ) -> SubmissionResultView:
         with self._sessions() as lookup:
+            application = self._application(lookup, candidate_id, application_id)
+            replay = lookup.scalar(
+                select(ApplicationEvent).where(
+                    ApplicationEvent.candidate_id == candidate_id,
+                    ApplicationEvent.application_id == application_id,
+                    ApplicationEvent.idempotency_key.in_(
+                        (f"{idempotency_key}:confirmed", f"{idempotency_key}:unconfirmed")
+                    ),
+                )
+            )
+            if replay is not None:
+                if replay.payload.get("authorization_id") != str(request.authorization_id):
+                    raise ApplicationConflictError(
+                        "idempotency key was reused with another request"
+                    )
+                successful = replay.event_type == "SUBMISSION_CONFIRMED"
+                return SubmissionResultView(
+                    application_id=application_id,
+                    state=application.state,
+                    successful=successful,
+                    status="confirmed" if successful else "confirmation_missing",
+                    confirmation_reference=application.confirmation_reference,
+                )
             record = lookup.get(SubmissionAuthorizationRecord, request.authorization_id)
             if (
                 record is None
@@ -655,8 +691,18 @@ class ApplicationService:
             raise ApplicationConflictError("submission authorization is expired")
         with self._sessions.begin() as session:
             application = self._application(session, candidate_id, application_id)
-            live_record = session.get(SubmissionAuthorizationRecord, request.authorization_id)
-            if live_record is None or live_record.consumed_at is not None:
+            claimed = session.execute(
+                update(SubmissionAuthorizationRecord)
+                .where(
+                    SubmissionAuthorizationRecord.authorization_id == request.authorization_id,
+                    SubmissionAuthorizationRecord.candidate_id == candidate_id,
+                    SubmissionAuthorizationRecord.application_id == application_id,
+                    SubmissionAuthorizationRecord.consumed_at.is_(None),
+                )
+                .values(consumed_at=now)
+                .returning(SubmissionAuthorizationRecord.authorization_id)
+            ).scalar_one_or_none()
+            if claimed is None:
                 raise ApplicationConflictError("submission authorization was already consumed")
             if application.state is not ApplicationState.READY_TO_SUBMIT:
                 raise ApplicationConflictError("application is no longer ready to submit")
@@ -668,7 +714,6 @@ class ApplicationService:
                 session, candidate_id, job.company, settings, now
             ):
                 raise ApplicationConflictError("candidate application rate limit is active")
-            live_record.consumed_at = now
             self._transition(
                 session,
                 application,
@@ -685,8 +730,11 @@ class ApplicationService:
                 "SYNTHETIC_APPLICATION_SUBMITTED",
                 payload={"live_click": False},
             )
-            if request.backend_confirmation_detected:
-                application.confirmation_reference = request.confirmation_reference
+            confirmation_reference = self._synthetic_confirmation(candidate_id, application_id)
+            backend_confirmation_detected = confirmation_reference is not None
+            if backend_confirmation_detected:
+                assert confirmation_reference is not None
+                application.confirmation_reference = confirmation_reference
                 application.submitted_at = now
                 application.outcome = ApplicationOutcome.SUBMITTED
                 self._transition(
@@ -695,8 +743,75 @@ class ApplicationService:
                     ApplicationState.CONFIRMED,
                     f"{idempotency_key}:confirmed",
                     "SUBMISSION_CONFIRMED",
-                    payload={"confirmation_reference": request.confirmation_reference},
+                    payload={
+                        "confirmation_reference": confirmation_reference,
+                        "authorization_id": str(request.authorization_id),
+                    },
                 )
+                session.flush()
+                if application.archive_uri is None:
+                    raise ApplicationConflictError("pre-submit archive is missing")
+                events = session.scalars(
+                    select(ApplicationEvent)
+                    .where(
+                        ApplicationEvent.candidate_id == candidate_id,
+                        ApplicationEvent.application_id == application_id,
+                    )
+                    .order_by(ApplicationEvent.occurred_at, ApplicationEvent.id)
+                ).all()
+                pre_submit_archive = Path(application.archive_uri)
+                confirmed_archive = self._archives.finalize_confirmed(
+                    pre_submit_archive,
+                    confirmation_reference=confirmation_reference,
+                    submitted_at=now,
+                    event_log=[
+                        {
+                            "event_type": item.event_type,
+                            "occurred_at": item.occurred_at,
+                            "payload": item.payload,
+                        }
+                        for item in events
+                    ],
+                )
+                application.archive_uri = str(confirmed_archive)
+                confirmed_files = {
+                    "manifest.json": ("archive_manifest", 2, "application/json"),
+                    "submission/receipt.json": (
+                        "submission_receipt",
+                        2,
+                        "application/json",
+                    ),
+                    "submission/confirmation_screenshot.png": (
+                        "confirmation_screenshot",
+                        1,
+                        "image/png",
+                    ),
+                    "submission/confirmation.html": (
+                        "submission_confirmation",
+                        1,
+                        "text/html",
+                    ),
+                }
+                for relative_path, (kind, version, content_type) in confirmed_files.items():
+                    path = confirmed_archive / relative_path
+                    session.add(
+                        ApplicationArtifact(
+                            candidate_id=candidate_id,
+                            application_id=application_id,
+                            kind=kind,
+                            version=version,
+                            storage_uri=str(path),
+                            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                            content_type=content_type,
+                            immutable=True,
+                            artifact_metadata={
+                                "archive_uri": str(confirmed_archive),
+                                "pre_submit_archive_uri": str(pre_submit_archive),
+                                "relative_path": relative_path,
+                                "backend_confirmed": True,
+                            },
+                        )
+                    )
                 status = "confirmed"
             else:
                 self._transition(
@@ -705,12 +820,13 @@ class ApplicationService:
                     ApplicationState.FAILED_RETRYABLE,
                     f"{idempotency_key}:unconfirmed",
                     "SUBMISSION_CONFIRMATION_MISSING",
+                    payload={"authorization_id": str(request.authorization_id)},
                 )
                 status = "confirmation_missing"
         return SubmissionResultView(
             application_id=application_id,
             state=application.state,
-            successful=request.backend_confirmation_detected,
+            successful=backend_confirmation_detected,
             status=status,
             confirmation_reference=application.confirmation_reference,
         )
@@ -1327,9 +1443,16 @@ class ApplicationService:
                 ApplicationEvent.application_id == application.id,
             )
         ).all()
+        security_events = session.scalars(
+            select(SecurityEvent).where(
+                SecurityEvent.candidate_id == application.candidate_id,
+                SecurityEvent.application_id == application.id,
+            )
+        ).all()
         archive = self._archives.create(
             candidate_id=application.candidate_id,
             application_id=application.id,
+            recover_existing=True,
             data=ApplicationArchiveData(
                 candidate_snapshot=config.model_dump(mode="json"),
                 job_snapshot={
@@ -1374,6 +1497,28 @@ class ApplicationService:
                     }
                     for item in events
                 ],
+                security_event_log=[
+                    {
+                        "category": item.category,
+                        "severity": item.severity,
+                        "details": item.details,
+                        "resolved": item.resolved,
+                        "occurred_at": item.occurred_at,
+                    }
+                    for item in security_events
+                ],
+                error_log=[
+                    {
+                        "event_type": item.event_type,
+                        "occurred_at": item.occurred_at,
+                        "payload": item.payload,
+                    }
+                    for item in events
+                    if "FAILED" in item.event_type or "ERROR" in item.event_type
+                ],
+                required_document_kinds=(
+                    ("cv", "cover_letter") if config.cover_letter_rules.enabled else ("cv",)
+                ),
             ),
         )
         exposed_files = {

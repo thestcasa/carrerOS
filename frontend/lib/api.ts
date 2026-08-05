@@ -173,8 +173,8 @@ export const api = {
     request<ApplicationDetail>(`/api/applications/${encodeURIComponent(applicationId)}/dry-run?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ challenge }) }),
   authorize: (candidateId: string, applicationId: string, idempotencyKey: string) =>
     request<AuthorizationView>(`/api/applications/${encodeURIComponent(applicationId)}/authorize?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
-  submitSynthetic: (candidateId: string, applicationId: string, authorizationId: string, confirmed: boolean, confirmationReference: string | null, idempotencyKey: string) =>
-    request<SubmissionResultView>(`/api/applications/${encodeURIComponent(applicationId)}/submit?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId, synthetic_fixture_acknowledged: true, backend_confirmation_detected: confirmed, confirmation_reference: confirmationReference }) }),
+  submitSynthetic: (candidateId: string, applicationId: string, authorizationId: string, idempotencyKey: string) =>
+    request<SubmissionResultView>(`/api/applications/${encodeURIComponent(applicationId)}/submit?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId, synthetic_fixture_acknowledged: true }) }),
   artifacts: (candidateId: string, applicationId: string) =>
     request<ArtifactView[]>(`/api/applications/${encodeURIComponent(applicationId)}/artifacts?candidate_id=${encodeURIComponent(candidateId)}`),
   downloadArtifact: async (

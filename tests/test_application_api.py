@@ -39,7 +39,12 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
     sessions = build_session_factory(engine)
     candidates = CandidateService(candidates_root)
     jobs = JobService(sessions, candidates)
-    applications = ApplicationService(sessions, candidates, runtime_root)
+    applications = ApplicationService(
+        sessions,
+        candidates,
+        runtime_root,
+        synthetic_confirmation=lambda _candidate_id, _application_id: None,
+    )
     job_id = jobs.discover(
         DiscoveryRequest(
             candidate_id="example_candidate",
@@ -135,8 +140,6 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
             json={
                 "authorization_id": authorization.json()["authorization_id"],
                 "synthetic_fixture_acknowledged": True,
-                "backend_confirmation_detected": False,
-                "confirmation_reference": None,
             },
         )
         correspondence = client.post(

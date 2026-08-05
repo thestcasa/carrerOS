@@ -55,6 +55,9 @@ class ApplicationArchiveData(BaseModel):
     answers: Any
     validation_report: Any
     event_log: Any
+    security_event_log: Any = ()
+    error_log: Any = ()
+    required_document_kinds: tuple[str, ...] = ("cv",)
 
 
 _PNG_1PX = bytes.fromhex(
@@ -168,6 +171,7 @@ class ApplicationArchiveBuilder:
         candidate_id: str,
         application_id: UUID,
         data: ApplicationArchiveData,
+        recover_existing: bool = False,
     ) -> Path:
         if not candidate_id or any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in candidate_id
@@ -181,6 +185,16 @@ class ApplicationArchiveBuilder:
         final_path = candidate_root / _slug(company, "company") / f"{_slug(title, 'job')}__{job_id}"
         candidate_root.mkdir(parents=True, exist_ok=True)
         if final_path.exists():
+            if recover_existing and self.verify(final_path):
+                existing = ArchiveManifest.model_validate_json(
+                    (final_path / "manifest.json").read_text(encoding="utf-8")
+                )
+                if (
+                    existing.candidate_id == candidate_id
+                    and existing.application_id == application_id
+                    and existing.status == "ready_to_submit"
+                ):
+                    return final_path
             raise ArchiveExistsError(f"archive already exists: {final_path}")
 
         temp_path = Path(tempfile.mkdtemp(prefix=".building-", dir=candidate_root))
@@ -239,9 +253,13 @@ class ApplicationArchiveBuilder:
                     kind = str(reference.get("kind") or "")
                     storage_uri = reference.get("storage_uri")
                     if not isinstance(storage_uri, str):
+                        if kind in data.required_document_kinds:
+                            raise ValueError(f"required {kind} source path is missing")
                         continue
                     source = Path(storage_uri)
                     if not source.is_file():
+                        if kind in data.required_document_kinds:
+                            raise ValueError(f"required {kind} source file is missing")
                         continue
                     pdf = _text_pdf(source.read_text(encoding="utf-8"))
                     if kind == "cv":
@@ -252,6 +270,12 @@ class ApplicationArchiveBuilder:
                         continue
                     write(relative, pdf)
                     document_hashes[kind] = hashes[relative]
+            missing_documents = set(data.required_document_kinds) - set(document_hashes)
+            if missing_documents:
+                raise ValueError(
+                    "required submitted documents are missing: "
+                    + ", ".join(sorted(missing_documents))
+                )
 
             questions = (
                 [
@@ -284,8 +308,8 @@ class ApplicationArchiveBuilder:
                 ),
             )
             write("audit/events.jsonl", _jsonl_bytes(data.event_log))
-            write("audit/security_events.jsonl", b"")
-            write("audit/errors.jsonl", b"")
+            write("audit/security_events.jsonl", _jsonl_bytes(data.security_event_log))
+            write("audit/errors.jsonl", _jsonl_bytes(data.error_log))
             (temp_path / "correspondence").mkdir(parents=True, exist_ok=True)
 
             profile_version = None
@@ -346,6 +370,88 @@ class ApplicationArchiveBuilder:
                 shutil.rmtree(temp_path)
             raise
         return final_path
+
+    def finalize_confirmed(
+        self,
+        archive_path: Path,
+        *,
+        confirmation_reference: str,
+        submitted_at: datetime,
+        event_log: Any | None = None,
+    ) -> Path:
+        """Create a complete confirmed archive version without mutating the pre-submit archive."""
+        source = archive_path.resolve()
+        if not source.is_relative_to(self._root) or not self.verify(source):
+            raise ValueError("pre-submit archive is missing, unsafe, or failed verification")
+        if not confirmation_reference.strip():
+            raise ValueError("confirmation_reference must not be empty")
+        original = ArchiveManifest.model_validate_json(
+            (source / "manifest.json").read_text(encoding="utf-8")
+        )
+        destination = source.with_name(f"{source.name}__confirmed_v2")
+        if destination.exists():
+            if self.verify(destination):
+                existing = ArchiveManifest.model_validate_json(
+                    (destination / "manifest.json").read_text(encoding="utf-8")
+                )
+                if (
+                    existing.status == "confirmed"
+                    and existing.application_id == original.application_id
+                    and existing.submission_confirmation.get("confirmation_id")
+                    == confirmation_reference
+                ):
+                    return destination
+            raise ArchiveExistsError(f"confirmed archive already exists: {destination}")
+
+        temp_path = Path(tempfile.mkdtemp(prefix=".confirming-", dir=source.parent))
+        try:
+            shutil.copytree(source, temp_path, dirs_exist_ok=True)
+            receipt = {
+                "application_id": str(original.application_id),
+                "status": "confirmed",
+                "confirmation_detected": True,
+                "confirmation_reference": confirmation_reference,
+                "submitted_at": submitted_at,
+                "synthetic_only": True,
+            }
+            (temp_path / "submission" / "receipt.json").write_bytes(canonical_json_bytes(receipt))
+            (temp_path / "submission" / "confirmation_screenshot.png").write_bytes(_PNG_1PX)
+            (temp_path / "submission" / "confirmation.html").write_text(
+                "<!doctype html><html><body><p>Synthetic backend confirmation: "
+                f"{html.escape(confirmation_reference)}</p></body></html>\n",
+                encoding="utf-8",
+            )
+            if event_log is not None:
+                (temp_path / "audit" / "events.jsonl").write_bytes(_jsonl_bytes(event_log))
+
+            hashes = {
+                path.relative_to(temp_path).as_posix(): sha256_bytes(path.read_bytes())
+                for path in temp_path.rglob("*")
+                if path.is_file() and path.name != "manifest.json"
+            }
+            confirmed = original.model_copy(
+                update={
+                    "status": "confirmed",
+                    "submitted_at": submitted_at,
+                    "submission_confirmation": {
+                        "detected": True,
+                        "confirmation_id": confirmation_reference,
+                    },
+                    "application_version": 2,
+                    "files": hashes,
+                }
+            )
+            (temp_path / "manifest.json").write_bytes(
+                canonical_json_bytes(confirmed.model_dump(mode="json"))
+            )
+            if not self.verify(temp_path):
+                raise ValueError("confirmed archive failed verification")
+            temp_path.rename(destination)
+        except Exception:
+            if temp_path.exists():
+                shutil.rmtree(temp_path)
+            raise
+        return destination
 
     @staticmethod
     def verify(archive_path: Path) -> bool:

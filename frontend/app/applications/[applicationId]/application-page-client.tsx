@@ -72,8 +72,6 @@ export function ApplicationPageClient({
           candidateId,
           applicationId,
           authorization.authorization_id,
-          true,
-          `synthetic-${Date.now()}`,
           key("submit"),
         );
       } else {

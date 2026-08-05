@@ -140,15 +140,11 @@ class AuthorizationView(ApplicationContract):
 class SyntheticSubmissionRequest(ApplicationContract):
     authorization_id: UUID
     synthetic_fixture_acknowledged: bool
-    backend_confirmation_detected: bool
-    confirmation_reference: str | None = None
 
     @model_validator(mode="after")
     def confirmation_is_consistent(self) -> SyntheticSubmissionRequest:
         if not self.synthetic_fixture_acknowledged:
             raise ValueError("submission execution is restricted to the synthetic fixture")
-        if self.backend_confirmation_detected and not self.confirmation_reference:
-            raise ValueError("backend confirmation requires a reference")
         return self
 
 

@@ -17,6 +17,7 @@ from app.applications import (
     SettingsUpdate,
     SyntheticSubmissionRequest,
 )
+from app.archive import ApplicationArchiveBuilder
 from app.candidates.service import CandidateCreateRequest, CandidateService
 from app.db import build_session_factory
 from app.domain.enums import ApplicationState
@@ -133,8 +134,6 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         SyntheticSubmissionRequest(
             authorization_id=authorization.authorization_id,
             synthetic_fixture_acknowledged=True,
-            backend_confirmation_detected=True,
-            confirmation_reference="synthetic-confirmation-501",
         ),
         "submit-synthetic-501",
     )
@@ -142,7 +141,7 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     assert result.successful
     assert result.state is ApplicationState.CONFIRMED
     detail = applications.get_application("example_candidate", generated.application_id)
-    assert detail.confirmation_reference == "synthetic-confirmation-501"
+    assert detail.confirmation_reference == f"synthetic-confirmation-{generated.application_id}"
     assert detail.archive_available
     artifacts = applications.list_artifacts("example_candidate", generated.application_id)
     assert {
@@ -155,6 +154,34 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         "submission_receipt",
     }.issubset({artifact.kind for artifact in artifacts})
     assert all(artifact.immutable for artifact in artifacts)
+    final_receipt = next(
+        artifact
+        for artifact in artifacts
+        if artifact.kind == "submission_receipt" and artifact.version == 2
+    )
+    final_archive = Path(str(final_receipt.metadata["archive_uri"]))
+    pre_submit_archive = Path(str(final_receipt.metadata["pre_submit_archive_uri"]))
+    archive_builder = ApplicationArchiveBuilder(tmp_path / "runtime" / "application_archive")
+    assert archive_builder.verify(final_archive)
+    assert archive_builder.verify(pre_submit_archive)
+    receipt_payload = json.loads(
+        applications.artifact_path(
+            "example_candidate", generated.application_id, final_receipt.artifact_id
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt_payload["status"] == "confirmed"
+    assert receipt_payload["confirmation_detected"] is True
+
+    replay = applications.submit_synthetic(
+        "example_candidate",
+        generated.application_id,
+        SyntheticSubmissionRequest(
+            authorization_id=authorization.authorization_id,
+            synthetic_fixture_acknowledged=True,
+        ),
+        "submit-synthetic-501",
+    )
+    assert replay == result
 
     correspondence = applications.ingest_correspondence(
         CorrespondenceIngestRequest(
@@ -190,8 +217,6 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
             SyntheticSubmissionRequest(
                 authorization_id=authorization.authorization_id,
                 synthetic_fixture_acknowledged=True,
-                backend_confirmation_detected=True,
-                confirmation_reference="synthetic-confirmation-duplicate",
             ),
             "submit-synthetic-duplicate",
         )
@@ -231,6 +256,25 @@ def test_captcha_creates_visible_resumable_human_action(
     assert completed.status == "completed"
     detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.state is ApplicationState.READY_TO_SUBMIT
+
+
+def test_denied_authorization_does_not_seal_an_orphan_archive(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    job_id = _job(jobs, 504)
+    generated = applications.generate_materials(
+        "example_candidate", job_id, "generate-materials-504"
+    )
+
+    with pytest.raises(ApplicationConflictError, match="submission gate denied"):
+        applications.authorize(
+            "example_candidate", generated.application_id, "authorize-too-early-504"
+        )
+
+    archive_root = tmp_path / "runtime" / "application_archive"
+    assert not archive_root.exists() or not any(archive_root.rglob("manifest.json"))
 
 
 def test_unapproved_candidate_cannot_generate_materials(
