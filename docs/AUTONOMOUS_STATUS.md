@@ -3,8 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: browser fixture hardening, candidate onboarding import, and final verification
-- Branch baseline: `autonomous-build`; latest completed milestone commit is `e50cd5a`
+- Active phase: candidate portability, deletion/retention, and final verification
+- Branch baseline: `autonomous-build`; latest completed milestone commit is `2c45dd0`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
 
@@ -56,13 +56,18 @@
 - Human-action completion requires a prior explicit session-open handshake and a separate
   browser-owned same-session verifier. The verifier defaults to denial; a database handshake alone
   cannot advance an application to final validation.
+- Candidate onboarding now includes bounded local UTF-8 CV extraction through API, CLI, and the
+  profile UI. Raw documents are not retained; deterministic education/experience drafts carry the
+  source hash, restricted confidentiality, and false approvals. Applying a draft creates one
+  version atomically and blocks readiness until explicit review.
+- PDF parsing remains denied until it can execute in a CPU/memory/time-constrained worker.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **112 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **122 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **16 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **17 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
   Alembic report no missing operations.
@@ -78,7 +83,6 @@
   authorized in this repository. Add a deployment-specific interactive transport before claiming
   production same-context human takeover, and wire the fixture harness through the isolated
   application worker boundary. The local API currently performs only a validated session handshake.
-- Complete richer onboarding CV import/extraction without committing real pilot data.
 - Execute export/deletion and retention workflows; hosted authentication/encryption and separate
   browser workers remain deployment hardening.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
@@ -89,5 +93,5 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Verify and commit browser fixture hardening, then continue CV import and deletion/retention.
+3. Verify and commit CV import, then continue executable deletion/retention.
 4. Run backend, migration, and frontend gates after each coherent phase.

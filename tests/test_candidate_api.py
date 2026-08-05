@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -153,3 +154,67 @@ def test_authenticated_onboarding_refreshes_candidate_ownership(
         )
         assert detail.status_code == 200
         assert detail.json()["config"]["identity"]["email"].endswith(".invalid")
+
+
+def test_cv_import_api_returns_unapproved_draft_then_applies_it(
+    copied_candidates_root: Path,
+) -> None:
+    cv_text = """EDUCATION
+Example Institute | BSc | Data Science | Exampleton | 2018-09 | 2021-06
+EXPERIENCE
+Fictional Systems Inc | Data Engineer | Remote | 2021-07 | 2023-12 | Python
+- Built a fictional data quality check.
+"""
+    with _client(copied_candidates_root) as client:
+        imported = client.post(
+            "/api/candidates/example_candidate/cv-imports",
+            json={
+                "filename": "fictional.txt",
+                "content_base64": base64.b64encode(cv_text.encode()).decode(),
+            },
+        )
+        assert imported.status_code == 200, imported.text
+        draft = imported.json()
+        assert draft["approval_required"] is True
+        assert draft["experience"]["items"][0]["approved"] is False
+
+        applied = client.post(
+            f"/api/candidates/example_candidate/cv-imports/{draft['import_id']}/apply"
+        )
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["profile_version"] == "1.0.1"
+    assert applied.json()["readiness"]["status"] == "not_ready"
+
+
+def test_cv_import_api_rejects_oversize_transport_before_json_buffering(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root) as client:
+        response = client.post(
+            "/api/candidates/example_candidate/cv-imports",
+            headers={"Content-Length": "4000000"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "cv_import_too_large"
+
+
+def test_authenticated_cv_import_stream_cap_precedes_authorization_body_buffering(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root, auth_required=True) as client:
+        tokens = client.post("/api/auth/local-session", json={}).json()
+        response = client.post(
+            "/api/candidates/example_candidate/cv-imports",
+            headers={
+                "Authorization": f"Bearer {tokens['session_token']}",
+                "X-CSRF-Token": tokens["csrf_token"],
+                "Content-Length": "1",
+            },
+            content=b"x" * 3_010_001,
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "cv_import_too_large"

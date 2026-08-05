@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from app.candidates.cv_import import CVImportRequest
 from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.readiness import assess_readiness
 from app.candidates.service import CandidateCreateRequest, CandidateService
@@ -31,6 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--display-name")
     export = subparsers.add_parser("export-candidate")
     export.add_argument("--candidate", required=True)
+    cv_import = subparsers.add_parser("import-cv")
+    cv_import.add_argument("--candidate", required=True)
+    cv_import.add_argument("--file", type=Path, required=True)
+    cv_import.add_argument("--apply", action="store_true")
     discover = subparsers.add_parser("discover")
     discover.add_argument("--candidate", required=True)
     discover.add_argument(
@@ -70,6 +76,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "export-candidate":
         print(json.dumps(candidate_service.export(args.candidate), sort_keys=True))
+        return 0
+    if args.command == "import-cv":
+        if (
+            not args.file.is_file()
+            or args.file.suffix.lower() != ".txt"
+            or args.file.stat().st_size > 2 * 1024 * 1024
+        ):
+            print(
+                json.dumps(
+                    {
+                        "candidate_id": args.candidate,
+                        "status": "invalid",
+                        "error": "CV file must be UTF-8 text and no larger than 2 MiB",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        draft = candidate_service.create_cv_import(
+            args.candidate,
+            CVImportRequest(
+                filename=args.file.name,
+                content_base64=base64.b64encode(args.file.read_bytes()).decode(),
+            ),
+        )
+        if args.apply:
+            detail = candidate_service.apply_cv_import(args.candidate, draft.import_id)
+            print(
+                json.dumps(
+                    {
+                        "candidate_id": detail.candidate_id,
+                        "import_id": draft.import_id,
+                        "profile_version": detail.profile_version,
+                        "status": "applied_unapproved",
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(draft.model_dump_json())
         return 0
     if args.command == "discover":
         if args.fixture is None:

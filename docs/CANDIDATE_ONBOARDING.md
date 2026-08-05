@@ -19,6 +19,23 @@ the fact itself are approved, active, verified, publicly usable, and non-interna
 projects require an explicitly approved public summary. Sensitive answers also require explicit
 auto-submit permission and a current validity window.
 
+The profile page and CLI can extract a UTF-8 text CV into a review draft:
+
+```bash
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt --apply
+```
+
+Imports are limited to 2 MiB, 5,000 lines, and bounded structured output. The parser records the
+source SHA-256 but does not retain the raw CV. It recognizes pipe-delimited rows under `EDUCATION`
+and `EXPERIENCE` headings,
+uses deterministic stable IDs, and stores imported items as restricted and unapproved. Applying a
+draft creates one candidate version; readiness remains blocked until every imported fact is
+reviewed and explicitly approved. Reapplying the same import is idempotent.
+
+PDF import remains disabled until parsing can run in a CPU/memory/time-constrained worker.
+Converting a private CV to UTF-8 text locally is the supported safe path in this build.
+
 Run validation and capability readiness after changes:
 
 ```bash

@@ -13,9 +13,14 @@ python -m app onboard --candidate fictional_friend --display-name "Fictional Fri
 python -m app validate-candidate --candidate fictional_friend
 python -m app readiness --candidate fictional_friend
 python -m app export-candidate --candidate fictional_friend
+python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
 python -m app discover --candidate fictional_friend --fixture fixtures/jobs.json
 python -m app.browser.fixture_server --port 8090
 ```
+
+CV import retains only a structured unapproved draft and the raw document hash. The raw TXT is
+not copied into candidate storage. Use `--apply` only after inspecting the extraction; applied facts
+remain readiness blockers until explicitly approved in the versioned profile.
 
 For a host-native synthetic browser test, install the pinned Python dependencies and Chromium:
 

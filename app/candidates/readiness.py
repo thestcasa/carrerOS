@@ -6,7 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.candidates.models import CandidateConfig, ClaimFact
+from app.candidates.models import (
+    CandidateConfig,
+    ClaimFact,
+    EducationItem,
+    ExperienceItem,
+    ProjectItem,
+)
 
 
 class ReadinessStatus(StrEnum):
@@ -281,6 +287,25 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
     for passed, code, message, domain, field_path in checks:
         if not passed:
             issues.append(_issue(code, message, domain, field_path))
+
+    approval_collections: tuple[
+        tuple[str, tuple[EducationItem | ExperienceItem | ProjectItem, ...]], ...
+    ] = (
+        ("education", config.education.items),
+        ("experience", config.experience.items),
+        ("projects", config.projects.items),
+    )
+    for collection_name, items in approval_collections:
+        for index, item in enumerate(items):
+            if not item.archived and not item.approved:
+                issues.append(
+                    _issue(
+                        "candidate_fact_not_approved",
+                        "Imported or edited candidate facts require explicit approval.",
+                        "evidence",
+                        f"{collection_name}.items[{index}].approved",
+                    )
+                )
 
     for index, answer in enumerate(config.approved_answers.items):
         if answer.sensitive and (not answer.approved or not answer.auto_submit_allowed):

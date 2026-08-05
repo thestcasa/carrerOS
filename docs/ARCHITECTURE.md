@@ -174,6 +174,14 @@ advertise health through Redis, and external ports bind to localhost by default.
 
 ## Trust and privacy decisions
 
+Candidate CV import is a local, deterministic staging boundary. It accepts bounded UTF-8
+text, extracts only explicitly structured education and experience rows, records a source hash, and
+discards the raw bytes. Draft files are mode `0600`; imported facts are restricted, unverified, and
+unapproved. Applying a draft merges stable IDs into both candidate sections under one profile
+version and one history snapshot. Readiness treats any active unapproved imported record as a
+blocker, so extraction cannot silently authorize outward use.
+PDF input is rejected until a resource-isolated parser worker is available.
+
 ## Materials and synthetic browser dry runs
 
 The materials boundary consumes explicit approved facts and exact approved-answer keys. Every

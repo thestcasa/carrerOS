@@ -8,6 +8,7 @@ import type {
   CandidateDetail,
   CandidateSummary,
   CandidateUpdateResult,
+  CVImportDraft,
   DiscoveryRequest,
   DiscoveryResult,
   EditableSection,
@@ -120,6 +121,19 @@ export const api = {
   },
   exportCandidate: (candidateId: string) =>
     request<JsonObject>(`/api/candidates/${encodeURIComponent(candidateId)}/export`),
+  createCvImport: (candidateId: string, filename: string, contentBase64: string) =>
+    request<CVImportDraft>(
+      `/api/candidates/${encodeURIComponent(candidateId)}/cv-imports`,
+      {
+        method: "POST",
+        body: JSON.stringify({ filename, content_base64: contentBase64 }),
+      },
+    ),
+  applyCvImport: (candidateId: string, importId: string) =>
+    request<CandidateDetail>(
+      `/api/candidates/${encodeURIComponent(candidateId)}/cv-imports/${encodeURIComponent(importId)}/apply`,
+      { method: "POST" },
+    ),
   candidate: (candidateId: string) =>
     request<CandidateDetail>(`/api/candidates/${encodeURIComponent(candidateId)}`),
   readiness: (candidateId: string) =>

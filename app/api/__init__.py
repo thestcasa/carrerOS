@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.applications import (
     AnalyticsOverview,
@@ -34,6 +35,7 @@ from app.applications import (
 )
 from app.applications.contracts import EventView, SubmissionResultView
 from app.auth.tokens import LocalTokenService, TokenValidationError
+from app.candidates.cv_import import CVImportDraft, CVImportRequest
 from app.candidates.loader import CandidateConfigError
 from app.candidates.readiness import ReadinessReport
 from app.candidates.service import (
@@ -61,6 +63,68 @@ from app.job_service import (
     JobService,
     JobView,
 )
+
+_CV_IMPORT_MAX_REQUEST_BYTES = 3_010_000
+
+
+class _CVImportBodyLimitMiddleware:
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self._app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not self._is_cv_import(scope):
+            await self._app(scope, receive, send)
+            return
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                if int(declared) > self._max_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                await self._reject(scope, receive, send)
+                return
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._max_bytes:
+                    raise _CVImportRequestTooLarge
+            return message
+
+        try:
+            await self._app(scope, limited_receive, send)
+        except _CVImportRequestTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    def _is_cv_import(scope: Scope) -> bool:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            return False
+        parts = str(scope.get("path", "")).strip("/").split("/")
+        return len(parts) == 4 and parts[:2] == ["api", "candidates"] and parts[3] == "cv-imports"
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "code": "cv_import_too_large",
+                    "message": "CV import request exceeds the transport limit.",
+                }
+            },
+        )
+        await response(scope, receive, send)
+
+
+class _CVImportRequestTooLarge(Exception):
+    pass
 
 
 def _candidate_service(request: Request) -> CandidateService:
@@ -163,6 +227,22 @@ def _candidate_router() -> APIRouter:
     @router.get("/{candidate_id}/export", response_model=dict[str, Any])
     def export_candidate(candidate_id: str, service: CandidateServiceDependency) -> dict[str, Any]:
         return service.export(candidate_id)
+
+    @router.post("/{candidate_id}/cv-imports", response_model=CVImportDraft)
+    def create_cv_import(
+        candidate_id: str,
+        imported: CVImportRequest,
+        service: CandidateServiceDependency,
+    ) -> CVImportDraft:
+        return service.create_cv_import(candidate_id, imported)
+
+    @router.post("/{candidate_id}/cv-imports/{import_id}/apply", response_model=CandidateDetail)
+    def apply_cv_import(
+        candidate_id: str,
+        import_id: str,
+        service: CandidateServiceDependency,
+    ) -> CandidateDetail:
+        return service.apply_cv_import(candidate_id, import_id)
 
     return router
 
@@ -567,6 +647,13 @@ def create_app(
         except (PermissionError, TokenValidationError) as exc:
             return _error("authorization_denied", str(exc), 403)
         return await call_next(request)
+
+    # Decorator middleware is inserted at the front of Starlette's stack. Register the streaming
+    # limiter afterwards so it is outermost and caps bytes before authorization calls body().
+    application.add_middleware(
+        _CVImportBodyLimitMiddleware,
+        max_bytes=_CV_IMPORT_MAX_REQUEST_BYTES,
+    )
 
     @application.post(
         "/api/auth/local-session",

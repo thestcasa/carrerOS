@@ -12,6 +12,7 @@ from uuid import uuid4
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from app.candidates.cv_import import CVImportDraft, CVImportError, CVImportRequest, extract_cv_draft
 from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.models import (
     ApprovedAnswers,
@@ -287,6 +288,124 @@ class CandidateService:
     def export(self, candidate_id: str) -> dict[str, Any]:
         return self.get_config(candidate_id).model_dump(mode="json")
 
+    def create_cv_import(self, candidate_id: str, request: CVImportRequest) -> CVImportDraft:
+        with self._write_lock:
+            self.get_config(candidate_id)
+            try:
+                draft = extract_cv_draft(candidate_id, request)
+            except CVImportError as exc:
+                raise CandidateUpdateError(str(exc)) from exc
+            candidate_directory = self._candidate_directory(candidate_id)
+            imports = candidate_directory / ".imports"
+            if imports.exists() and (
+                imports.is_symlink() or imports.resolve().parent != candidate_directory
+            ):
+                raise CandidateUpdateError("candidate CV import directory is unsafe")
+            imports.mkdir(mode=0o700, exist_ok=True)
+            imports.chmod(0o700)
+            destination = imports / f"{draft.import_id}.json"
+            if destination.is_symlink():
+                raise CandidateUpdateError("stored CV import draft path is unsafe")
+            if destination.is_file():
+                try:
+                    stored = CVImportDraft.model_validate_json(
+                        destination.read_text(encoding="utf-8")
+                    )
+                except ValidationError as exc:
+                    raise CandidateUpdateError("stored CV import draft is invalid") from exc
+                if (
+                    stored.candidate_id != candidate_id
+                    or stored.source_sha256 != draft.source_sha256
+                ):
+                    raise CandidateUpdateError("stored CV import draft identity does not match")
+                return stored
+            temporary = imports / f".{draft.import_id}.{uuid4().hex}.tmp"
+            try:
+                temporary.write_text(
+                    draft.model_dump_json(indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                temporary.chmod(0o600)
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return draft
+
+    def apply_cv_import(self, candidate_id: str, import_id: str) -> CandidateDetail:
+        if re.fullmatch(r"cv_[a-f0-9]{20}", import_id) is None:
+            raise CandidateUpdateError("CV import ID is invalid")
+        with self._write_lock:
+            config = self.get_config(candidate_id)
+            candidate_directory = self._candidate_directory(candidate_id)
+            imports = candidate_directory / ".imports"
+            if imports.is_symlink() or imports.resolve().parent != candidate_directory:
+                raise CandidateUpdateError("candidate CV import directory is unsafe")
+            import_path = imports / f"{import_id}.json"
+            if not import_path.is_file() or import_path.is_symlink():
+                raise CandidateUpdateError("CV import draft was not found")
+            try:
+                draft = CVImportDraft.model_validate_json(import_path.read_text(encoding="utf-8"))
+            except ValidationError as exc:
+                raise CandidateUpdateError("stored CV import draft is invalid") from exc
+            if draft.candidate_id != candidate_id:
+                raise CandidateUpdateError("CV import draft belongs to another candidate")
+            if draft.applied_profile_version is not None:
+                return self.get_detail(candidate_id)
+            if not draft.education.items and not draft.experience.items:
+                raise CandidateUpdateError("CV import contains no structured entries to apply")
+
+            education_by_id = {item.id: item for item in config.education.items}
+            experience_by_id = {item.id: item for item in config.experience.items}
+            education_conflicts = {
+                item.id
+                for item in draft.education.items
+                if item.id in education_by_id and education_by_id[item.id] != item
+            }
+            experience_conflicts = {
+                item.id
+                for item in draft.experience.items
+                if item.id in experience_by_id and experience_by_id[item.id] != item
+            }
+            if education_conflicts or experience_conflicts:
+                raise CandidateUpdateError("CV import conflicts with existing stable IDs")
+            imported_already = all(
+                education_by_id.get(item.id) == item for item in draft.education.items
+            ) and all(experience_by_id.get(item.id) == item for item in draft.experience.items)
+            if imported_already:
+                applied = draft.model_copy(
+                    update={"applied_profile_version": config.manifest.profile_version}
+                )
+                self._write_cv_import(import_path, applied)
+                return self.get_detail(candidate_id)
+
+            education = Education(
+                items=config.education.items
+                + tuple(item for item in draft.education.items if item.id not in education_by_id)
+            )
+            experience = Experience(
+                items=config.experience.items
+                + tuple(item for item in draft.experience.items if item.id not in experience_by_id)
+            )
+            previous_version = config.manifest.profile_version
+            next_version = _next_patch_version(previous_version)
+            manifest = config.manifest.model_copy(
+                update={"profile_version": next_version}, deep=True
+            )
+            candidate_data = config.model_dump()
+            candidate_data.update(
+                {"education": education, "experience": experience, "manifest": manifest}
+            )
+            try:
+                updated = CandidateConfig.model_validate(candidate_data)
+            except ValidationError as exc:
+                raise CandidateUpdateError(str(exc)) from exc
+            self._persist_updates(config, updated, ("education", "experience"))
+            self._write_cv_import(
+                import_path,
+                draft.model_copy(update={"applied_profile_version": next_version}),
+            )
+            return self.get_detail(candidate_id)
+
     def list_candidates(self) -> tuple[CandidateSummary, ...]:
         if not self._root.is_dir():
             return ()
@@ -387,7 +506,7 @@ class CandidateService:
                 updated = CandidateConfig.model_validate(candidate_data)
             except ValidationError as exc:
                 raise CandidateUpdateError(str(exc)) from exc
-            self._persist_update(config, updated, update.section)
+            self._persist_updates(config, updated, (update.section,))
             return CandidateUpdateResult(
                 candidate_id=candidate_id,
                 previous_version=previous_version,
@@ -402,8 +521,11 @@ class CandidateService:
             raise CandidateNotFoundError(f"candidate not found: {candidate_id}")
         return directory
 
-    def _persist_update(
-        self, previous: CandidateConfig, updated: CandidateConfig, section: CandidateSection
+    def _persist_updates(
+        self,
+        previous: CandidateConfig,
+        updated: CandidateConfig,
+        sections: tuple[CandidateSection, ...],
     ) -> None:
         directory = self._candidate_directory(previous.manifest.candidate_id)
         history = directory / ".history" / previous.manifest.profile_version
@@ -418,23 +540,27 @@ class CandidateService:
         for source_name in source_names:
             shutil.copy2(directory / source_name, history / source_name)
 
-        section_name = getattr(updated.manifest.data_files, section)
-        if section_name is None:
-            raise CandidateUpdateError("candidate section has no configured source file")
-        section_path = directory / section_name
         profile_path = directory / "profile.yaml"
-        section_temp = directory / f".{section_name}.{uuid4().hex}.tmp"
+        section_paths: dict[CandidateSection, Path] = {}
+        section_temps: dict[CandidateSection, Path] = {}
+        for section in sections:
+            section_name = getattr(updated.manifest.data_files, section)
+            if section_name is None:
+                raise CandidateUpdateError("candidate section has no configured source file")
+            section_paths[section] = directory / section_name
+            section_temps[section] = directory / f".{section_name}.{uuid4().hex}.tmp"
         profile_temp = directory / f".profile.{uuid4().hex}.tmp"
         try:
-            section_temp.write_text(
-                json.dumps(
-                    getattr(updated, section).model_dump(mode="json"),
-                    indent=2,
-                    ensure_ascii=False,
+            for section in sections:
+                section_temps[section].write_text(
+                    json.dumps(
+                        getattr(updated, section).model_dump(mode="json"),
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
-                + "\n",
-                encoding="utf-8",
-            )
             profile_temp.write_text(
                 yaml.safe_dump(
                     updated.manifest.model_dump(mode="json"),
@@ -443,15 +569,28 @@ class CandidateService:
                 ),
                 encoding="utf-8",
             )
-            os.replace(section_temp, section_path)
+            for section in sections:
+                os.replace(section_temps[section], section_paths[section])
             os.replace(profile_temp, profile_path)
         except Exception as exc:
-            previous_section_name = getattr(previous.manifest.data_files, section)
-            if previous_section_name is None:
-                section_path.unlink(missing_ok=True)
-            else:
-                shutil.copy2(history / previous_section_name, section_path)
+            for section in sections:
+                previous_section_name = getattr(previous.manifest.data_files, section)
+                if previous_section_name is None:
+                    section_paths[section].unlink(missing_ok=True)
+                else:
+                    shutil.copy2(history / previous_section_name, section_paths[section])
             shutil.copy2(history / "profile.yaml", profile_path)
-            section_temp.unlink(missing_ok=True)
+            for section_temp in section_temps.values():
+                section_temp.unlink(missing_ok=True)
             profile_temp.unlink(missing_ok=True)
             raise CandidateUpdateError("candidate update could not be persisted") from exc
+
+    @staticmethod
+    def _write_cv_import(path: Path, draft: CVImportDraft) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(draft.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)

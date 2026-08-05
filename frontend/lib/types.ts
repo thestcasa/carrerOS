@@ -97,6 +97,18 @@ export interface CandidateUpdateResult {
   readiness: ReadinessReport;
 }
 
+export interface CVImportDraft {
+  import_id: string;
+  candidate_id: string;
+  source_filename: string;
+  source_sha256: string;
+  education: { items: JsonObject[] };
+  experience: { items: JsonObject[] };
+  warnings: string[];
+  approval_required: true;
+  applied_profile_version: string | null;
+}
+
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }

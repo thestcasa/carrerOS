@@ -130,7 +130,11 @@ hosted encryption, and separate Playwright worker ownership remain.
 5. Add deterministic CV-import draft extraction and explicit approval workflow without storing
    or committing real candidate documents.
 
-Status: steps 1–4 are implemented and under full quality-gate verification. Step 5 remains.
+Status: all five steps are implemented. CV import accepts bounded UTF-8 text, stores only a
+hash and structured extraction draft, applies education/experience atomically as restricted and
+unapproved facts, and blocks readiness pending explicit review. API, CLI, profile UI, idempotency,
+and failure-path tests are included. PDF parsing is deferred until a resource-isolated document
+worker exists.
 
 ### Phase 6 — definition-of-done verification
 

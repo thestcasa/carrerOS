@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { CVImportPanel } from "@/components/CVImportPanel";
 import { ProfileEditor } from "@/components/ProfileEditor";
 import { api } from "@/lib/api";
 import type { CandidateDetail, EditableSection } from "@/lib/types";
@@ -32,6 +33,7 @@ export function ProfilePageClient({ candidateId, initialSection }: { candidateId
       </header>
       {error ? <ErrorState message={error} retry={() => void load()} /> : null}
       {!error && !detail ? <LoadingState label="Loading versioned profile" /> : null}
+      {detail ? <CVImportPanel candidateId={candidateId} onApplied={setDetail} /> : null}
       {detail ? <ProfileEditor detail={detail} initialSection={initialSection} /> : null}
     </div>
   );

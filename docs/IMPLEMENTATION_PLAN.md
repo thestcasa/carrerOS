@@ -58,8 +58,9 @@ not add browser automation or live submission.
 - [x] Integrate materials, synthetic application workflow, artifacts, human actions, security,
   settings, analytics, local auth, and the primary required web routes.
 - [x] Add a persistent workflow queue and correspondence/notification/interview integration.
-- [ ] Complete the Playwright fixture-server worker, retention/deletion execution, richer
-  candidate facts/onboarding, and hosted security.
+- [x] Add a network-denied Playwright fixture harness and bounded unapproved CV import workflow.
+- [ ] Complete isolated Playwright application integration, retention/deletion execution, and
+  hosted security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
   external runtimes are available.
 
