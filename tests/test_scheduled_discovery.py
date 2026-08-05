@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -154,6 +156,52 @@ def test_disabled_source_is_not_scheduled(copied_candidates_root: Path) -> None:
     scheduled = discovery.enqueue_due(TaskQueue(sessions), now=now)
 
     assert not scheduled
+
+
+def test_candidate_deletion_race_drops_due_source_without_crashing_scheduler(
+    copied_candidates_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = build_session_factory(engine)
+    candidates = CandidateService(copied_candidates_root)
+    discovery = ScheduledDiscoveryService(
+        sessions,
+        candidates,
+        JobService(sessions, candidates),
+        ProviderFeedClient(FixtureProviderTransport({})),
+    )
+    now = datetime(2026, 8, 5, 10, tzinfo=UTC)
+    discovery.create_source(
+        "example_candidate",
+        DiscoverySourceCreate(
+            provider="lever",
+            company="Fictional Systems",
+            company_domain="fictional.invalid",
+            board_token="fictional",
+        ),
+        "source-deletion-race",
+        now=now,
+    )
+    with sessions.begin() as session:
+        session.add(
+            CandidateSettingsRecord(
+                candidate_id="example_candidate",
+                discovery_enabled=True,
+                allowed_ats_adapters=["lever"],
+            )
+        )
+    original_read = candidates.lifecycle_read
+
+    @contextmanager
+    def deletion_race(candidate_id: str) -> Iterator[object]:
+        candidates.mark_for_deletion(candidate_id, "f" * 64)
+        with original_read(candidate_id) as config:
+            yield config
+
+    monkeypatch.setattr(candidates, "lifecycle_read", deletion_race)
+
+    assert discovery.enqueue_due(TaskQueue(sessions), now=now) == ()
 
 
 def test_missing_settings_and_empty_adapter_allowlist_fail_closed(

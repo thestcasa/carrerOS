@@ -5,11 +5,13 @@ services:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      RUNTIME_ROOT: /app/runtime
       CORS_ORIGINS: http://localhost:3000
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
     depends_on:
       db:
         condition: service_healthy
@@ -69,6 +71,7 @@ services:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      RUNTIME_ROOT: /app/runtime
     volumes:
       - candidate_data:/app/candidates
       - runtime_data:/app/runtime
@@ -85,6 +88,7 @@ services:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      RUNTIME_ROOT: /app/runtime
     volumes:
       - candidate_data:/app/candidates
       - runtime_data:/app/runtime

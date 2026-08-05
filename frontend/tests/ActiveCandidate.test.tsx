@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AppShell } from "@/components/AppShell";
 import { CandidateCard } from "@/components/CandidateCard";
+import { clearActiveCandidate } from "@/lib/active-candidate";
 
 describe("active candidate navigation", () => {
   it("persists a selected candidate and propagates it across operational links", async () => {
@@ -78,5 +79,14 @@ describe("active candidate navigation", () => {
     expect(screen.queryByText("must not render")).not.toBeInTheDocument();
     expect(screen.queryByText("Active: fictional_friend")).not.toBeInTheDocument();
     window.history.replaceState({}, "", "/");
+  });
+
+  it("clears only the matching active candidate cookie", () => {
+    document.cookie = "careeros_active_candidate=fictional_friend; Path=/";
+    clearActiveCandidate("different_candidate");
+    expect(document.cookie).toContain("careeros_active_candidate=fictional_friend");
+
+    clearActiveCandidate("fictional_friend");
+    expect(document.cookie).not.toContain("careeros_active_candidate=fictional_friend");
   });
 });

@@ -3,8 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: durable scheduled discovery from candidate-owned ATS sources
-- Branch baseline: `autonomous-build`; latest completed milestone is rendered submission identity
+- Active phase: repository-wide definition-of-done audit after executable candidate lifecycle
+- Branch baseline: `autonomous-build`; latest completed milestone is executable candidate lifecycle
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -79,16 +79,24 @@
   retries use payload-bound receipts, transaction-level lease fences prevent superseded worker
   side effects, unchanged postings do not create versions or scores, and injection findings remain
   quarantined. Jobs and settings surfaces separate schedules from manual fixture import.
+- Candidate lifecycle controls now produce a bounded portable export, execute deliberate deletion,
+  and retain a minimal payload-bound deletion receipt. The filesystem marker is installed inside
+  the tombstone transaction; marker-only crash states and durable failed receipts are both
+  recoverable. SQLite/PostgreSQL writer triggers fence every candidate-owned table; cross-process
+  lifecycle locks serialize publishers, exports, scheduler work, and deletion; and API/UI/CLI
+  recovery can resume an interrupted operation. Raw candidate administrative audits are erased,
+  while deletion events use a local keyed pseudonym. Configurable browser-profile retention also
+  handles expired human-takeover sessions and moves their applications to an auditable retry state.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **175 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **193 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **29 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **41 Vitest tests**, and the Next.js production build pass
   for all required routes.
-- Migrations: fresh SQLite upgrade and `alembic check` pass through `c8f320d09a1e`; models and
-  Alembic report no missing operations.
+- Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
+  pass through `d1a7e6c9420b`; models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
   dependencies with `playwright install --with-deps chromium`.
@@ -101,8 +109,9 @@
   authorized in this repository. Add a deployment-specific interactive transport before claiming
   production same-context human takeover, and wire the fixture harness through the isolated
   application worker boundary. The local API currently performs only a validated session handshake.
-- Execute export/deletion and retention workflows; hosted authentication/encryption and separate
-  browser workers remain deployment hardening.
+- Implement portable-export round-trip import. Establish hosted authentication/encryption,
+  tenant-bound deletion recovery, and a legal retention/pseudonymization policy for the minimal
+  deletion tombstone before multi-user deployment.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
 - Complete role-specific template/content selection, richer cover-letter policy, and manual
   rendered-material revision; DOCX remains an optional format.
@@ -113,6 +122,6 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue deletion with a durable tombstone and writer fence, then remaining material/browser
-   productionization gaps.
+3. Continue the full specification audit with portable import, material revision/idempotency, and
+   remaining browser/hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

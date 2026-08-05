@@ -8,6 +8,7 @@ from typing import NoReturn
 
 from redis import Redis
 
+from app.auth.lifecycle import CandidateLifecycleService
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
 from app.db import build_engine, build_session_factory
@@ -23,20 +24,40 @@ def run_scheduler_once(
     *,
     now: datetime | None = None,
     discovery: ScheduledDiscoveryService | None = None,
+    lifecycle: CandidateLifecycleService | None = None,
 ) -> tuple[TaskView, ...]:
     current = now or datetime.now(UTC)
     bucket = current.strftime("%Y%m%dT%H") + f"{(current.minute // 15) * 15:02d}"
-    readiness = tuple(
-        queue.enqueue(
-            candidate_id=candidate.candidate_id,
-            kind="candidate_readiness_check",
-            idempotency_key=f"readiness:{bucket}",
-            payload={"profile_version": candidate.profile_version},
-            scheduled_for=current,
-        )
-        for candidate in candidates.list_candidates()
+    readiness: list[TaskView] = []
+    retention: list[TaskView] = []
+    for candidate in candidates.list_candidates():
+        try:
+            readiness.append(
+                queue.enqueue(
+                    candidate_id=candidate.candidate_id,
+                    kind="candidate_readiness_check",
+                    idempotency_key=f"readiness:{bucket}",
+                    payload={"profile_version": candidate.profile_version},
+                    scheduled_for=current,
+                )
+            )
+            if lifecycle is not None:
+                retention.append(
+                    queue.enqueue(
+                        candidate_id=candidate.candidate_id,
+                        kind="candidate_retention_sweep",
+                        idempotency_key=f"retention:{current.date().isoformat()}",
+                        payload={},
+                        scheduled_for=current,
+                    )
+                )
+        except TaskLeaseLostError:
+            continue
+    return (
+        *readiness,
+        *retention,
+        *(discovery.enqueue_due(queue, now=current) if discovery else ()),
     )
-    return (*readiness, *(discovery.enqueue_due(queue, now=current) if discovery else ()))
 
 
 def run_worker_once(
@@ -46,6 +67,7 @@ def run_worker_once(
     worker_id: str,
     now: datetime | None = None,
     discovery: ScheduledDiscoveryService | None = None,
+    lifecycle: CandidateLifecycleService | None = None,
 ) -> TaskView | None:
     task = queue.claim(worker_id=worker_id, now=now)
     if task is None:
@@ -53,6 +75,8 @@ def run_worker_once(
     try:
         if task.kind == "discover_source" and discovery is not None:
             discovery.execute_task(task, now=now)
+        elif task.kind == "candidate_retention_sweep" and lifecycle is not None:
+            lifecycle.purge_expired_browser_sessions(task.candidate_id, now=now)
         elif task.kind != "candidate_readiness_check":
             raise ValueError(f"unsupported workflow task kind: {task.kind}")
         else:
@@ -80,15 +104,24 @@ def run_process(role: str) -> NoReturn:
         JobService(sessions, candidates),
         ProviderFeedClient(),
     )
+    lifecycle = CandidateLifecycleService(sessions, candidates, settings.runtime_root)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     worker_id = f"{role}-{secrets.token_hex(6)}"
     channel = f"careeros:{role}:heartbeat"
     while True:
         if role == "scheduler":
-            processed = len(run_scheduler_once(queue, candidates, discovery=discovery))
+            processed = len(
+                run_scheduler_once(queue, candidates, discovery=discovery, lifecycle=lifecycle)
+            )
         elif role == "worker":
             processed = int(
-                run_worker_once(queue, candidates, worker_id=worker_id, discovery=discovery)
+                run_worker_once(
+                    queue,
+                    candidates,
+                    worker_id=worker_id,
+                    discovery=discovery,
+                    lifecycle=lifecycle,
+                )
                 is not None
             )
         else:

@@ -26,6 +26,21 @@ export function selectActiveCandidate(candidateId: string): void {
   window.dispatchEvent(new CustomEvent("careeros-active-candidate", { detail: valid }));
 }
 
+export function clearActiveCandidate(expectedCandidateId: string): void {
+  const expected = validCandidateId(expectedCandidateId);
+  if (!expected || typeof document === "undefined") return;
+  const stored = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${ACTIVE_CANDIDATE_COOKIE}=`))
+    ?.slice(ACTIVE_CANDIDATE_COOKIE.length + 1);
+  let decoded: string | null = null;
+  try { decoded = stored ? decodeURIComponent(stored) : null; } catch { decoded = null; }
+  if (decoded !== expected) return;
+  document.cookie = `${ACTIVE_CANDIDATE_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict`;
+  window.dispatchEvent(new CustomEvent("careeros-active-candidate", { detail: null }));
+}
+
 export function useActiveCandidateId(): string | null {
   return useSyncExternalStore(
     (notify) => {

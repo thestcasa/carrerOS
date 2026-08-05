@@ -195,6 +195,7 @@ class SettingsView(ApplicationContract):
     maximum_applications_per_day: int
     maximum_applications_per_week: int
     maximum_applications_per_company_30_days: int
+    browser_session_retention_days: int
     autonomy_blockers: tuple[str, ...]
 
 
@@ -209,6 +210,7 @@ class SettingsUpdate(ApplicationContract):
     maximum_applications_per_day: int | None = Field(default=None, ge=1, le=100)
     maximum_applications_per_week: int | None = Field(default=None, ge=1, le=500)
     maximum_applications_per_company_30_days: int | None = Field(default=None, ge=1, le=20)
+    browser_session_retention_days: int | None = Field(default=None, ge=1, le=3650)
 
 
 class AnalyticsOverview(ApplicationContract):

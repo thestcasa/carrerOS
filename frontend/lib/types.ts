@@ -97,6 +97,30 @@ export interface CandidateUpdateResult {
   readiness: ReadinessReport;
 }
 
+export interface CandidateDeletionView {
+  candidate_id: string;
+  status: "deleting" | "failed" | "completed";
+  deleted_rows: Record<string, number>;
+  deleted_paths: string[];
+  error_code: string | null;
+  requested_at: string;
+  completed_at: string | null;
+}
+
+export interface CandidateExportView extends JsonObject {
+  schema_version: "1.0";
+  candidate_id: string;
+  created_at: string;
+  files: Array<{
+    path: string;
+    size: number;
+    sha256: string;
+    content_base64: string;
+  }>;
+  database: Record<string, JsonObject[]>;
+  manifest_sha256: string;
+}
+
 export interface CVImportDraft {
   import_id: string;
   candidate_id: string;
@@ -440,6 +464,7 @@ export interface SettingsView {
   maximum_applications_per_day: number;
   maximum_applications_per_week: number;
   maximum_applications_per_company_30_days: number;
+  browser_session_retention_days: number;
   autonomy_blockers: string[];
 }
 
@@ -454,6 +479,7 @@ export interface SettingsUpdate {
   maximum_applications_per_day?: number;
   maximum_applications_per_week?: number;
   maximum_applications_per_company_30_days?: number;
+  browser_session_retention_days?: number;
 }
 
 export interface AnalyticsOverview {

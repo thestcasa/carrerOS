@@ -31,6 +31,7 @@ from app.domain.models import (
     ApplicationDocument,
     ApplicationEvent,
     Base,
+    BrowserSession,
 )
 from app.job_service import DiscoveryRequest, JobService
 
@@ -100,7 +101,7 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
     job_id = _job(jobs)
 
     generated = applications.generate_materials(
@@ -174,6 +175,14 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
 
     assert result.successful
     assert result.state is ApplicationState.CONFIRMED
+    with sessions() as session:
+        browser_session = session.scalar(
+            select(BrowserSession).where(
+                BrowserSession.candidate_id == "example_candidate",
+                BrowserSession.application_id == generated.application_id,
+            )
+        )
+        assert browser_session is not None and browser_session.status == "confirmed"
     detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.confirmation_reference == f"synthetic-confirmation-{generated.application_id}"
     assert detail.archive_available
@@ -702,9 +711,10 @@ def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
 ) -> None:
     _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
     applications.update_settings(
-        SettingsUpdate(candidate_id="example_candidate", automation_mode="dry_run")
+        SettingsUpdate(candidate_id="example_candidate", automation_mode="dry_run"),
+        "settings-update-audit",
     )
-    applications.emergency_stop("example_candidate")
+    applications.emergency_stop("example_candidate", "emergency-stop-audit")
 
     with sessions() as session:
         records = session.scalars(
@@ -716,3 +726,23 @@ def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
         ]
         assert records[0].previous_hash is None
         assert records[1].previous_hash == records[0].event_hash
+
+
+def test_settings_commands_are_payload_bound_and_replay_without_duplicate_audit(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    command = SettingsUpdate(candidate_id="example_candidate", discovery_enabled=True)
+
+    first = applications.update_settings(command, "settings-replay-key")
+    replay = applications.update_settings(command, "settings-replay-key")
+
+    assert replay == first
+    with pytest.raises(ApplicationConflictError, match="reused with another request"):
+        applications.update_settings(
+            SettingsUpdate(candidate_id="example_candidate", discovery_enabled=False),
+            "settings-replay-key",
+        )
+    with sessions() as session:
+        records = session.scalars(select(AdministrativeAuditRecord)).all()
+        assert [record.event_type for record in records] == ["settings_updated"]

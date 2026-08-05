@@ -6,6 +6,8 @@ import type {
   ArtifactView,
   AuthorizationView,
   CandidateDetail,
+  CandidateDeletionView,
+  CandidateExportView,
   CandidateSummary,
   CandidateUpdateResult,
   CVImportDraft,
@@ -112,6 +114,29 @@ function commandHeaders(idempotencyKey: string): HeadersInit {
   return { "Idempotency-Key": idempotencyKey };
 }
 
+function verifiedDeletionReceipt(
+  candidateId: string,
+  result: CandidateDeletionView,
+  requireCompletion: boolean,
+): CandidateDeletionView {
+  if (result.candidate_id !== candidateId) {
+    throw new ApiError(
+      "Deletion returned a receipt for a different candidate.",
+      "deletion_receipt_mismatch",
+      409,
+    );
+  }
+  if (requireCompletion && result.status !== "completed") {
+    throw new ApiError(
+      "Deletion did not return a matching completion receipt.",
+      "deletion_unconfirmed",
+      409,
+    );
+  }
+  if (result.status === "completed") clearLocalSession();
+  return result;
+}
+
 export const api = {
   health: () => request<HealthReport>("/api/health"),
   candidates: () => request<CandidateSummary[]>("/api/candidates"),
@@ -124,7 +149,26 @@ export const api = {
     return candidate;
   },
   exportCandidate: (candidateId: string) =>
-    request<JsonObject>(`/api/candidates/${encodeURIComponent(candidateId)}/export`),
+    request<CandidateExportView>(`/api/candidates/${encodeURIComponent(candidateId)}/export`),
+  deletionStatus: async (candidateId: string) =>
+    verifiedDeletionReceipt(
+      candidateId,
+      await request<CandidateDeletionView>(
+        `/api/candidates/${encodeURIComponent(candidateId)}/deletion`,
+      ),
+      false,
+    ),
+  deleteCandidate: async (candidateId: string, confirmation: string, idempotencyKey: string) => {
+    const result = await request<CandidateDeletionView>(
+      `/api/candidates/${encodeURIComponent(candidateId)}`,
+      {
+        method: "DELETE",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify({ confirmation, delete_archives: true }),
+      },
+    );
+    return verifiedDeletionReceipt(candidateId, result, true);
+  },
   createCvImport: (candidateId: string, filename: string, contentBase64: string) =>
     request<CVImportDraft>(
       `/api/candidates/${encodeURIComponent(candidateId)}/cv-imports`,
@@ -240,10 +284,10 @@ export const api = {
     request<DiscoverySourceView>(`/api/jobs/sources?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
   updateDiscoverySource: (candidateId: string, sourceId: string, input: DiscoverySourceUpdate, idempotencyKey: string) =>
     request<DiscoverySourceView>(`/api/jobs/sources/${encodeURIComponent(sourceId)}?candidate_id=${encodeURIComponent(candidateId)}`, { method: "PATCH", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
-  updateSettings: (input: SettingsUpdate) =>
-    request<SettingsView>("/api/settings", { method: "PATCH", body: JSON.stringify(input) }),
-  emergencyStop: (candidateId: string) =>
-    request<SettingsView>(`/api/automation/emergency-stop?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST" }),
+  updateSettings: (input: SettingsUpdate, idempotencyKey: string) =>
+    request<SettingsView>("/api/settings", { method: "PATCH", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
+  emergencyStop: (candidateId: string, idempotencyKey: string) =>
+    request<SettingsView>(`/api/automation/emergency-stop?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   analytics: (candidateId: string) =>
     request<AnalyticsOverview>(`/api/analytics/overview?candidate_id=${encodeURIComponent(candidateId)}`),
 };

@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import create_app
 from app.applications import ApplicationService
+from app.auth.lifecycle import CandidateLifecycleService
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
 from app.db import build_session_factory
@@ -54,6 +55,7 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
         runtime_root,
         synthetic_confirmation=lambda _candidate_id, _application_id: None,
     )
+    lifecycle = CandidateLifecycleService(sessions, candidates, runtime_root)
     job_id = jobs.discover(
         DiscoveryRequest(
             candidate_id="example_candidate",
@@ -88,6 +90,7 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
                 candidate_service=candidates,
                 job_service=jobs,
                 scheduled_discovery_service=scheduled_discovery,
+                candidate_lifecycle_service=lifecycle,
                 application_service=applications,
                 health_checker=_HealthyServices(),
             )
@@ -151,6 +154,29 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
         )
         assert updated_source.status_code == 200
         assert updated_source.json()["enabled"] is False
+
+        missing_settings_key = client.patch(
+            "/api/settings",
+            headers={"Authorization": auth["Authorization"], "X-CSRF-Token": tokens["csrf_token"]},
+            json={"candidate_id": "example_candidate", "discovery_enabled": False},
+        )
+        assert missing_settings_key.status_code == 422
+        settings_headers = {**mutation, "Idempotency-Key": "api-settings-0001"}
+        settings_update = {"candidate_id": "example_candidate", "discovery_enabled": False}
+        first_settings = client.patch(
+            "/api/settings", headers=settings_headers, json=settings_update
+        )
+        replayed_settings = client.patch(
+            "/api/settings", headers=settings_headers, json=settings_update
+        )
+        conflicting_settings = client.patch(
+            "/api/settings",
+            headers=settings_headers,
+            json={"candidate_id": "example_candidate", "discovery_enabled": True},
+        )
+        assert first_settings.status_code == 200
+        assert replayed_settings.json() == first_settings.json()
+        assert conflicting_settings.status_code == 409
 
         generated = client.post(
             f"/api/jobs/{job_id}/generate-materials?candidate_id=example_candidate",
@@ -230,3 +256,85 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
     assert interview_package.json()["company"] == "Fictional Robotics Ltd"
     assert notifications.status_code == 200
     assert notifications.json()[0]["event_type"] == "correspondence_recruiter"
+
+
+def test_candidate_deletion_requires_confirmation_and_revokes_stale_grant(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    client, _job_id = _client(copied_candidates_root, tmp_path / "runtime-delete")
+    with client:
+        initial = client.post(
+            "/api/auth/local-session", json={"candidate_id": "example_candidate"}
+        ).json()
+        initial_headers = {
+            "Authorization": f"Bearer {initial['session_token']}",
+            "X-CSRF-Token": initial["csrf_token"],
+        }
+        created = client.post(
+            "/api/candidates",
+            headers=initial_headers,
+            json={"candidate_id": "delete_api", "display_name": "Delete API"},
+        )
+        assert created.status_code == 200, created.text
+        login = client.post("/api/auth/local-session", json={"candidate_id": "delete_api"}).json()
+        headers = {
+            "Authorization": f"Bearer {login['session_token']}",
+            "X-CSRF-Token": login["csrf_token"],
+            "Idempotency-Key": "delete-api-command",
+        }
+        portable_export = client.get(
+            "/api/candidates/delete_api/export",
+            headers={"Authorization": f"Bearer {login['session_token']}"},
+        )
+        assert portable_export.status_code == 200
+        assert portable_export.json()["schema_version"] == "1.0"
+        assert portable_export.json()["candidate_id"] == "delete_api"
+        mismatch = client.request(
+            "DELETE",
+            "/api/candidates/delete_api",
+            headers=headers,
+            json={"confirmation": "wrong", "delete_archives": True},
+        )
+        assert mismatch.status_code == 422
+        deleted = client.request(
+            "DELETE",
+            "/api/candidates/delete_api",
+            headers=headers,
+            json={"confirmation": "delete_api", "delete_archives": True},
+        )
+        replay = client.request(
+            "DELETE",
+            "/api/candidates/delete_api",
+            headers=headers,
+            json={"confirmation": "delete_api", "delete_archives": True},
+        )
+        stale_read = client.get(
+            "/api/candidates/delete_api",
+            headers={"Authorization": f"Bearer {login['session_token']}"},
+        )
+        recovery_login = client.post("/api/auth/local-session", json={}).json()
+        recovery_headers = {
+            "Authorization": f"Bearer {recovery_login['session_token']}",
+            "X-CSRF-Token": recovery_login["csrf_token"],
+            "Idempotency-Key": "delete-api-recovery-command",
+        }
+        recovery_status = client.get(
+            "/api/candidates/delete_api/deletion",
+            headers={"Authorization": recovery_headers["Authorization"]},
+        )
+        recovered = client.request(
+            "DELETE",
+            "/api/candidates/delete_api",
+            headers=recovery_headers,
+            json={"confirmation": "delete_api", "delete_archives": True},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["status"] == "completed"
+    assert replay.json() == deleted.json()
+    assert stale_read.status_code == 410
+    assert stale_read.json()["error"]["code"] == "candidate_deleted"
+    assert recovery_status.status_code == 200
+    assert recovery_status.json()["status"] == "completed"
+    assert recovered.status_code == 200
+    assert recovered.json() == deleted.json()

@@ -42,7 +42,9 @@ npm run build
 The web interface covers candidate onboarding/CV import/readiness, discovery and analysis, application
 materials and synthetic dry runs, human actions, security events, settings, analytics, and exact
 immutable artifact downloads. The CLI also provides `onboard`, local `import-cv`, fixture-safe
-`discover`, and `export-candidate`.
+`discover`, bounded `export-candidate`, and recoverable `delete-candidate`/`deletion-status`
+commands. Candidate export and irreversible deletion are also available from settings; the
+fictional onboarding template is protected.
 
 See `docs/ARCHITECTURE.md`, `docs/CANDIDATE_ONBOARDING.md`, `docs/SECURITY.md`, and
 `docs/OPERATIONS.md`. Career OS never bypasses CAPTCHA or anti-bot controls, and this build

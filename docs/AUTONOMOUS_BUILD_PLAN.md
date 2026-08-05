@@ -182,6 +182,32 @@ payload-bound receipt; missing settings and empty adapter allowlists fail closed
 alone are reanalyzed; settings and jobs surfaces expose policy and execution status. Manual payload
 import is labeled development-only.
 
+### Phase 5E — executable candidate lifecycle controls
+
+1. Produce a bounded portable export from one repeatable database snapshot and a candidate
+   lifecycle reader lease, including configuration, candidate-owned rows, referenced shared-job
+   evidence, exact archives, and safe browser evidence while excluding secrets and local paths.
+2. Execute intentional deletion only after exact-ID confirmation and a payload-bound command key.
+   Establish a durable database tombstone and filesystem marker as one ordered operation, fence
+   every candidate writer, remove raw candidate audit rows, and retain only a keyed pseudonymous
+   deletion audit plus minimal stale-writer receipt.
+3. Serialize file publishers, exports, discovery scheduling, workers, and deletion across
+   processes; make interrupted deletion replayable through API, settings UI, and CLI status.
+4. Enforce configurable browser-profile retention for confirmed, cancelled, ready, synthetic,
+   and expired human-takeover sessions using rollback-safe filesystem quarantine.
+5. Add deterministic race, replay, traversal, symlink, stale-writer, retention rollback, export,
+   API, CLI, and frontend recovery tests.
+
+Status: complete for the local single-user deployment. Export is descriptor-relative and
+`O_NOFOLLOW`, recursively redacts path/idempotency/capability fields, includes the restricted
+Playwright worker's evidence filenames, and applies count/per-file/aggregate limits. Deletion
+creates its marker inside the tombstone transaction, uses a cross-process hashed lifecycle lock,
+rejects external storage locators before removing rows, and can resume both marker-only crash
+states and durable failed receipts. Database triggers reject stale writes to all candidate-owned
+tables, including administrative audit. Daily worker tasks purge eligible browser profiles and
+return expired human-action applications to an explicit retryable form-fill state. Hosted tenant
+recovery authorization, encryption, and deletion-receipt retention remain later deployment work.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

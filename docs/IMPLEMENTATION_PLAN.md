@@ -63,8 +63,10 @@ not add browser automation or live submission.
   and archive the same bytes without lossy rerendering.
 - [x] Schedule candidate-owned public ATS sources through bounded read-only transports and durable
   leased discovery tasks with freshness/error status.
-- [ ] Complete isolated Playwright application integration, retention/deletion execution, and
-  hosted security.
+- [x] Execute bounded candidate export, durable deletion/recovery, writer fencing, and configurable
+  browser-profile retention.
+- [ ] Complete isolated Playwright application integration, portable-export import, and hosted
+  security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
   external runtimes are available.
 

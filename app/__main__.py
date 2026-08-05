@@ -7,6 +7,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from app.auth.lifecycle import CandidateDeletionRequest, CandidateLifecycleService
 from app.candidates.cv_import import CVImportRequest
 from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.readiness import assess_readiness
@@ -33,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--display-name")
     export = subparsers.add_parser("export-candidate")
     export.add_argument("--candidate", required=True)
+    delete_candidate = subparsers.add_parser("delete-candidate")
+    delete_candidate.add_argument("--candidate", required=True)
+    delete_candidate.add_argument("--confirmation", required=True)
+    delete_candidate.add_argument("--idempotency-key", required=True)
+    deletion_status = subparsers.add_parser("deletion-status")
+    deletion_status.add_argument("--candidate", required=True)
     cv_import = subparsers.add_parser("import-cv")
     cv_import.add_argument("--candidate", required=True)
     cv_import.add_argument("--file", type=Path, required=True)
@@ -75,7 +82,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     if args.command == "export-candidate":
-        print(json.dumps(candidate_service.export(args.candidate), sort_keys=True))
+        settings = Settings.from_environment()
+        lifecycle = CandidateLifecycleService(
+            build_session_factory(build_engine(settings.database_url)),
+            candidate_service,
+            settings.runtime_root,
+        )
+        print(lifecycle.export_candidate(args.candidate).model_dump_json())
+        return 0
+    if args.command in {"delete-candidate", "deletion-status"}:
+        settings = Settings.from_environment()
+        lifecycle = CandidateLifecycleService(
+            build_session_factory(build_engine(settings.database_url)),
+            candidate_service,
+            settings.runtime_root,
+        )
+        if args.command == "deletion-status":
+            print(lifecycle.deletion_status(args.candidate).model_dump_json())
+            return 0
+        deletion_result = lifecycle.delete_candidate(
+            args.candidate,
+            CandidateDeletionRequest(
+                confirmation=args.confirmation,
+                delete_archives=True,
+            ),
+            args.idempotency_key,
+        )
+        print(deletion_result.model_dump_json())
         return 0
     if args.command == "import-cv":
         if (

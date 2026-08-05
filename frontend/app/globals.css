@@ -189,6 +189,8 @@ h3 { margin: 0; font-size: 17px; }
 .mode-grid label { display: flex; gap: 10px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
 .emergency-panel { grid-column: 1 / -1; border-color: #ddb4ae; background: var(--red-soft); }
 .button.danger { color: white; background: var(--red); }
+.data-controls { grid-column: 1 / -1; }
+.deletion-confirmation { display: grid; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid #ddb4ae; }
 .analytics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .metric-list { display: grid; gap: 10px; margin: 20px 0 0; padding: 0; list-style: none; }
 .metric-list li { display: flex; justify-content: space-between; gap: 14px; padding-top: 10px; border-top: 1px solid var(--line); }

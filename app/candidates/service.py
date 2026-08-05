@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -162,10 +168,16 @@ class CandidateService:
         self._root = candidates_root.resolve()
         self._loader = CandidateLoader(self._root)
         self._write_lock = threading.RLock()
+        self._held_lifecycle_locks = threading.local()
 
     def create(self, request: CandidateCreateRequest) -> CandidateDetail:
         if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", request.candidate_id) is None:
             raise CandidateUpdateError("candidate_id must be a safe lowercase identifier")
+        with self._write_lock, self._lifecycle_lock(request.candidate_id):
+            self._assert_not_deleted(request.candidate_id)
+            return self._create_unlocked(request)
+
+    def _create_unlocked(self, request: CandidateCreateRequest) -> CandidateDetail:
         if not request.display_name.strip():
             raise CandidateUpdateError("display_name must not be empty")
         source = self._root / "example_candidate"
@@ -288,8 +300,25 @@ class CandidateService:
     def export(self, candidate_id: str) -> dict[str, Any]:
         return self.get_config(candidate_id).model_dump(mode="json")
 
+    @contextmanager
+    def lifecycle_read(self, candidate_id: str) -> Iterator[CandidateConfig]:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            yield self.get_config(candidate_id)
+
+    @contextmanager
+    def lifecycle_write(self, candidate_id: str) -> Iterator[CandidateConfig]:
+        """Fence a candidate filesystem publisher against concurrent erasure."""
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            yield self.get_config(candidate_id)
+
+    @contextmanager
+    def lifecycle_fence(self, candidate_id: str) -> Iterator[None]:
+        """Serialize a complete lifecycle transition without requiring live configuration."""
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            yield
+
     def create_cv_import(self, candidate_id: str, request: CVImportRequest) -> CVImportDraft:
-        with self._write_lock:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
             self.get_config(candidate_id)
             try:
                 draft = extract_cv_draft(candidate_id, request)
@@ -334,7 +363,7 @@ class CandidateService:
     def apply_cv_import(self, candidate_id: str, import_id: str) -> CandidateDetail:
         if re.fullmatch(r"cv_[a-f0-9]{20}", import_id) is None:
             raise CandidateUpdateError("CV import ID is invalid")
-        with self._write_lock:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
             config = self.get_config(candidate_id)
             candidate_directory = self._candidate_directory(candidate_id)
             imports = candidate_directory / ".imports"
@@ -413,8 +442,12 @@ class CandidateService:
         for directory in sorted(path for path in self._root.iterdir() if path.is_dir()):
             if not (directory / "profile.yaml").is_file():
                 continue
+            if self.is_deletion_marked(directory.name):
+                continue
             try:
                 config = self._loader.load(directory.name)
+                if self.is_deletion_marked(directory.name):
+                    continue
                 readiness = assess_readiness(config)
                 automation = (
                     "autonomous"
@@ -445,12 +478,19 @@ class CandidateService:
         return tuple(summaries)
 
     def get_config(self, candidate_id: str) -> CandidateConfig:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            return self._get_config_unlocked(candidate_id)
+
+    def _get_config_unlocked(self, candidate_id: str) -> CandidateConfig:
+        self._assert_not_deleted(candidate_id)
         try:
-            return self._loader.load(candidate_id)
+            config = self._loader.load(candidate_id)
         except CandidateConfigError as exc:
             if "not found" in str(exc):
                 raise CandidateNotFoundError(str(exc)) from exc
             raise
+        self._assert_not_deleted(candidate_id)
+        return config
 
     def get_detail(self, candidate_id: str) -> CandidateDetail:
         config = self.get_config(candidate_id)
@@ -483,7 +523,7 @@ class CandidateService:
     def update_section(
         self, candidate_id: str, update: CandidateSectionUpdate
     ) -> CandidateUpdateResult:
-        with self._write_lock:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
             config = self.get_config(candidate_id)
             section_model = _SECTION_MODELS[update.section]
             try:
@@ -515,11 +555,155 @@ class CandidateService:
                 readiness=assess_readiness(updated),
             )
 
+    def is_deletion_marked(self, candidate_id: str) -> bool:
+        marker = self._deletion_marker_path(candidate_id)
+        if marker.parent.is_symlink() or (marker.parent.exists() and not marker.parent.is_dir()):
+            return True
+        return marker.exists() or marker.is_symlink()
+
+    def deletion_marker_time(self, candidate_id: str) -> datetime | None:
+        marker = self._deletion_marker_path(candidate_id)
+        if marker.is_symlink() or not marker.is_file():
+            return None
+        try:
+            return datetime.fromtimestamp(marker.stat().st_mtime, UTC)
+        except OSError:
+            return None
+
+    def mark_for_deletion(self, candidate_id: str, request_sha256: str) -> Path:
+        if not re.fullmatch(r"[a-f0-9]{64}", request_sha256):
+            raise CandidateUpdateError("candidate deletion request hash is invalid")
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            marker = self._deletion_marker_path(candidate_id)
+            marker_root = marker.parent
+            self._ensure_private_root(marker_root)
+            if marker.is_symlink() or (marker.exists() and not marker.is_file()):
+                raise CandidateUpdateError("candidate deletion marker is unsafe")
+            if marker.is_file():
+                try:
+                    stored = json.loads(marker.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise CandidateUpdateError("candidate deletion marker is invalid") from exc
+                if stored.get("request_sha256") != request_sha256:
+                    raise CandidateUpdateError("candidate deletion request conflicts")
+                return marker
+            self.get_config(candidate_id)
+            temporary = marker.with_name(f".{marker.name}.{uuid4().hex}.tmp")
+            try:
+                temporary.write_text(
+                    json.dumps({"request_sha256": request_sha256}, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                temporary.chmod(0o600)
+                os.replace(temporary, marker)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return marker
+
+    def purge_deleted_configuration(self, candidate_id: str) -> bool:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            if not self.is_deletion_marked(candidate_id):
+                raise CandidateUpdateError("candidate deletion marker is missing")
+            directory = self._root / candidate_id
+            quarantine_root = self._root / ".deletion_quarantine"
+            self._ensure_private_root(quarantine_root)
+            quarantine = quarantine_root / candidate_id
+            quarantine_present = quarantine.exists() or quarantine.is_symlink()
+            directory_present = directory.exists() or directory.is_symlink()
+            if quarantine_present and directory_present:
+                raise CandidateUpdateError("candidate deletion quarantine conflicts")
+            target = quarantine if quarantine_present else directory
+            if not (target.exists() or target.is_symlink()):
+                return False
+            if (
+                target.is_symlink()
+                or not target.is_dir()
+                or target.parent not in {self._root, quarantine_root}
+                or target.resolve().parent != target.parent.resolve()
+            ):
+                raise CandidateUpdateError("candidate deletion path is unsafe")
+            self._reject_unsafe_tree(target)
+            if target == directory:
+                directory.rename(quarantine)
+                target = quarantine
+            shutil.rmtree(target)
+            return True
+
+    def deleted_configuration_absent(self, candidate_id: str) -> bool:
+        self._deletion_marker_path(candidate_id)
+        directory = self._root / candidate_id
+        quarantine = self._root / ".deletion_quarantine" / candidate_id
+        return not (directory.exists() or directory.is_symlink()) and not (
+            quarantine.exists() or quarantine.is_symlink()
+        )
+
+    def configuration_directory(self, candidate_id: str) -> Path:
+        return self._candidate_directory(candidate_id)
+
     def _candidate_directory(self, candidate_id: str) -> Path:
-        directory = (self._root / candidate_id).resolve()
-        if directory.parent != self._root or not directory.is_dir():
+        raw_directory = self._root / candidate_id
+        directory = raw_directory.resolve()
+        if raw_directory.is_symlink() or directory.parent != self._root or not directory.is_dir():
             raise CandidateNotFoundError(f"candidate not found: {candidate_id}")
         return directory
+
+    def _assert_not_deleted(self, candidate_id: str) -> None:
+        if self.is_deletion_marked(candidate_id):
+            raise CandidateNotFoundError(f"candidate not found: {candidate_id}")
+
+    def _deletion_marker_path(self, candidate_id: str) -> Path:
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", candidate_id) is None:
+            raise CandidateNotFoundError(f"candidate not found: {candidate_id}")
+        subject = hashlib.sha256(candidate_id.encode()).hexdigest()
+        return self._root / ".deletions" / f"{subject}.json"
+
+    @contextmanager
+    def _lifecycle_lock(self, candidate_id: str) -> Iterator[None]:
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", candidate_id) is None:
+            raise CandidateUpdateError("candidate_id must be a safe lowercase identifier")
+        lock_root = self._root / ".lifecycle_locks"
+        self._ensure_private_root(lock_root)
+        subject = hashlib.sha256(candidate_id.encode()).hexdigest()
+        held = getattr(self._held_lifecycle_locks, "counts", None)
+        if held is None:
+            held = {}
+            self._held_lifecycle_locks.counts = held
+        if held.get(subject, 0):
+            held[subject] += 1
+            try:
+                yield
+            finally:
+                held[subject] -= 1
+            return
+        lock_path = lock_root / f"{subject}.lock"
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            flock(descriptor, LOCK_EX)
+            held[subject] = 1
+            yield
+        finally:
+            held.pop(subject, None)
+            flock(descriptor, LOCK_UN)
+            os.close(descriptor)
+
+    def _ensure_private_root(self, path: Path) -> None:
+        if path.is_symlink():
+            raise CandidateUpdateError("candidate lifecycle path is unsafe")
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not path.is_dir() or path.resolve().parent != self._root:
+            raise CandidateUpdateError("candidate lifecycle path is unsafe")
+        path.chmod(0o700)
+
+    @staticmethod
+    def _reject_unsafe_tree(directory: Path) -> None:
+        for path in directory.rglob("*"):
+            metadata = path.lstat()
+            if path.is_symlink():
+                raise CandidateUpdateError("candidate deletion tree contains a symlink")
+            if path.is_dir():
+                continue
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise CandidateUpdateError("candidate deletion tree contains an unsafe file")
 
     def _persist_updates(
         self,

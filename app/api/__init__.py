@@ -5,13 +5,15 @@ import secrets
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Annotated, Any, cast
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import IntegrityError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.applications import (
@@ -34,6 +36,13 @@ from app.applications import (
     SyntheticSubmissionRequest,
 )
 from app.applications.contracts import EventView, SubmissionResultView
+from app.auth.lifecycle import (
+    CandidateDeletionError,
+    CandidateDeletionRequest,
+    CandidateDeletionView,
+    CandidateExportView,
+    CandidateLifecycleService,
+)
 from app.auth.tokens import LocalTokenService, TokenValidationError
 from app.candidates.cv_import import CVImportDraft, CVImportRequest
 from app.candidates.loader import CandidateConfigError
@@ -155,12 +164,19 @@ def _scheduled_discovery_service(request: Request) -> ScheduledDiscoveryService:
     return cast(ScheduledDiscoveryService, request.app.state.scheduled_discovery_service)
 
 
+def _candidate_lifecycle_service(request: Request) -> CandidateLifecycleService:
+    return cast(CandidateLifecycleService, request.app.state.candidate_lifecycle_service)
+
+
 CandidateServiceDependency = Annotated[CandidateService, Depends(_candidate_service)]
 HealthCheckerDependency = Annotated[HealthChecker, Depends(_health_checker)]
 JobServiceDependency = Annotated[JobService, Depends(_job_service)]
 ApplicationServiceDependency = Annotated[ApplicationService, Depends(_application_service)]
 ScheduledDiscoveryDependency = Annotated[
     ScheduledDiscoveryService, Depends(_scheduled_discovery_service)
+]
+CandidateLifecycleDependency = Annotated[
+    CandidateLifecycleService, Depends(_candidate_lifecycle_service)
 ]
 
 
@@ -239,9 +255,31 @@ def _candidate_router() -> APIRouter:
             CandidateSectionUpdate(section=imported.section, data=imported.data),
         )
 
-    @router.get("/{candidate_id}/export", response_model=dict[str, Any])
-    def export_candidate(candidate_id: str, service: CandidateServiceDependency) -> dict[str, Any]:
-        return service.export(candidate_id)
+    @router.get("/{candidate_id}/export", response_model=CandidateExportView)
+    def export_candidate(
+        candidate_id: str, service: CandidateLifecycleDependency, response: Response
+    ) -> CandidateExportView:
+        exported = service.export_candidate(candidate_id)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename*=UTF-8''{quote(candidate_id)}-portable-export.json"
+        )
+        return exported
+
+    @router.delete("/{candidate_id}", response_model=CandidateDeletionView)
+    def delete_candidate(
+        candidate_id: str,
+        command: CandidateDeletionRequest,
+        service: CandidateLifecycleDependency,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
+    ) -> CandidateDeletionView:
+        return service.delete_candidate(candidate_id, command, idempotency_key)
+
+    @router.get("/{candidate_id}/deletion", response_model=CandidateDeletionView)
+    def deletion_status(
+        candidate_id: str, service: CandidateLifecycleDependency
+    ) -> CandidateDeletionView:
+        return service.deletion_status(candidate_id)
 
     @router.post("/{candidate_id}/cv-imports", response_model=CVImportDraft)
     def create_cv_import(
@@ -456,9 +494,13 @@ def _application_router() -> APIRouter:
         artifact_id: UUID,
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
-    ) -> FileResponse:
+    ) -> StreamingResponse:
         path = service.artifact_path(candidate_id, application_id, artifact_id)
-        return FileResponse(path, filename=path.name)
+        return StreamingResponse(
+            service.artifact_chunks(candidate_id, application_id, artifact_id),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(path.name)}"},
+        )
 
     return router
 
@@ -565,16 +607,19 @@ def _operations_router() -> APIRouter:
 
     @router.patch("/settings", response_model=SettingsView)
     def update_settings(
-        update: SettingsUpdate, service: ApplicationServiceDependency
+        update: SettingsUpdate,
+        service: ApplicationServiceDependency,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
     ) -> SettingsView:
-        return service.update_settings(update)
+        return service.update_settings(update, idempotency_key)
 
     @router.post("/automation/emergency-stop", response_model=SettingsView)
     def emergency_stop(
         service: ApplicationServiceDependency,
         candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8)],
     ) -> SettingsView:
-        return service.emergency_stop(candidate_id)
+        return service.emergency_stop(candidate_id, idempotency_key)
 
     @router.get("/analytics/overview", response_model=AnalyticsOverview)
     def analytics(
@@ -604,6 +649,7 @@ def create_app(
     candidate_service: CandidateService | None = None,
     job_service: JobService | None = None,
     scheduled_discovery_service: ScheduledDiscoveryService | None = None,
+    candidate_lifecycle_service: CandidateLifecycleService | None = None,
     application_service: ApplicationService | None = None,
     health_checker: HealthChecker | None = None,
 ) -> FastAPI:
@@ -626,6 +672,12 @@ def create_app(
             ProviderFeedClient(),
         )
     )
+    application.state.candidate_lifecycle_service = (
+        candidate_lifecycle_service
+        or CandidateLifecycleService(
+            session_factory, resolved_candidate_service, resolved_settings.runtime_root
+        )
+    )
     application.state.application_service = application_service or ApplicationService(
         session_factory, resolved_candidate_service, resolved_settings.runtime_root
     )
@@ -646,7 +698,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -657,7 +709,12 @@ def create_app(
 
     @application.middleware("http")
     async def candidate_authorization(request: Request, call_next: Any) -> Any:
-        if not application.state.auth_required or request.url.path in {
+        destructive_deletion = request.method == "DELETE" and request.url.path.startswith(
+            "/api/candidates/"
+        )
+        if (
+            not application.state.auth_required and not destructive_deletion
+        ) or request.url.path in {
             "/health",
             "/api/health",
             "/api/auth/local-session",
@@ -692,7 +749,22 @@ def create_app(
                     if isinstance(payload, dict) and isinstance(payload.get("candidate_id"), str):
                         candidate_ids.add(payload["candidate_id"])
             for candidate_id in candidate_ids:
-                token_service.require_candidate(claims, candidate_id)
+                is_deletion_request = (
+                    request.method == "DELETE"
+                    and request.url.path.rstrip("/") == f"/api/candidates/{candidate_id}"
+                )
+                is_deletion_status = (
+                    request.method == "GET"
+                    and request.url.path.rstrip("/") == f"/api/candidates/{candidate_id}/deletion"
+                )
+                deleted = application.state.candidate_lifecycle_service.is_deleted(candidate_id)
+                is_recovery = deleted and (is_deletion_request or is_deletion_status)
+                if not is_recovery:
+                    token_service.require_candidate(claims, candidate_id)
+                if deleted and not is_recovery:
+                    return _error(
+                        "candidate_deleted", "Candidate data is no longer available.", 410
+                    )
             request.state.session_claims = claims
         except (PermissionError, TokenValidationError) as exc:
             return _error("authorization_denied", str(exc), 403)
@@ -739,6 +811,25 @@ def create_app(
     @application.exception_handler(CandidateNotFoundError)
     async def candidate_not_found(_request: Request, exc: CandidateNotFoundError) -> JSONResponse:
         return _error("candidate_not_found", str(exc), 404)
+
+    @application.exception_handler(CandidateDeletionError)
+    async def candidate_deletion_failed(
+        _request: Request, exc: CandidateDeletionError
+    ) -> JSONResponse:
+        status_code = (
+            404
+            if exc.code == "deletion_not_found"
+            else 409
+            if exc.code in {"idempotency_conflict", "protected_candidate"}
+            else 422
+        )
+        return _error(exc.code, str(exc), status_code)
+
+    @application.exception_handler(IntegrityError)
+    async def integrity_error(_request: Request, exc: IntegrityError) -> JSONResponse:
+        if "candidate is deleted" in str(exc).casefold():
+            return _error("candidate_deleted", "Candidate data is no longer available.", 410)
+        return _error("command_conflict", "The command conflicts with persisted state.", 409)
 
     @application.exception_handler(JobNotFoundError)
     async def job_not_found(_request: Request, exc: JobNotFoundError) -> JSONResponse:

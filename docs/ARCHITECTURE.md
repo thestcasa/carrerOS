@@ -207,6 +207,34 @@ version and one history snapshot. Readiness treats any active unapproved importe
 blocker, so extraction cannot silently authorize outward use.
 PDF input is rejected until a resource-isolated parser worker is available.
 
+## Candidate lifecycle and erasure
+
+Portable export holds the candidate lifecycle reader lease and reads candidate-owned SQL rows from
+one snapshot. It includes referenced candidate-neutral job evidence, configuration, exact immutable
+archives, working artifacts, and an explicit allowlist of browser screenshots/snapshots/metadata.
+Every filesystem read walks from an opened directory descriptor with `O_NOFOLLOW`, rejects
+non-regular or multiply linked files, checks file identity before and after reading, and enforces
+file-count, per-file, and aggregate byte limits. Recursive sanitization removes local paths,
+storage locators, idempotency keys, authorization capabilities, and persistent-profile locations.
+
+Intentional deletion runs under a hashed cross-process lifecycle lock. It validates exact
+confirmation and the payload-bound command key, then creates the hidden marker inside the database
+tombstone transaction. A crash before database commit leaves a marker-only state that remains
+writer-fenced and is recoverable; a committed tombstone therefore always follows a durable marker.
+The operation preflights every known storage locator before deleting candidate-owned rows,
+configurations, runtime profiles, and archives. Database triggers reject inserts and updates under
+any tombstoned candidate, including stale workflow and administrative-audit transactions.
+Completed operations retain only the minimal tombstone and keyed pseudonymous deletion audit. The
+raw candidate identifier in the tombstone is currently required for stale-writer rejection; hosted
+deployment must define its legal retention or replace it with a tenant-safe keyed subject.
+
+Browser-profile retention uses candidate-configured days and daily leased tasks. Eligible terminal
+sessions and expired human-takeover sessions move to a same-root quarantine before the metadata
+transaction. Transaction failure restores the live directory; committed quarantine is finalized
+idempotently on the current or a later sweep. An expired human action is cancelled and its
+application returns to `FORM_FILLING` through a durable event, allowing a fresh safe dry run.
+Immutable submitted archives are outside this sweep.
+
 ## Materials and synthetic browser dry runs
 
 The materials boundary consumes explicit approved facts and exact approved-answer keys. Every

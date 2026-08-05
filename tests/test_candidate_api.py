@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from app.api import create_app
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
+from app.db import build_engine
+from app.domain.models import Base
 from app.health import HealthReport, ServiceStatus
 
 
@@ -19,8 +21,10 @@ class _HealthyServices:
 
 
 def _client(candidates_root: Path, *, auth_required: bool = False) -> TestClient:
+    database_url = f"sqlite+pysqlite:///{candidates_root.parent / 'candidate-api.db'}"
+    Base.metadata.create_all(build_engine(database_url))
     settings = Settings(
-        database_url="sqlite+pysqlite:///:memory:",
+        database_url=database_url,
         redis_url="redis://unused:6379/0",
         candidates_root=candidates_root,
         cors_origins=("http://localhost:3000",),

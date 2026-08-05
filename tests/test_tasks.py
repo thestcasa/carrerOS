@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.auth.lifecycle import CandidateLifecycleService
 from app.candidates.service import CandidateService
 from app.db import build_session_factory
 from app.discovery.scheduled import ScheduledDiscoveryService
@@ -108,3 +109,29 @@ def test_worker_does_not_mutate_or_crash_after_task_lease_is_reclaimed(
     assert current.locked_by == "worker-new"
     assert current.attempts == 2
     assert current.last_error is None
+
+
+def test_scheduler_and_worker_run_daily_retention_durably(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    queue, sessions = _queue()
+    candidates = CandidateService(copied_candidates_root)
+    lifecycle = CandidateLifecycleService(sessions, candidates, tmp_path / "runtime")
+    now = datetime(2026, 8, 5, 10, tzinfo=UTC)
+
+    scheduled = run_scheduler_once(queue, candidates, now=now, lifecycle=lifecycle)
+    replay = run_scheduler_once(queue, candidates, now=now, lifecycle=lifecycle)
+
+    assert len(scheduled) == len(replay) == 2
+    assert {item.kind for item in scheduled} == {
+        "candidate_readiness_check",
+        "candidate_retention_sweep",
+    }
+    first = run_worker_once(
+        queue, candidates, worker_id="retention-worker", now=now, lifecycle=lifecycle
+    )
+    second = run_worker_once(
+        queue, candidates, worker_id="retention-worker", now=now, lifecycle=lifecycle
+    )
+    assert first is not None and first.status == "completed"
+    assert second is not None and second.status == "completed"

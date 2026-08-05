@@ -13,6 +13,9 @@ python -m app onboard --candidate fictional_friend --display-name "Fictional Fri
 python -m app validate-candidate --candidate fictional_friend
 python -m app readiness --candidate fictional_friend
 python -m app export-candidate --candidate fictional_friend
+python -m app deletion-status --candidate fictional_friend
+python -m app delete-candidate --candidate fictional_friend \
+  --confirmation fictional_friend --idempotency-key operator-chosen-command-key
 python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
 python -m app discover --candidate fictional_friend --fixture fixtures/jobs.json
 python -m app.browser.fixture_server --port 8090
@@ -39,12 +42,30 @@ legal/profile/answer configuration before enabling discovery; autonomous mode ha
 tested-adapter, dry-run, and explicit-confirmation blockers. The emergency stop denies new
 authorizations immediately.
 
+Export reads a repeatable candidate snapshot, includes exact archives and safe browser evidence,
+and excludes browser profiles, credentials, idempotency secrets, capability tokens, and local
+storage paths. The API returns it with `no-store` and an attachment filename.
+
+Deletion is irreversible. Back up and inspect the portable export first, type the exact candidate
+ID, and keep the command key until a completed receipt is returned. The marker is installed inside
+the durable tombstone transaction, and the service can recover either a marker-only crash state or
+a failed receipt with the same payload. Use `deletion-status` to inspect recovery state; settings
+exposes the same controls even when normal candidate reads are fenced. `example_candidate` is
+deliberately protected.
+
+The scheduler enqueues a daily retention sweep. `browser_session_retention_days` defaults to 30
+and is configurable from 1 to 3650 in settings. Eligible confirmed/cancelled/ready sessions and
+expired human-takeover profiles are quarantined, committed as retained metadata, then removed.
+Expired human actions return their application to form filling with an audit event. Submitted
+immutable archives are retained until intentional candidate deletion.
+
 Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts are immutable
 and hash verified. A failed hash check is a security incident: stop automation, preserve the files,
 and inspect event/security ledgers.
 
-The autonomous development environment has no Docker binary, so Compose startup must be verified
-on a Docker-capable host. Its minimal musl runtime also cannot launch the downloaded glibc Chromium
+The autonomous development environment has no Docker binary, so Compose startup and configuration
+parsing must be verified on a Docker-capable host. Its minimal musl runtime also cannot launch the
+downloaded glibc Chromium
 binary because required shared libraries are absent. The Dockerfile installs the supported browser
 and dependencies; SQLite migrations and non-browser backend/frontend quality gates are the offline
 verification path here.

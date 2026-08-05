@@ -86,8 +86,9 @@ class CandidateLoader:
             character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in candidate_id
         ):
             raise CandidateConfigError("candidate_id contains invalid characters")
-        candidate_dir = (self._root / candidate_id).resolve()
-        if candidate_dir.parent != self._root:
+        raw_candidate_dir = self._root / candidate_id
+        candidate_dir = raw_candidate_dir.resolve()
+        if raw_candidate_dir.is_symlink() or candidate_dir.parent != self._root:
             raise CandidateConfigError("candidate path escapes candidates root")
         if not candidate_dir.is_dir():
             raise CandidateConfigError(f"candidate not found: {candidate_id}")
@@ -95,8 +96,9 @@ class CandidateLoader:
 
     @staticmethod
     def _safe_config_path(candidate_dir: Path, relative_path: str) -> Path:
-        path = (candidate_dir / relative_path).resolve()
-        if path.parent != candidate_dir or path.suffix.lower() != ".json":
+        raw_path = candidate_dir / relative_path
+        path = raw_path.resolve()
+        if raw_path.is_symlink() or path.parent != candidate_dir or path.suffix.lower() != ".json":
             raise CandidateConfigError(f"unsafe candidate file path: {relative_path}")
         return path
 

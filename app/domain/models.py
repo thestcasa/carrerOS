@@ -292,6 +292,40 @@ class AdministrativeAuditRecord(Base, CandidateScopedMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AdministrativeCommandReceipt(Base, CandidateScopedMixin):
+    """Payload-bound replay receipt for candidate policy mutations."""
+
+    __tablename__ = "administrative_command_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "idempotency_key_sha256", name="uq_admin_command_receipt_key"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CandidateDeletionRecord(Base):
+    """Durable writer fence and payload-bound receipt for intentional candidate erasure."""
+
+    __tablename__ = "candidate_deletion_records"
+
+    candidate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="deleting")
+    deleted_rows: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    deleted_paths: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Application(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "applications"
     __table_args__ = (
@@ -629,6 +663,7 @@ class CandidateSettingsRecord(Base, TimestampMixin, CandidateScopedMixin):
     maximum_applications_per_company_30_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=3
     )
+    browser_session_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
 
 
 class NotificationRecord(Base, CandidateScopedMixin):

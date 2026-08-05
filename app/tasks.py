@@ -4,10 +4,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import exists, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.domain.models import WorkflowTask
+from app.domain.models import CandidateDeletionRecord, WorkflowTask
 
 
 class TaskLeaseLostError(ValueError):
@@ -51,29 +52,36 @@ class TaskQueue:
             raise ValueError("candidate_id, kind, and idempotency_key are required")
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
-        with self._sessions.begin() as session:
-            existing = session.scalar(
-                select(WorkflowTask).where(
-                    WorkflowTask.candidate_id == candidate_id,
-                    WorkflowTask.idempotency_key == idempotency_key,
+        try:
+            with self._sessions.begin() as session:
+                if session.get(CandidateDeletionRecord, candidate_id) is not None:
+                    raise TaskLeaseLostError("candidate lifecycle is no longer active")
+                existing = session.scalar(
+                    select(WorkflowTask).where(
+                        WorkflowTask.candidate_id == candidate_id,
+                        WorkflowTask.idempotency_key == idempotency_key,
+                    )
                 )
-            )
-            expected_payload = payload or {}
-            if existing is not None:
-                if existing.kind != kind or existing.payload != expected_payload:
-                    raise ValueError("idempotency key was used for a different task")
-                return self._view(existing)
-            task = WorkflowTask(
-                candidate_id=candidate_id,
-                kind=kind,
-                idempotency_key=idempotency_key,
-                payload=expected_payload,
-                scheduled_for=scheduled_for or datetime.now(UTC),
-                max_attempts=max_attempts,
-            )
-            session.add(task)
-            session.flush()
-            return self._view(task)
+                expected_payload = payload or {}
+                if existing is not None:
+                    if existing.kind != kind or existing.payload != expected_payload:
+                        raise ValueError("idempotency key was used for a different task")
+                    return self._view(existing)
+                task = WorkflowTask(
+                    candidate_id=candidate_id,
+                    kind=kind,
+                    idempotency_key=idempotency_key,
+                    payload=expected_payload,
+                    scheduled_for=scheduled_for or datetime.now(UTC),
+                    max_attempts=max_attempts,
+                )
+                session.add(task)
+                session.flush()
+                return self._view(task)
+        except IntegrityError as exc:
+            if self._deleted_candidate_integrity(exc):
+                raise TaskLeaseLostError("candidate lifecycle is no longer active") from exc
+            raise
 
     def claim(
         self,
@@ -84,44 +92,62 @@ class TaskQueue:
     ) -> TaskView | None:
         current = now or datetime.now(UTC)
         expired = current - lease
-        with self._sessions.begin() as session:
-            task = session.scalar(
-                select(WorkflowTask)
-                .where(
-                    WorkflowTask.attempts < WorkflowTask.max_attempts,
-                    WorkflowTask.scheduled_for <= current,
-                    or_(
-                        WorkflowTask.status == "pending",
-                        ((WorkflowTask.status == "running") & (WorkflowTask.locked_at < expired)),
-                    ),
+        try:
+            with self._sessions.begin() as session:
+                task = session.scalar(
+                    select(WorkflowTask)
+                    .where(
+                        WorkflowTask.attempts < WorkflowTask.max_attempts,
+                        WorkflowTask.scheduled_for <= current,
+                        ~exists(
+                            select(CandidateDeletionRecord.candidate_id).where(
+                                CandidateDeletionRecord.candidate_id == WorkflowTask.candidate_id
+                            )
+                        ),
+                        or_(
+                            WorkflowTask.status == "pending",
+                            (
+                                (WorkflowTask.status == "running")
+                                & (WorkflowTask.locked_at < expired)
+                            ),
+                        ),
+                    )
+                    .order_by(WorkflowTask.scheduled_for, WorkflowTask.created_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
                 )
-                .order_by(WorkflowTask.scheduled_for, WorkflowTask.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
-            )
-            if task is None:
+                if task is None:
+                    return None
+                task.status = "running"
+                task.locked_by = worker_id
+                task.locked_at = current
+                task.attempts += 1
+                session.flush()
+                return self._view(task)
+        except IntegrityError as exc:
+            if self._deleted_candidate_integrity(exc):
                 return None
-            task.status = "running"
-            task.locked_by = worker_id
-            task.locked_at = current
-            task.attempts += 1
-            session.flush()
-            return self._view(task)
+            raise
 
     def complete(self, task_id: UUID, *, worker_id: str) -> TaskView:
-        with self._sessions.begin() as session:
-            task = self._owned_running_task(session, task_id, worker_id)
-            task.status = "completed"
-            task.completed_at = datetime.now(UTC)
-            task.locked_by = None
-            task.locked_at = None
-            return self._view(task)
+        try:
+            with self._sessions.begin() as session:
+                task = self._owned_running_task(session, task_id, worker_id)
+                task.status = "completed"
+                task.completed_at = datetime.now(UTC)
+                task.locked_by = None
+                task.locked_at = None
+                return self._view(task)
+        except IntegrityError as exc:
+            if self._deleted_candidate_integrity(exc):
+                raise TaskLeaseLostError("candidate lifecycle is no longer active") from exc
+            raise
 
-    def get(self, task_id: UUID) -> TaskView:
+    def get(self, task_id: UUID) -> TaskView | None:
         with self._sessions() as session:
             task = session.get(WorkflowTask, task_id)
             if task is None:
-                raise ValueError("workflow task not found")
+                return None
             return self._view(task)
 
     def fail(
@@ -132,23 +158,32 @@ class TaskQueue:
         error: str,
         retry_delay: timedelta = timedelta(seconds=30),
     ) -> TaskView:
-        with self._sessions.begin() as session:
-            task = self._owned_running_task(session, task_id, worker_id)
-            task.last_error = error[:1000]
-            task.locked_by = None
-            task.locked_at = None
-            if task.attempts >= task.max_attempts:
-                task.status = "failed"
-            else:
-                task.status = "pending"
-                task.scheduled_for = datetime.now(UTC) + retry_delay
-            return self._view(task)
+        try:
+            with self._sessions.begin() as session:
+                task = self._owned_running_task(session, task_id, worker_id)
+                task.last_error = error[:1000]
+                task.locked_by = None
+                task.locked_at = None
+                if task.attempts >= task.max_attempts:
+                    task.status = "failed"
+                else:
+                    task.status = "pending"
+                    task.scheduled_for = datetime.now(UTC) + retry_delay
+                return self._view(task)
+        except IntegrityError as exc:
+            if self._deleted_candidate_integrity(exc):
+                raise TaskLeaseLostError("candidate lifecycle is no longer active") from exc
+            raise
+
+    @staticmethod
+    def _deleted_candidate_integrity(exc: IntegrityError) -> bool:
+        return "candidate is deleted" in str(exc).casefold()
 
     @staticmethod
     def _owned_running_task(session: Session, task_id: UUID, worker_id: str) -> WorkflowTask:
         task = session.get(WorkflowTask, task_id)
         if task is None:
-            raise ValueError("workflow task not found")
+            raise TaskLeaseLostError("workflow task no longer exists")
         if task.status != "running" or task.locked_by != worker_id:
             raise TaskLeaseLostError("workflow task is not leased by this worker")
         return task

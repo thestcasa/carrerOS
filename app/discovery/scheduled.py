@@ -12,7 +12,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.candidates.service import CandidateService
+from app.candidates.service import CandidateNotFoundError, CandidateService
 from app.discovery.providers import ProviderPlatform
 from app.domain.models import (
     CandidateDiscoveryRun,
@@ -21,7 +21,7 @@ from app.domain.models import (
     CandidateSettingsRecord,
 )
 from app.job_service import DiscoveryRequest, JobService
-from app.tasks import TaskQueue, TaskView
+from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 
 
 class ScheduledDiscoveryError(ValueError):
@@ -280,7 +280,7 @@ class ScheduledDiscoveryService:
     def enqueue_due(self, queue: TaskQueue, *, now: datetime | None = None) -> tuple[TaskView, ...]:
         current = now or datetime.now(UTC)
         scheduled: list[TaskView] = []
-        due: list[tuple[UUID, str, int]] = []
+        due: list[tuple[UUID, str]] = []
         with self._sessions() as session:
             sources = session.scalars(
                 select(CandidateDiscoverySource).where(
@@ -289,33 +289,50 @@ class ScheduledDiscoveryService:
                 )
             ).all()
             for source in sources:
-                self._candidates.get_config(source.candidate_id)
-                settings = session.scalar(
-                    select(CandidateSettingsRecord).where(
-                        CandidateSettingsRecord.candidate_id == source.candidate_id
+                due.append((source.id, source.candidate_id))
+        for source_id, candidate_id in due:
+            try:
+                with self._candidates.lifecycle_read(candidate_id):
+                    with self._sessions() as session:
+                        due_source = session.scalar(
+                            select(CandidateDiscoverySource).where(
+                                CandidateDiscoverySource.id == source_id,
+                                CandidateDiscoverySource.candidate_id == candidate_id,
+                                CandidateDiscoverySource.enabled.is_(True),
+                                CandidateDiscoverySource.next_run_at <= current,
+                            )
+                        )
+                        settings = session.scalar(
+                            select(CandidateSettingsRecord).where(
+                                CandidateSettingsRecord.candidate_id == candidate_id
+                            )
+                        )
+                        if due_source is None or not self._source_is_allowed(due_source, settings):
+                            continue
+                        cadence_minutes = due_source.cadence_minutes
+                    cadence_bucket = str(int(current.timestamp() // (cadence_minutes * 60)))
+                    scheduled.append(
+                        queue.enqueue(
+                            candidate_id=candidate_id,
+                            kind="discover_source",
+                            idempotency_key=f"discover:{source_id}:{cadence_bucket}",
+                            payload={
+                                "source_id": str(source_id),
+                                "cadence_bucket": cadence_bucket,
+                            },
+                            scheduled_for=current,
+                        )
                     )
-                )
-                if not self._source_is_allowed(source, settings):
+                    with self._sessions.begin() as session:
+                        stored_source = session.get(CandidateDiscoverySource, source_id)
+                        if stored_source is not None:
+                            stored_source.next_run_at = current + timedelta(minutes=cadence_minutes)
+            except (CandidateNotFoundError, TaskLeaseLostError):
+                continue
+            except IntegrityError as exc:
+                if "candidate is deleted" in str(exc).casefold():
                     continue
-                due.append((source.id, source.candidate_id, source.cadence_minutes))
-        for source_id, candidate_id, cadence_minutes in due:
-            cadence_bucket = str(int(current.timestamp() // (cadence_minutes * 60)))
-            scheduled.append(
-                queue.enqueue(
-                    candidate_id=candidate_id,
-                    kind="discover_source",
-                    idempotency_key=f"discover:{source_id}:{cadence_bucket}",
-                    payload={
-                        "source_id": str(source_id),
-                        "cadence_bucket": cadence_bucket,
-                    },
-                    scheduled_for=current,
-                )
-            )
-            with self._sessions.begin() as session:
-                stored_source = session.get(CandidateDiscoverySource, source_id)
-                if stored_source is not None:
-                    stored_source.next_run_at = current + timedelta(minutes=cadence_minutes)
+                raise
         return tuple(scheduled)
 
     def execute_task(self, task: TaskView, *, now: datetime | None = None) -> None:
