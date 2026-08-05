@@ -1,0 +1,13 @@
+{
+  "immediate_events": [
+    "captcha_required",
+    "submission_confirmed",
+    "correspondence_recruiter",
+    "correspondence_interview",
+    "correspondence_offer"
+  ],
+  "digest_enabled": true,
+  "digest_frequency": "daily",
+  "channels": ["web"],
+  "approved": true
+}

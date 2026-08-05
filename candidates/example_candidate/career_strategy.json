@@ -2,5 +2,12 @@
   "target_roles": ["Machine Learning Engineer", "Data Platform Engineer"],
   "priority_domains": ["Responsible AI", "Developer tools"],
   "excluded_domains": ["Gambling"],
-  "objectives": ["Build reliable ML-enabled products", "Work in a collaborative engineering team"]
+  "objectives": ["Build reliable ML-enabled products", "Work in a collaborative engineering team"],
+  "role_tiers": [
+    {"tier": 1, "name": "Primary roles", "roles": ["Machine Learning Engineer", "Data Platform Engineer"], "application_share_target": 0.8},
+    {"tier": 2, "name": "Adjacent roles", "roles": ["Backend Engineer"], "application_share_target": 0.2}
+  ],
+  "preferred_company_stages": ["startup", "scaleup"],
+  "preferred_company_types": ["product"],
+  "approved": true
 }

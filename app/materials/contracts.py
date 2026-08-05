@@ -24,6 +24,10 @@ class ApprovedFact(MaterialModel):
     fact_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,127}$")
     text: str = Field(min_length=1)
     source_path: str = Field(min_length=1)
+    document_kinds: tuple[DocumentKind, ...] = (
+        DocumentKind.CV,
+        DocumentKind.COVER_LETTER,
+    )
 
 
 class ApprovedAnswerFact(MaterialModel):

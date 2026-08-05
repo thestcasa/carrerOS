@@ -20,6 +20,9 @@ data_files:
   cover_letter_rules: cover_letter_rules.json
   companies: companies.json
   roles: roles.json
+  certifications: certifications.json
+  publications: publications.json
+  notification_rules: notification_rules.json
 workflow:
   discovery_enabled: true
   automatic_submission_enabled: false

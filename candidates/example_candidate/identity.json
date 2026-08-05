@@ -4,5 +4,15 @@
   "email": "morgan@example.invalid",
   "phone": "+1-555-0100",
   "city": "Exampleton",
-  "country_code": "US"
+  "country_code": "US",
+  "preferred_name": "Morgan",
+  "pronouns": null,
+  "region": "Example State",
+  "country": "United States",
+  "linkedin": "https://example.invalid/morgan-example",
+  "personal_website": null,
+  "github": "https://example.invalid/morgan-example-code",
+  "portfolio": null,
+  "other_links": [],
+  "approved": true
 }

@@ -6,9 +6,32 @@
       "description": "A fictional demand-forecasting service using synthetic public-transport data.",
       "start_date": "2023-01-01",
       "end_date": "2023-05-31",
-      "outcomes": ["Produced reproducible model evaluation reports"],
+      "outcomes": [
+        {
+          "id": "transit_reproducibility_claim",
+          "statement": "Produced reproducible model evaluation reports",
+          "verified": true,
+          "source": "fictional project report",
+          "publicly_usable": true,
+          "confidentiality": "public",
+          "approved": true,
+          "archived": false
+        }
+      ],
       "skills": ["Python", "Machine Learning", "Docker"],
-      "url": "https://example.invalid/projects/transit-forecast"
+      "url": "https://example.invalid/projects/transit-forecast",
+      "project_type": "personal",
+      "status": "completed",
+      "domains": ["Public transport"],
+      "role_categories": ["Machine Learning Engineer"],
+      "evidence": ["fictional project report"],
+      "confidentiality": "public",
+      "public_summary": "A fictional forecasting project using synthetic transport data.",
+      "cv_eligible": true,
+      "cover_letter_eligible": true,
+      "interview_eligible": true,
+      "approved": true,
+      "archived": false
     }
   ]
 }

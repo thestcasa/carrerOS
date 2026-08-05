@@ -252,6 +252,61 @@ def test_unapproved_candidate_cannot_generate_materials(
         )
 
 
+def test_generation_excludes_unapproved_internal_and_unverified_facts(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    experience_path = copied_candidates_root / "example_candidate" / "experience.json"
+    experience = json.loads(experience_path.read_text(encoding="utf-8"))
+    experience["items"][0]["achievements"].extend(
+        [
+            {
+                "id": "internal_secret_claim",
+                "statement": "INTERNAL SECRET MUST NOT LEAVE",
+                "verified": True,
+                "source": "internal fixture",
+                "publicly_usable": True,
+                "confidentiality": "internal",
+                "approved": True,
+                "archived": False,
+            },
+            {
+                "id": "unapproved_public_claim",
+                "statement": "UNAPPROVED CLAIM MUST NOT LEAVE",
+                "verified": True,
+                "source": "public fixture",
+                "publicly_usable": True,
+                "confidentiality": "public",
+                "approved": False,
+                "archived": False,
+            },
+            {
+                "id": "unverified_public_claim",
+                "statement": "UNVERIFIED CLAIM MUST NOT LEAVE",
+                "verified": False,
+                "source": "public fixture",
+                "publicly_usable": True,
+                "confidentiality": "public",
+                "approved": False,
+                "archived": False,
+            },
+        ]
+    )
+    experience_path.write_text(json.dumps(experience), encoding="utf-8")
+    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    job_id = _job(jobs, 503)
+
+    generated = applications.generate_materials(
+        "example_candidate", job_id, "generate-materials-503"
+    )
+    content = "\n".join(document.content for document in generated.documents)
+
+    assert "Introduced typed API contracts" in content
+    assert "INTERNAL SECRET MUST NOT LEAVE" not in content
+    assert "UNAPPROVED CLAIM MUST NOT LEAVE" not in content
+    assert "UNVERIFIED CLAIM MUST NOT LEAVE" not in content
+
+
 def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:

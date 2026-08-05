@@ -84,7 +84,10 @@ export type EditableSection =
   | "cv_rules"
   | "cover_letter_rules"
   | "companies"
-  | "roles";
+  | "roles"
+  | "certifications"
+  | "publications"
+  | "notification_rules";
 
 export interface CandidateUpdateResult {
   candidate_id: string;

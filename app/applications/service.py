@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -36,7 +36,7 @@ from app.applications.contracts import (
 from app.archive import ApplicationArchiveBuilder, ApplicationArchiveData, canonical_json_bytes
 from app.browser import DryRunRequest, FieldKind, SyntheticBrowserDryRunner, UploadArtifact
 from app.browser.fixtures import standard_application_form
-from app.candidates.models import CandidateConfig
+from app.candidates.models import CandidateConfig, ClaimFact
 from app.candidates.service import CandidateService
 from app.correspondence import (
     ApplicationReference,
@@ -758,7 +758,7 @@ class ApplicationService:
     def ingest_correspondence(
         self, request: CorrespondenceIngestRequest, idempotency_key: str
     ) -> CorrespondenceView:
-        self._candidates.get_config(request.candidate_id)
+        config = self._candidates.get_config(request.candidate_id)
         with self._sessions.begin() as session:
             existing = session.scalar(
                 select(StoredCorrespondence).where(
@@ -834,20 +834,22 @@ class ApplicationService:
                         f"CORRESPONDENCE_{classified.kind.value.upper()}",
                         payload={"correspondence_id": str(record.id)},
                     )
-            if classified.kind is not CorrespondenceKind.UNKNOWN:
+            event_type = f"correspondence_{classified.kind.value}"
+            notification_rules = config.notification_rules
+            if (
+                classified.kind is not CorrespondenceKind.UNKNOWN
+                and config.manifest.workflow.notifications_enabled
+                and notification_rules.approved
+                and "web" in notification_rules.channels
+            ):
                 session.add(
                     NotificationRecord(
                         candidate_id=request.candidate_id,
                         application_id=classified.application_id,
-                        event_type=f"correspondence_{classified.kind.value}",
+                        event_type=event_type,
                         channel="dashboard",
                         message=request.subject,
-                        immediate=classified.kind
-                        in {
-                            CorrespondenceKind.RECRUITER,
-                            CorrespondenceKind.INTERVIEW,
-                            CorrespondenceKind.OFFER,
-                        },
+                        immediate=event_type in notification_rules.immediate_events,
                     )
                 )
             return self._correspondence_view(record)
@@ -1151,30 +1153,108 @@ class ApplicationService:
     def _generation_request(
         self, config: CandidateConfig, application_id: UUID, job: GlobalJob
     ) -> GenerationRequest:
-        facts: list[ApprovedFact] = [
-            ApprovedFact(
-                fact_id="biography_summary",
-                text=config.biography.summary,
-                source_path="biography.summary",
+        facts: list[ApprovedFact] = []
+        if config.biography.approved:
+            facts.append(
+                ApprovedFact(
+                    fact_id="biography_summary",
+                    text=config.biography.summary,
+                    source_path="biography.summary",
+                )
             )
-        ]
         for experience in config.experience.items:
+            if (
+                not experience.approved
+                or experience.archived
+                or experience.confidentiality != "public"
+            ):
+                continue
+            document_kinds = tuple(
+                kind
+                for kind, eligible in (
+                    (DocumentKind.CV, experience.cv_eligible),
+                    (DocumentKind.COVER_LETTER, experience.cover_letter_eligible),
+                )
+                if eligible
+            )
             for index, achievement in enumerate(experience.achievements):
+                if not isinstance(achievement, ClaimFact):
+                    continue
+                if (
+                    not achievement.approved
+                    or achievement.archived
+                    or not achievement.verified
+                    or not achievement.publicly_usable
+                    or achievement.confidentiality != "public"
+                ):
+                    continue
                 facts.append(
                     ApprovedFact(
-                        fact_id=f"{experience.id}_achievement_{index}",
-                        text=achievement,
+                        fact_id=achievement.id,
+                        text=achievement.statement,
                         source_path=f"experience.{experience.id}.achievements[{index}]",
+                        document_kinds=document_kinds,
                     )
                 )
         for project in config.projects.items:
+            if not project.approved or project.archived or project.confidentiality == "internal":
+                continue
+            description = (
+                project.description
+                if project.confidentiality == "public"
+                else project.public_summary
+            )
+            if not description:
+                continue
+            document_kinds = tuple(
+                kind
+                for kind, eligible in (
+                    (DocumentKind.CV, project.cv_eligible),
+                    (DocumentKind.COVER_LETTER, project.cover_letter_eligible),
+                )
+                if eligible
+            )
             facts.append(
                 ApprovedFact(
                     fact_id=f"{project.id}_description",
-                    text=project.description,
-                    source_path=f"projects.{project.id}.description",
+                    text=description,
+                    source_path=(
+                        f"projects.{project.id}.description"
+                        if project.confidentiality == "public"
+                        else f"projects.{project.id}.public_summary"
+                    ),
+                    document_kinds=document_kinds,
                 )
             )
+            for index, outcome in enumerate(project.outcomes):
+                if not isinstance(outcome, ClaimFact):
+                    continue
+                if (
+                    not outcome.approved
+                    or outcome.archived
+                    or not outcome.verified
+                    or not outcome.publicly_usable
+                    or outcome.confidentiality != "public"
+                ):
+                    continue
+                facts.append(
+                    ApprovedFact(
+                        fact_id=outcome.id,
+                        text=outcome.statement,
+                        source_path=f"projects.{project.id}.outcomes[{index}]",
+                        document_kinds=document_kinds,
+                    )
+                )
+        today = date.today()
+        usable_answers = tuple(
+            item
+            for item in config.approved_answers.items
+            if item.approved
+            and item.auto_submit_allowed
+            and not item.archived
+            and (item.valid_from is None or item.valid_from <= today)
+            and (item.valid_until is None or item.valid_until >= today)
+        )
         answers = tuple(
             ApprovedAnswerFact(
                 key=item.key,
@@ -1182,7 +1262,7 @@ class ApplicationService:
                 answer=item.answer,
                 evidence_ids=item.evidence_ids,
             )
-            for item in config.approved_answers.items
+            for item in usable_answers
         )
         requested_documents = [DocumentKind.CV]
         if config.cover_letter_rules.enabled:
@@ -1197,6 +1277,7 @@ class ApplicationService:
             answer_prompts=tuple(
                 AnswerPrompt(question_key=item.key, question=item.question_pattern)
                 for item in config.approved_answers.items
+                if not item.archived
             ),
         )
 

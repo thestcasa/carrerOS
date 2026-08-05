@@ -43,5 +43,6 @@ materials and synthetic dry runs, human actions, security events, settings, anal
 immutable artifact downloads. The CLI also provides `onboard`, fixture-safe `discover`, and
 `export-candidate`.
 
-See `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/OPERATIONS.md`. Career OS never bypasses
-CAPTCHA or anti-bot controls, and this build contains no live final-click capability.
+See `docs/ARCHITECTURE.md`, `docs/CANDIDATE_ONBOARDING.md`, `docs/SECURITY.md`, and
+`docs/OPERATIONS.md`. Career OS never bypasses CAPTCHA or anti-bot controls, and this build
+contains no live final-click capability.

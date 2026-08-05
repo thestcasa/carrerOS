@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { CandidateDetail, EditableSection, JsonObject, JsonValue } from "@/lib/types";
 
@@ -21,6 +21,9 @@ const sectionMeta: Record<EditableSection, { label: string; description: string 
   cover_letter_rules: { label: "Cover letter rules", description: "Candidate-controlled generation policy." },
   companies: { label: "Company rules", description: "Target and blocked companies." },
   roles: { label: "Role rules", description: "Target and blocked roles." },
+  certifications: { label: "Certifications", description: "Approved credentials with stable IDs, dates, and evidence links." },
+  publications: { label: "Publications", description: "Candidate-approved publications and public summaries." },
+  notification_rules: { label: "Notifications", description: "Secret-free event, channel, and digest preferences." },
 };
 
 const sections = Object.keys(sectionMeta) as EditableSection[];
@@ -42,11 +45,13 @@ function Field({
   path,
   value,
   onChange,
+  onValidity,
 }: {
   fieldKey: string;
   path: string[];
   value: JsonValue;
   onChange: (path: string[], value: JsonValue) => void;
+  onValidity: (path: string[], valid: boolean) => void;
 }) {
   const id = path.join("-");
   const label = titleFor(fieldKey);
@@ -57,7 +62,7 @@ function Field({
         <legend>{label}</legend>
         <div className="field-grid">
           {Object.entries(value).map(([nestedKey, nestedValue]) => (
-            <Field key={nestedKey} fieldKey={nestedKey} path={[...path, nestedKey]} value={nestedValue} onChange={onChange} />
+            <Field key={nestedKey} fieldKey={nestedKey} path={[...path, nestedKey]} value={nestedValue} onChange={onChange} onValidity={onValidity} />
           ))}
         </div>
       </fieldset>
@@ -75,23 +80,7 @@ function Field({
 
   if (Array.isArray(value)) {
     const structured = value.some((item) => item !== null && typeof item === "object");
-    if (structured) return (
-      <label className="form-field" htmlFor={id}>
-        <span>{label}</span>
-        <textarea id={id} rows={Math.max(8, value.length * 8)} defaultValue={JSON.stringify(value, null, 2)} onBlur={(event) => {
-          try {
-            const parsed: unknown = JSON.parse(event.target.value);
-            if (!Array.isArray(parsed)) throw new Error("Expected an array");
-            event.target.setCustomValidity("");
-            onChange(path, parsed as JsonValue);
-          } catch {
-            event.target.setCustomValidity("Enter a valid JSON array. Existing structured data has not been changed.");
-            event.target.reportValidity();
-          }
-        }} />
-        <small>Structured entries use JSON so stable IDs and nested evidence cannot be flattened.</small>
-      </label>
-    );
+    if (structured) return <StructuredArrayField id={id} label={label} path={path} value={value} onChange={onChange} onValidity={onValidity} />;
     return (
       <label className="form-field" htmlFor={id}>
         <span>{label}</span>
@@ -127,6 +116,44 @@ function Field({
   );
 }
 
+function StructuredArrayField({ id, label, path, value, onChange, onValidity }: {
+  id: string;
+  label: string;
+  path: string[];
+  value: JsonValue[];
+  onChange: (path: string[], value: JsonValue) => void;
+  onValidity: (path: string[], valid: boolean) => void;
+}) {
+  const canonical = JSON.stringify(value, null, 2);
+  const lastEmitted = useRef(canonical);
+  const [draft, setDraft] = useState(canonical);
+  useEffect(() => {
+    if (canonical !== lastEmitted.current) setDraft(canonical);
+  }, [canonical]);
+  return (
+    <label className="form-field" htmlFor={id}>
+      <span>{label}</span>
+      <textarea id={id} rows={Math.max(8, value.length * 8)} value={draft} onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        try {
+          const parsed: unknown = JSON.parse(next);
+          if (!Array.isArray(parsed)) throw new Error("Expected an array");
+          event.target.setCustomValidity("");
+          const normalized = JSON.stringify(parsed, null, 2);
+          lastEmitted.current = normalized;
+          onValidity(path, true);
+          onChange(path, parsed as JsonValue);
+        } catch {
+          event.target.setCustomValidity("Enter a valid JSON array. Existing structured data has not been changed.");
+          onValidity(path, false);
+        }
+      }} />
+      <small>Structured entries use JSON so stable IDs and nested evidence cannot be flattened.</small>
+    </label>
+  );
+}
+
 export function ProfileEditor({ detail, initialSection = "identity" }: { detail: CandidateDetail; initialSection?: EditableSection }) {
   const safeInitial = sections.includes(initialSection) ? initialSection : "identity";
   const [activeSection, setActiveSection] = useState<EditableSection>(safeInitial);
@@ -135,6 +162,7 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   const [data, setData] = useState<Record<string, JsonObject>>(sourceData);
   const [version, setVersion] = useState(detail.profile_version);
   const [saving, setSaving] = useState(false);
+  const [invalidPaths, setInvalidPaths] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const current = data[activeSection];
@@ -143,6 +171,15 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   function change(path: string[], value: JsonValue) {
     setData((previous) => ({ ...previous, [activeSection]: updateAtPath(previous[activeSection], path, value) }));
     setMessage(null);
+  }
+
+  function setValidity(path: string[], valid: boolean) {
+    setInvalidPaths((previous) => {
+      const next = new Set(previous);
+      const key = `${activeSection}:${path.join(".")}`;
+      if (valid) next.delete(key); else next.add(key);
+      return next;
+    });
   }
 
   async function save() {
@@ -186,11 +223,11 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
           </div>
         ) : null}
         <div className="field-grid">
-          {Object.entries(current).map(([key, value]) => <Field key={key} fieldKey={key} path={[key]} value={value} onChange={change} />)}
+          {Object.entries(current).map(([key, value]) => <Field key={key} fieldKey={key} path={[key]} value={value} onChange={change} onValidity={setValidity} />)}
         </div>
         {message ? <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p> : null}
         <div className="editor-actions">
-          <button className="button primary" disabled={!dirty || saving} onClick={save}>{saving ? "Saving…" : "Save new version"}</button>
+          <button className="button primary" disabled={!dirty || saving || invalidPaths.size > 0} onClick={save}>{saving ? "Saving…" : "Save new version"}</button>
           <button className="button secondary" disabled={!dirty || saving} onClick={() => setData((previous) => ({ ...previous, [activeSection]: structuredClone(baseline[activeSection]) }))}>Discard changes</button>
         </div>
       </section>

@@ -18,6 +18,7 @@ from app.candidates.models import (
     Biography,
     CandidateConfig,
     CareerStrategy,
+    Certifications,
     CompanyRules,
     CoverLetterRules,
     CVRules,
@@ -26,8 +27,10 @@ from app.candidates.models import (
     Identity,
     Languages,
     LegalStatus,
+    NotificationRules,
     Preferences,
     Projects,
+    Publications,
     RoleRules,
     ScoringRules,
     Skills,
@@ -52,6 +55,9 @@ CandidateSection = Literal[
     "cover_letter_rules",
     "companies",
     "roles",
+    "certifications",
+    "publications",
+    "notification_rules",
 ]
 
 _SECTION_MODELS: dict[CandidateSection, type[BaseModel]] = {
@@ -71,6 +77,9 @@ _SECTION_MODELS: dict[CandidateSection, type[BaseModel]] = {
     "cover_letter_rules": CoverLetterRules,
     "companies": CompanyRules,
     "roles": RoleRules,
+    "certifications": Certifications,
+    "publications": Publications,
+    "notification_rules": NotificationRules,
 }
 
 
@@ -194,9 +203,10 @@ class CandidateService:
                     "candidate_id": request.candidate_id,
                     "full_name": request.display_name.strip(),
                     "email": f"onboarding@{request.candidate_id}.invalid",
-                    "phone": "UNAPPROVED",
-                    "city": "UNAPPROVED",
+                    "phone": "+0 000 000",
+                    "city": "Unapproved",
                     "country_code": "ZZ",
+                    "approved": False,
                 }
             )
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
@@ -206,6 +216,7 @@ class CandidateService:
                     {
                         "summary": "Unapproved onboarding draft; replace with candidate facts.",
                         "highlights": ["Unapproved draft evidence"],
+                        "approved": False,
                     },
                     indent=2,
                 )
@@ -220,12 +231,54 @@ class CandidateService:
                         "work_authorization_confirmed": False,
                         "requires_sponsorship": False,
                         "approved_for_automated_use": False,
+                        "approved": False,
                     },
                     indent=2,
                 )
                 + "\n",
                 encoding="utf-8",
             )
+            draft_sections: dict[str, dict[str, Any]] = {
+                "education.json": {"items": []},
+                "experience.json": {"items": []},
+                "projects.json": {"items": []},
+                "certifications.json": {"items": []},
+                "publications.json": {"items": []},
+                "languages.json": {"items": []},
+                "approved_answers.json": {"items": []},
+            }
+            for filename, payload in draft_sections.items():
+                (destination / filename).write_text(
+                    json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+                )
+            for filename in (
+                "skills.json",
+                "career_strategy.json",
+                "scoring_rules.json",
+                "preferences.json",
+                "cv_rules.json",
+                "cover_letter_rules.json",
+                "companies.json",
+                "roles.json",
+                "notification_rules.json",
+            ):
+                path = destination / filename
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["approved"] = False
+                if filename == "skills.json":
+                    payload["categories"] = {}
+                elif filename == "career_strategy.json":
+                    payload.update(
+                        {
+                            "target_roles": [],
+                            "priority_domains": [],
+                            "objectives": [],
+                            "role_tiers": [],
+                        }
+                    )
+                elif filename == "preferences.json":
+                    payload["full_time_start"] = None
+                path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
             return self.get_detail(request.candidate_id)
         except Exception:
             shutil.rmtree(destination, ignore_errors=True)
@@ -320,8 +373,12 @@ class CandidateService:
                 raise CandidateUpdateError(str(exc)) from exc
             previous_version = config.manifest.profile_version
             next_version = _next_patch_version(previous_version)
+            data_files = config.manifest.data_files
+            if getattr(data_files, update.section) is None:
+                default_name = f"{update.section}.json"
+                data_files = data_files.model_copy(update={update.section: default_name})
             manifest = config.manifest.model_copy(
-                update={"profile_version": next_version}, deep=True
+                update={"profile_version": next_version, "data_files": data_files}, deep=True
             )
             candidate_data = config.model_dump()
             candidate_data[update.section] = section_value
@@ -356,11 +413,14 @@ class CandidateService:
         source_names = ["profile.yaml"] + [
             getattr(previous.manifest.data_files, field_name)
             for field_name in type(previous.manifest.data_files).model_fields
+            if getattr(previous.manifest.data_files, field_name) is not None
         ]
         for source_name in source_names:
             shutil.copy2(directory / source_name, history / source_name)
 
         section_name = getattr(updated.manifest.data_files, section)
+        if section_name is None:
+            raise CandidateUpdateError("candidate section has no configured source file")
         section_path = directory / section_name
         profile_path = directory / "profile.yaml"
         section_temp = directory / f".{section_name}.{uuid4().hex}.tmp"
@@ -386,7 +446,11 @@ class CandidateService:
             os.replace(section_temp, section_path)
             os.replace(profile_temp, profile_path)
         except Exception as exc:
-            shutil.copy2(history / section_name, section_path)
+            previous_section_name = getattr(previous.manifest.data_files, section)
+            if previous_section_name is None:
+                section_path.unlink(missing_ok=True)
+            else:
+                shutil.copy2(history / previous_section_name, section_path)
             shutil.copy2(history / "profile.yaml", profile_path)
             section_temp.unlink(missing_ok=True)
             profile_temp.unlink(missing_ok=True)

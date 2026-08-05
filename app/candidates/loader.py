@@ -11,6 +11,7 @@ from app.candidates.models import (
     Biography,
     CandidateConfig,
     CareerStrategy,
+    Certifications,
     CompanyRules,
     CoverLetterRules,
     CVRules,
@@ -19,9 +20,11 @@ from app.candidates.models import (
     Identity,
     Languages,
     LegalStatus,
+    NotificationRules,
     Preferences,
     ProfileManifest,
     Projects,
+    Publications,
     RoleRules,
     ScoringRules,
     Skills,
@@ -49,6 +52,9 @@ _CONFIG_MODELS: dict[str, type[Any]] = {
     "cover_letter_rules": CoverLetterRules,
     "companies": CompanyRules,
     "roles": RoleRules,
+    "certifications": Certifications,
+    "publications": Publications,
+    "notification_rules": NotificationRules,
 }
 
 
@@ -65,6 +71,8 @@ class CandidateLoader:
         loaded: dict[str, Any] = {"manifest": manifest}
         for field_name, model_type in _CONFIG_MODELS.items():
             relative_path = getattr(manifest.data_files, field_name)
+            if relative_path is None:
+                continue
             config_path = self._safe_config_path(candidate_dir, relative_path)
             loaded[field_name] = self._read_model(config_path, model_type)
 

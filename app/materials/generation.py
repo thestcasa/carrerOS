@@ -49,7 +49,11 @@ class DeterministicMaterialGenerator:
             if kind == DocumentKind.CV
             else f"Application for {request.target.title} at {request.target.company}"
         )
-        claims = tuple(Claim(text=fact.text, evidence_ids=(fact.fact_id,)) for fact in facts)
+        claims = tuple(
+            Claim(text=fact.text, evidence_ids=(fact.fact_id,))
+            for fact in facts
+            if kind in fact.document_kinds
+        )
         content = "\n\n".join((heading, *(f"- {claim.text}" for claim in claims)))
         return GeneratedDocument(
             kind=kind,

@@ -72,7 +72,20 @@ All candidate-specific facts and policy live under `candidates/{candidate_id}/`.
 - target and blocked companies
 - target and blocked roles
 
-The loader rejects path traversal, missing files, candidate-ID mismatches, malformed dates, duplicate stable IDs, and internally contradictory target/block lists. Pydantic v2 models are strict and forbid unknown fields. The `readiness` command adds operational checks such as minimum evidence, languages, targets, scoring weights, and legal-status approval.
+The loader rejects path traversal, missing required files, candidate-ID mismatches, malformed dates,
+duplicate stable IDs, and internally contradictory target/block lists. Optional certifications,
+publications, and notification rules may be absent and then report as unconfigured. Pydantic v2
+models are strict and forbid unknown fields. Approval-related compatibility defaults are always
+false, so an older package is never silently trusted.
+
+Candidate facts carry approval and outward-use controls. Experiences and projects add archive,
+confidentiality, and per-document eligibility; individual generated claims additionally require a
+stable ID, verification, public usability, public confidentiality, and approval. Approved answers
+carry sensitivity, validity dates, and explicit auto-submit permission. `ApplicationService`
+derives the material generator's input from these controls; the generator never receives withheld
+internal or unapproved text. Readiness checks minimum approved evidence, identity/biography/skills/
+strategy/preferences/legal/document approvals, availability, legal verification, sensitive answers,
+and unverified approved claims.
 
 Candidate snapshots are serialized deterministically, include the profile version and source-file hashes, and carry a SHA-256 of their canonical content for audit archives. Only fictional example data is committed.
 

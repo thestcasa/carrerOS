@@ -3,5 +3,6 @@
     "engineering": ["Python", "SQL", "FastAPI", "PostgreSQL", "Docker"],
     "data": ["Data modeling", "Machine Learning", "Experiment design"],
     "collaboration": ["Technical writing", "Code review"]
-  }
+  },
+  "approved": true
 }

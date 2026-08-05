@@ -3,7 +3,7 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: candidate-schema richness, browser fixture hardening, and final verification
+- Active phase: candidate onboarding import, browser fixture hardening, and final verification
 - Branch baseline: `autonomous-build`; latest committed baseline was `5cbb3cc`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh` and `artifacts/`
@@ -37,13 +37,21 @@
   bounded retries, and real worker handling for periodic candidate readiness checks.
 - Candidate settings/security mutations have a persistent hash-chained administrative ledger;
   application rate limits and emergency stop are checked at authorization and execution time.
+- Candidate records now expose explicit approval, archive, confidentiality, verification, and
+  document-eligibility controls. Certifications, publications, and secret-free notification rules
+  are optional, versioned domains in the API/editor/snapshot. Generation filters out internal,
+  unapproved, archived, unverified, expired, and non-auto-submit material at the derivation boundary.
+- Fictional onboarding creates an empty unapproved evidence draft rather than inheriting approved
+  facts from the example candidate. Readiness checks fact approvals, sensitive answers, document
+  rules, availability, legal verification, and configured optional domains.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, `ruff check`, strict `mypy`, and **99 pytest tests passed** on
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **105 pytest tests pass** on Python
+  3.14.4 (one upstream Starlette `httpx` deprecation warning).
   Python 3.14.4 (one upstream Starlette `httpx` deprecation warning).
-- Frontend: ESLint, strict TypeScript, **13 Vitest tests passed**, and Next.js production build
-  passed for dashboard, candidates, jobs, applications, actions, security, analytics, and settings.
+- Frontend: ESLint, strict TypeScript, **15 Vitest tests**, and the Next.js production build pass
+  for all required routes.
 - Migrations: fresh SQLite upgrade and `alembic check` pass through `a71c302de864`; models and
   Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup, Playwright browser
@@ -55,8 +63,7 @@
 
 - Implement a real Playwright-based synthetic fixture worker with recoverable contexts; no real
   final clicks are authorized in this repository.
-- Complete richer onboarding import/extraction, candidate facts approval/confidentiality, and
-  notification settings domains without committing real pilot data.
+- Complete richer onboarding CV import/extraction without committing real pilot data.
 - Execute export/deletion and retention workflows; hosted authentication/encryption and separate
   browser workers remain deployment hardening.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.

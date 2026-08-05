@@ -1,6 +1,6 @@
 {
   "items": [
-    {"language": "English", "level": "native"},
-    {"language": "French", "level": "B2"}
+    {"language": "English", "level": "native", "professional_use": true, "approved": true, "archived": false},
+    {"language": "French", "level": "B2", "professional_use": true, "approved": true, "archived": false}
   ]
 }

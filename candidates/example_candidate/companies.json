@@ -1,4 +1,5 @@
 {
   "target": ["Example Robotics Ltd", "Fictional Data Works"],
-  "blocked": ["Example Gambling Holdings"]
+  "blocked": ["Example Gambling Holdings"],
+  "approved": true
 }

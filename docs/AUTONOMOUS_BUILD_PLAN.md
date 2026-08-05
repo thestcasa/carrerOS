@@ -106,6 +106,20 @@ interview packages, local session ownership/CSRF, tenant constraints, artifact a
 exports, and administrative audit are complete. Rich onboarding, executable deletion/retention,
 hosted encryption, and separate Playwright worker ownership remain.
 
+### Phase 5A — candidate fact controls and portable data
+
+1. Extend candidate packages with fact-level approval, verification, confidentiality, archive,
+   and document-eligibility controls while loading older packages conservatively.
+2. Add optional certification, publication, and secret-free notification-rule domains to the
+   loader, snapshot, versioned editor, fictional fixture, and readiness model.
+3. Derive generation inputs only from approved public facts. Internal, archived, unverified,
+   expired, and non-auto-submit data must never reach outward material generation.
+4. Keep onboarding drafts empty and unapproved instead of copying approved fictional evidence.
+5. Add deterministic CV-import draft extraction and explicit approval workflow without storing
+   or committing real candidate documents.
+
+Status: steps 1–4 are implemented and under full quality-gate verification. Step 5 remains.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.
@@ -127,6 +141,8 @@ hosted encryption, and separate Playwright worker ownership remain.
 - Backend validation and state are authoritative; the frontend never duplicates submission
   authorization logic or optimistically reports success.
 - Major schema/API changes are migration-backed and backward-compatible where practical.
+- Missing optional candidate files load as unconfigured domains. Missing approval metadata always
+  defaults to false; compatibility never silently upgrades a legacy fact to approved.
 - The specification's named pilot data is not copied into version control because the repository
   instructions explicitly prohibit real candidate data. Pilot readiness is represented as an
   onboarding/configuration task and all executable acceptance paths use fictional `.invalid`
