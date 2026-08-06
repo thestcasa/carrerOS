@@ -66,6 +66,35 @@ class ReviewView(ApplicationContract):
     report: dict[str, object]
 
 
+class CoverLetterMaterialPolicy(ApplicationContract):
+    included: bool
+    reason: str | None
+    selected_experience_ids: tuple[str, ...]
+    selected_project_ids: tuple[str, ...]
+    minimum_words: int = Field(ge=50, le=250)
+    maximum_words: int = Field(ge=50, le=2000)
+
+    @model_validator(mode="after")
+    def word_range_is_valid(self) -> CoverLetterMaterialPolicy:
+        if self.maximum_words < self.minimum_words:
+            raise ValueError("cover-letter maximum words must be at least minimum words")
+        if self.included != (self.reason is not None):
+            raise ValueError("cover-letter inclusion must have one explicit reason")
+        return self
+
+
+class ApplicationMaterialPolicy(ApplicationContract):
+    schema_version: Literal["1.0"] = "1.0"
+    generator_version: Literal["deterministic_material_v2", "legacy_material_unknown"]
+    job_version: int = Field(ge=1)
+    job_payload_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    cv_template_id: Literal["technical_single_page", "technical_two_page", "legacy-configured"]
+    cv_template_version: Literal["1.0", "unknown"]
+    selected_experience_ids: tuple[str, ...]
+    selected_project_ids: tuple[str, ...]
+    cover_letter: CoverLetterMaterialPolicy
+
+
 class CorrespondenceView(ApplicationContract):
     correspondence_id: UUID
     candidate_id: str
@@ -112,6 +141,7 @@ class ApplicationDetail(ApplicationSummary):
     archive_available: bool
     confirmation_reference: str | None
     submitted_at: datetime | None
+    material_policy: ApplicationMaterialPolicy | None = None
 
 
 class ArtifactView(ApplicationContract):

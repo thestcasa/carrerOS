@@ -304,9 +304,10 @@ import command key across uncertain failures.
    normalized job contract to the specification fields and route runtime job analysis through a
    provider-neutral, strictly typed `JobAnalysisAgent` boundary with a deterministic local
    provider.
-3. Implement the remaining Milestone 3 policy surface as small end-to-end slices: role-specific
-   template/content selection, configuration-driven cover-letter inclusion, then append-only
-   free-text answer revision with backend-derived provenance and review.
+3. [Role-aware documents complete; answer revision next] Implement the remaining Milestone 3
+   policy surface as small end-to-end slices: role-specific template/content selection,
+   configuration-driven cover-letter inclusion, then append-only free-text answer revision with
+   backend-derived provenance and review.
 4. Add the missing browser route/accessibility-critical test layer using deterministic local
    fixtures where the host permits it; document only genuinely external Chromium/Compose limits.
 5. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining

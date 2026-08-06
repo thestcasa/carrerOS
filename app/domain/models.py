@@ -380,6 +380,7 @@ class Application(Base, TimestampMixin, CandidateScopedMixin):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     terminal_reason: Mapped[str | None] = mapped_column(Text)
+    material_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     archive_uri: Mapped[str | None] = mapped_column(Text)
     confirmation_reference: Mapped[str | None] = mapped_column(String(255))
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

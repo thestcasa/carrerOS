@@ -3,9 +3,10 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: remaining role-aware material policy and append-only answer revision
-- Branch baseline: `autonomous-build`; latest completed security slice is lifecycle-fenced runtime
-  analysis (`f1084d2`), with normalized-job completeness pending commit
+- Active phase: append-only free-text answer revision, then browser E2E/accessibility-critical
+  coverage and final acceptance audit
+- Branch baseline: `autonomous-build`; latest completed slice is normalized-job completeness
+  (`da66429`), with role-aware material policy pending commit
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -143,16 +144,25 @@
   skills/languages, experience ranges, salary evidence/period, authorization constraints,
   deadline, and expected start remain null when absent rather than being inferred. Migration
   `9c4e2a7b6d10` adds the previously missing database columns.
+- Material generation now ranks approved experience and projects against the exact job, enforces
+  configured CV/cover selection caps, chooses an allowlisted role-specific template, and records
+  the selected IDs. Cover-letter inclusion has an explicit source/config/priority/motivation reason,
+  configured word bounds, exact claim provenance, and evidence-safe canonical prose. The immutable
+  application snapshot drives regeneration, while `Application.material_policy` persists the
+  decision plus exact job version/hash for the API/UI, gate, archive, and later revisions even if
+  current candidate settings later change. Missing or malformed policies deny rather than omitting
+  a cover letter. Migration `4e8b1c2d3f40` conservatively marks legacy applications with existing
+  cover letters.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **269 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **273 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **55 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **56 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `9c4e2a7b6d10`; workflow-task deletion fences are present after the table rebuild and
+  pass through `4e8b1c2d3f40`; workflow-task deletion fences are present after the table rebuild and
   models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
@@ -179,8 +189,8 @@ the environment reasons recorded below.
   deployment. Configuration portability is complete; full lifecycle exports intentionally remain
   non-restorable because replaying operational/database state is outside the safe import boundary.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
-- Complete role-specific template/content selection, richer cover-letter policy, and versioned
-  free-text-answer revision; DOCX remains optional. Manual rendered-document revision,
+- Complete versioned free-text-answer revision; DOCX remains optional. Role-specific
+  template/content selection, cover-letter policy, manual rendered-document revision,
   cross-source identity, and fresh-source proof are complete.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
   worktree clean apart from the preserved user-owned paths.

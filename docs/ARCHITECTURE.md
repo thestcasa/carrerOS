@@ -345,6 +345,15 @@ agreement with deterministic dimension scores, evidence, contributions, totals, 
 blockers before persistence. Provider, model, and prompt identity are assigned by the service;
 agent-supplied identity cannot enter the durable audit record.
 
+Material generation is driven by the immutable candidate snapshot. Experience and project groups
+are ranked against the normalized job and capped by candidate policy; role-template selection is
+allowlisted. Cover-letter inclusion records the exact source/config/priority/motivation reason and
+word bounds. That decision, template, selected fact groups, generator version, and exact job-version
+hash are persisted on the application and mirrored into score rationale. Later configuration or
+job drift therefore cannot silently change revision, gate, or archive requirements; malformed
+policy denies. Legacy applications are backfilled according to whether a cover-letter document
+already exists.
+
 ## Local authorization
 
 Runtime defaults require a signed local bearer session plus CSRF for mutations. Candidate IDs from

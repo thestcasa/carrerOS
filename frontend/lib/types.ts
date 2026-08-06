@@ -418,6 +418,25 @@ export interface ApplicationEventView {
   payload: JsonObject;
 }
 
+export interface MaterialPolicy {
+  schema_version: "1.0";
+  generator_version: "deterministic_material_v2" | "legacy_material_unknown";
+  job_version: number;
+  job_payload_sha256: string;
+  cv_template_id: string;
+  cv_template_version: string;
+  selected_experience_ids: string[];
+  selected_project_ids: string[];
+  cover_letter: {
+    included: boolean;
+    reason: string | null;
+    selected_experience_ids: string[];
+    selected_project_ids: string[];
+    minimum_words: number;
+    maximum_words: number;
+  };
+}
+
 export interface ApplicationDetail extends ApplicationSummary {
   source_url: string;
   ats_platform: string | null;
@@ -433,6 +452,7 @@ export interface ApplicationDetail extends ApplicationSummary {
   archive_available: boolean;
   confirmation_reference: string | null;
   submitted_at: string | null;
+  material_policy: MaterialPolicy | null;
 }
 
 export interface CorrespondenceView {

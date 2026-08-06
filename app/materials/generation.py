@@ -44,23 +44,94 @@ class DeterministicMaterialGenerator:
         request: GenerationRequest,
         facts: tuple[ApprovedFact, ...],
     ) -> GeneratedDocument:
-        heading = (
-            f"CV — {request.target.title} at {request.target.company}"
-            if kind == DocumentKind.CV
-            else f"Application for {request.target.title} at {request.target.company}"
-        )
         claims = tuple(
             Claim(text=fact.text, evidence_ids=(fact.fact_id,))
             for fact in facts
             if kind in fact.document_kinds
         )
-        content = "\n\n".join((heading, *(f"- {claim.text}" for claim in claims)))
+        if kind == DocumentKind.CV:
+            heading = f"CV — {request.target.title} at {request.target.company}"
+            content = "\n\n".join((heading, *(f"- {claim.text}" for claim in claims)))
+            minimum_words = None
+            maximum_words = None
+        else:
+            heading = f"Application for {request.target.title} at {request.target.company}"
+            paragraphs = [
+                heading,
+                "Dear Hiring Team,",
+                (
+                    f"I am applying for the {request.target.title} role at "
+                    f"{request.target.company}. This letter uses only approved candidate evidence "
+                    "and the role identity recorded in the source posting."
+                ),
+                *(f"{claim.text}." for claim in claims),
+            ]
+            safe_context = (
+                (
+                    "The selected examples were chosen for their direct overlap with the recorded "
+                    "role requirements; no assumptions about the company have been added."
+                ),
+                (
+                    "I would welcome the opportunity to discuss how this documented experience "
+                    "relates to the responsibilities of the position."
+                ),
+                (
+                    "The accompanying CV provides the underlying chronology, while this letter "
+                    "highlights only the most relevant approved evidence."
+                ),
+                (
+                    "I have kept the application specific to this role and have not relied on "
+                    "unsupported achievements, metrics, or company claims."
+                ),
+                (
+                    "Thank you for considering this evidence-based application. I would be glad "
+                    "to answer further questions in a structured interview."
+                ),
+                (
+                    "Where the posting leaves a detail unspecified, I have left it unspecified "
+                    "rather than introduce a generic or unverified company statement."
+                ),
+                (
+                    "Each factual statement about my background can be traced to the approved "
+                    "candidate record supplied with this application."
+                ),
+                (
+                    "Rather than repeat the full CV, I have limited this letter to one or two "
+                    "experience and project groups selected for relevance."
+                ),
+                (
+                    "The application materials preserve the original dates, terminology, and "
+                    "evidence so that the fit can be assessed without exaggeration."
+                ),
+                (
+                    "I am interested in a conversation grounded in the responsibilities stated "
+                    "for this position and the documented work summarized here."
+                ),
+                (
+                    "This scope keeps the letter concise, role-specific, and suitable for direct "
+                    "comparison with the attached evidence."
+                ),
+            )
+            closing = "Sincerely,\nCandidate"
+            for paragraph in safe_context:
+                prospective = "\n\n".join((*paragraphs, paragraph, closing))
+                if len(prospective.split()) > request.cover_letter_max_words:
+                    continue
+                paragraphs.append(paragraph)
+                if len(prospective.split()) >= request.cover_letter_min_words:
+                    break
+            paragraphs.append(closing)
+            content = "\n\n".join(paragraphs)
+            minimum_words = request.cover_letter_min_words
+            maximum_words = request.cover_letter_max_words
         return GeneratedDocument(
             kind=kind,
             company=request.target.company,
             content=content,
             claims=claims,
             content_sha256=_sha256(content),
+            minimum_words=minimum_words,
+            maximum_words=maximum_words,
         )
 
     @staticmethod

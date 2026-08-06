@@ -803,6 +803,8 @@ class JobService:
             ),
             salary_evidence=job.salary_source,
             salary_confidence=1 if job.salary_source else None,
+            selected_experience=tuple(rationale.get("selected_experience", [])),
+            selected_projects=tuple(rationale.get("selected_projects", [])),
             score_dimensions=tuple(
                 {
                     "name": item["name"],

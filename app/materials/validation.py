@@ -42,6 +42,31 @@ class MaterialValidator:
                         document_kind=document.kind,
                     )
                 )
+            word_count = len(document.content.split())
+            if document.minimum_words is not None and word_count < document.minimum_words:
+                issues.append(
+                    ValidationIssue(
+                        code="document_below_minimum_words",
+                        severity="error",
+                        message=(
+                            f"Document contains {word_count} words; minimum is "
+                            f"{document.minimum_words}."
+                        ),
+                        document_kind=document.kind,
+                    )
+                )
+            if document.maximum_words is not None and word_count > document.maximum_words:
+                issues.append(
+                    ValidationIssue(
+                        code="document_above_maximum_words",
+                        severity="error",
+                        message=(
+                            f"Document contains {word_count} words; maximum is "
+                            f"{document.maximum_words}."
+                        ),
+                        document_kind=document.kind,
+                    )
+                )
             if not document.claims:
                 issues.append(
                     ValidationIssue(

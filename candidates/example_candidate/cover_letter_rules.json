@@ -1,6 +1,11 @@
 {
   "enabled": true,
+  "generation_mode": "always",
+  "min_words": 100,
   "max_words": 400,
+  "max_experiences": 2,
+  "max_projects": 2,
+  "motivations": [],
   "tone": "Direct, specific, and professional",
   "forbidden_claims": ["Unverified company facts", "Unsupported candidate achievements"],
   "require_evidence_ids": true,

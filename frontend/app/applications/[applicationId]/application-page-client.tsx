@@ -6,10 +6,78 @@ import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { MaterialPreview } from "@/components/MaterialPreview";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
-import type { ApplicationDetail, ArtifactView, MaterialRevisionInput } from "@/lib/types";
+import type {
+  ApplicationDetail,
+  ArtifactView,
+  MaterialPolicy,
+  MaterialRevisionInput,
+} from "@/lib/types";
 
 function metadataString(value: unknown): string | null {
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+function selectedIds(values: string[]): string {
+  return values.length ? values.join(", ") : "None selected";
+}
+
+function MaterialPolicyPanel({ policy }: { policy: MaterialPolicy | null }) {
+  return (
+    <section className="panel" aria-labelledby="material-policy-heading">
+      <p className="eyebrow">Persisted generation decision</p>
+      <h2 id="material-policy-heading">Role-aware material policy</h2>
+      {policy ? (
+        <dl className="metadata-list">
+          <div>
+            <dt>Policy schema</dt>
+            <dd>{policy.schema_version}</dd>
+          </div>
+          <div>
+            <dt>Generator</dt>
+            <dd>{policy.generator_version}</dd>
+          </div>
+          <div>
+            <dt>Bound job version</dt>
+            <dd>v{policy.job_version} · {policy.job_payload_sha256}</dd>
+          </div>
+          <div>
+            <dt>CV template</dt>
+            <dd>{policy.cv_template_id}@{policy.cv_template_version}</dd>
+          </div>
+          <div>
+            <dt>Selected experience IDs</dt>
+            <dd>{selectedIds(policy.selected_experience_ids)}</dd>
+          </div>
+          <div>
+            <dt>Selected project IDs</dt>
+            <dd>{selectedIds(policy.selected_project_ids)}</dd>
+          </div>
+          <div>
+            <dt>Cover letter</dt>
+            <dd>{policy.cover_letter.included ? "Included" : "Omitted"}</dd>
+          </div>
+          <div>
+            <dt>Cover-letter reason</dt>
+            <dd>{policy.cover_letter.reason ?? "No reason recorded"}</dd>
+          </div>
+          <div>
+            <dt>Cover-letter experience IDs</dt>
+            <dd>{selectedIds(policy.cover_letter.selected_experience_ids)}</dd>
+          </div>
+          <div>
+            <dt>Cover-letter project IDs</dt>
+            <dd>{selectedIds(policy.cover_letter.selected_project_ids)}</dd>
+          </div>
+          <div>
+            <dt>Cover-letter word bounds</dt>
+            <dd>{policy.cover_letter.minimum_words}–{policy.cover_letter.maximum_words} words</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="muted">No material policy has been persisted for this application.</p>
+      )}
+    </section>
+  );
 }
 
 export function ApplicationPageClient({
@@ -258,6 +326,7 @@ export function ApplicationPageClient({
           </button>
         ) : null}
       </section>
+      <MaterialPolicyPanel policy={application.material_policy} />
       <MaterialPreview
         application={application}
         disabled={busy}

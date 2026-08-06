@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.domain.enums import DocumentKind, ReviewDecision
 
@@ -53,6 +53,8 @@ class GeneratedDocument(MaterialModel):
     content: str = Field(min_length=1)
     claims: tuple[Claim, ...]
     content_sha256: Sha256
+    minimum_words: int | None = Field(default=None, ge=1)
+    maximum_words: int | None = Field(default=None, ge=1)
 
 
 class GeneratedAnswer(MaterialModel):
@@ -72,6 +74,20 @@ class GenerationRequest(MaterialModel):
     approved_facts: tuple[ApprovedFact, ...]
     approved_answers: tuple[ApprovedAnswerFact, ...] = ()
     answer_prompts: tuple[AnswerPrompt, ...] = ()
+    cv_template_id: Literal["technical_single_page", "technical_two_page"] = "technical_two_page"
+    selected_experience_ids: tuple[str, ...] = ()
+    selected_project_ids: tuple[str, ...] = ()
+    cover_letter_experience_ids: tuple[str, ...] = ()
+    cover_letter_project_ids: tuple[str, ...] = ()
+    cover_letter_reason: str | None = None
+    cover_letter_min_words: int = Field(default=50, ge=50, le=250)
+    cover_letter_max_words: int = Field(default=400, ge=50, le=2000)
+
+    @model_validator(mode="after")
+    def cover_letter_word_range_is_valid(self) -> GenerationRequest:
+        if self.cover_letter_max_words < self.cover_letter_min_words:
+            raise ValueError("cover-letter maximum words must be at least minimum words")
+        return self
 
 
 class GenerationResult(MaterialModel):

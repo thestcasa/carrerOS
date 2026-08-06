@@ -38,6 +38,24 @@ const ready: ApplicationDetail = {
   archive_available: true,
   confirmation_reference: null,
   submitted_at: null,
+  material_policy: {
+    schema_version: "1.0",
+    generator_version: "deterministic_material_v2",
+    job_version: 2,
+    job_payload_sha256: "a".repeat(64),
+    cv_template_id: "technical_two_page",
+    cv_template_version: "1.2",
+    selected_experience_ids: ["experience_example_1", "experience_example_2"],
+    selected_project_ids: ["project_example_1"],
+    cover_letter: {
+      included: true,
+      reason: "high_priority_company",
+      selected_experience_ids: ["experience_example_1"],
+      selected_project_ids: ["project_example_1"],
+      minimum_words: 250,
+      maximum_words: 400,
+    },
+  },
 };
 
 const renderedCv: ArtifactView = {
@@ -184,6 +202,26 @@ describe("ApplicationPageClient", () => {
       "snapshot 1.0.0 · 2 page(s) · extraction matched · validation passed",
     );
     expect(screen.getByRole("button", { name: "Download exact artifact" })).toBeEnabled();
+  });
+
+  it("shows the persisted role-aware material policy", async () => {
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application).mockResolvedValueOnce(ready);
+
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+
+    const panel = await screen.findByRole("region", { name: "Role-aware material policy" });
+    expect(panel).toHaveTextContent("technical_two_page@1.2");
+    expect(panel).toHaveTextContent("experience_example_1, experience_example_2");
+    expect(panel).toHaveTextContent("project_example_1");
+    expect(panel).toHaveTextContent("Included");
+    expect(panel).toHaveTextContent("high_priority_company");
+    expect(panel).toHaveTextContent("250–400 words");
   });
 
   it("shows queued browser ownership without offering a duplicate dry run", async () => {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -17,6 +18,7 @@ from app.applications.contracts import (
     AnalyticsOverview,
     AnswerView,
     ApplicationDetail,
+    ApplicationMaterialPolicy,
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
@@ -56,7 +58,7 @@ from app.browser.evidence import (
     BrowserEvidenceStore,
     StoredBrowserEvidence,
 )
-from app.candidates.models import CandidateConfig, ClaimFact
+from app.candidates.models import CandidateConfig, ClaimFact, ExperienceItem, ProjectItem
 from app.candidates.service import CandidateService
 from app.candidates.snapshot import CandidateSnapshot
 from app.correspondence import (
@@ -96,6 +98,7 @@ from app.domain.models import (
     CandidateSnapshotRecord,
     GlobalJob,
     HumanAction,
+    JobVersion,
     NotificationRecord,
     SecurityEvent,
     SubmissionAuthorizationRecord,
@@ -146,6 +149,26 @@ class ApplicationService:
 
     _GENERATION_FRESHNESS = timedelta(hours=24)
     _SUBMISSION_FRESHNESS = timedelta(minutes=15)
+
+    @staticmethod
+    def _material_policy(application: Application) -> ApplicationMaterialPolicy:
+        try:
+            return ApplicationMaterialPolicy.model_validate(application.material_policy)
+        except ValueError as exc:
+            raise ApplicationConflictError(
+                "application material policy is missing or invalid"
+            ) from exc
+
+    @classmethod
+    def _cover_letter_included(cls, application: Application) -> bool:
+        return cls._material_policy(application).cover_letter.included
+
+    @staticmethod
+    def _material_policy_view(application: Application) -> ApplicationMaterialPolicy | None:
+        try:
+            return ApplicationMaterialPolicy.model_validate(application.material_policy)
+        except ValueError:
+            return None
 
     def __init__(
         self,
@@ -357,6 +380,12 @@ class ApplicationService:
                 session.add(snapshot_record)
             else:
                 snapshot = self._load_candidate_snapshot(application, snapshot_record)
+            try:
+                material_config = CandidateConfig.model_validate_json(snapshot.config_json)
+            except ValueError as exc:
+                raise ApplicationConflictError(
+                    "candidate snapshot configuration is invalid"
+                ) from exc
             regenerating = application.state is ApplicationState.REVIEW_FAILED
             if application.state is ApplicationState.SHORTLISTED:
                 self._transition(
@@ -377,7 +406,23 @@ class ApplicationService:
                 if regenerating
                 else "MATERIALS_GENERATION_STARTED",
             )
-            request = self._generation_request(config, application.id, job)
+            request = self._generation_request(material_config, application.id, job)
+            job_version = session.scalar(
+                select(JobVersion)
+                .where(JobVersion.job_id == job.id)
+                .order_by(JobVersion.version.desc())
+                .limit(1)
+            )
+            if job_version is None:
+                raise ApplicationConflictError("material generation requires a job snapshot")
+            material_policy = self._build_material_policy(request, material_config, job_version)
+            application.material_policy = material_policy.model_dump(mode="json")
+            score.rationale = {
+                **score.rationale,
+                "selected_experience": list(request.selected_experience_ids),
+                "selected_projects": list(request.selected_project_ids),
+                "material_policy": material_policy.model_dump(mode="json"),
+            }
             generated = self._generator.generate(request)
             document_versions = {
                 document.kind: (
@@ -398,16 +443,18 @@ class ApplicationService:
                     document,
                     template_id=template_for(
                         document.kind,
-                        config.cv_rules.template_id,
-                        config.cv_rules.template_version,
+                        request.cv_template_id,
+                        material_config.cv_rules.template_version,
                     )[0],
                     template_version=template_for(
                         document.kind,
-                        config.cv_rules.template_id,
-                        config.cv_rules.template_version,
+                        request.cv_template_id,
+                        material_config.cv_rules.template_version,
                     )[1],
                     maximum_pages=(
-                        config.cv_rules.max_pages if document.kind is DocumentKind.CV else 2
+                        material_config.cv_rules.max_pages
+                        if document.kind is DocumentKind.CV
+                        else 2
                     ),
                     document_version=document_versions[document.kind],
                 )
@@ -628,6 +675,21 @@ class ApplicationService:
             job = session.get(GlobalJob, application.job_id)
             if job is None:
                 raise ApplicationConflictError("application job is missing")
+            persisted_policy = self._material_policy(application)
+            latest_job_version = session.scalar(
+                select(JobVersion)
+                .where(JobVersion.job_id == job.id)
+                .order_by(JobVersion.version.desc())
+                .limit(1)
+            )
+            if (
+                latest_job_version is None
+                or latest_job_version.version != persisted_policy.job_version
+                or latest_job_version.payload_sha256 != persisted_policy.job_payload_sha256
+            ):
+                raise ApplicationConflictError(
+                    "material revision requires the original unchanged job snapshot"
+                )
             base_report = session.scalar(
                 select(ApplicationArtifact).where(
                     ApplicationArtifact.candidate_id == candidate_id,
@@ -663,6 +725,13 @@ class ApplicationService:
                     "candidate snapshot configuration is invalid"
                 ) from exc
             generation_request = self._generation_request(snapshot_config, application_id, job)
+            recomputed_policy = self._build_material_policy(
+                generation_request, snapshot_config, latest_job_version
+            )
+            if recomputed_policy != persisted_policy:
+                raise ApplicationConflictError(
+                    "material revision policy no longer matches the reviewed application"
+                )
             if base_document.kind not in generation_request.requested_documents:
                 raise ApplicationConflictError(
                     "material kind is not enabled by the candidate snapshot"
@@ -685,6 +754,10 @@ class ApplicationService:
             latest_by_kind: dict[DocumentKind, ApplicationDocument] = {}
             for document in all_documents:
                 latest_by_kind.setdefault(document.kind, document)
+            canonical_by_kind = {
+                document.kind: document
+                for document in self._generator.generate(generation_request).documents
+            }
             generated_documents: list[GeneratedDocument] = []
             document_versions: dict[DocumentKind, int] = {}
             for kind in generation_request.requested_documents:
@@ -713,14 +786,20 @@ class ApplicationService:
                         raise ApplicationConflictError(
                             f"latest {kind.value} render is missing or corrupted"
                         )
+                stored_content = Path(stored.storage_uri).read_text(encoding="utf-8")
+                canonical = canonical_by_kind[kind]
                 generated_documents.append(
                     revised_document
                     if kind is base_document.kind
-                    else self._manual_document(
-                        kind,
-                        Path(stored.storage_uri).read_text(encoding="utf-8"),
-                        generation_request,
-                        reject_duplicate_claims=False,
+                    else (
+                        canonical
+                        if stored_content == canonical.content
+                        else self._manual_document(
+                            kind,
+                            stored_content,
+                            generation_request,
+                            reject_duplicate_claims=False,
+                        )
                     )
                 )
             stored_answers = session.scalars(
@@ -752,12 +831,12 @@ class ApplicationService:
                     document,
                     template_id=template_for(
                         document.kind,
-                        snapshot_config.cv_rules.template_id,
+                        generation_request.cv_template_id,
                         snapshot_config.cv_rules.template_version,
                     )[0],
                     template_version=template_for(
                         document.kind,
-                        snapshot_config.cv_rules.template_id,
+                        generation_request.cv_template_id,
                         snapshot_config.cv_rules.template_version,
                     )[1],
                     maximum_pages=(
@@ -1701,7 +1780,7 @@ class ApplicationService:
                 and "salary_below_minimum" not in score.rationale.get("hard_blockers", []),
                 candidate_snapshot_valid=config.manifest.validation.profile_approved,
                 cv_render_valid=any(item.kind == "rendered_cv" for item in rendered_artifacts),
-                cover_letter_valid=not config.cover_letter_rules.enabled
+                cover_letter_valid=not self._cover_letter_included(application)
                 or any(item.kind == "rendered_cover_letter" for item in rendered_artifacts),
                 answers_valid=all(item.supported for item in answers),
                 unsupported_claims_count=0 if review and review.semantic_passed else 1,
@@ -2887,9 +2966,206 @@ class ApplicationService:
                 ),
             )
 
+    @staticmethod
+    def _material_terms(*values: str) -> frozenset[str]:
+        return frozenset(
+            token
+            for value in values
+            for token in re.findall(r"[a-z0-9+#.]+", value.casefold())
+            if len(token) > 1
+        )
+
+    @classmethod
+    def _experience_relevance(cls, item: ExperienceItem, job: GlobalJob) -> int:
+        job_terms = cls._material_terms(
+            job.title,
+            job.description_normalized or job.description,
+            *job.required_skills,
+            *job.preferred_skills,
+        )
+        item_terms = cls._material_terms(
+            item.title,
+            item.summary or "",
+            *item.skills,
+            *item.domains,
+            *item.role_categories,
+        )
+        role_bonus = (
+            10
+            if any(
+                cls._material_terms(category) <= cls._material_terms(job.title)
+                for category in item.role_categories
+            )
+            else 0
+        )
+        return len(job_terms & item_terms) + role_bonus
+
+    @classmethod
+    def _project_relevance(cls, item: ProjectItem, job: GlobalJob) -> int:
+        job_terms = cls._material_terms(
+            job.title,
+            job.description_normalized or job.description,
+            *job.required_skills,
+            *job.preferred_skills,
+        )
+        item_terms = cls._material_terms(
+            item.name,
+            item.description,
+            *item.skills,
+            *item.domains,
+            *item.role_categories,
+        )
+        role_bonus = (
+            10
+            if any(
+                cls._material_terms(category) <= cls._material_terms(job.title)
+                for category in item.role_categories
+            )
+            else 0
+        )
+        return len(job_terms & item_terms) + role_bonus
+
+    @classmethod
+    def _cover_letter_decision(
+        cls, config: CandidateConfig, job: GlobalJob
+    ) -> tuple[bool, str | None]:
+        rules = config.cover_letter_rules
+        if not rules.enabled or rules.generation_mode == "never":
+            return False, None
+        if job.raw_payload.get("cover_letter_required") is True:
+            return True, "source_required"
+        if job.raw_payload.get("cover_letter_recommended") is True:
+            return True, "source_recommended"
+        if rules.generation_mode == "always":
+            return True, "candidate_requested"
+        if rules.generation_mode == "priority_only":
+            if job.company.casefold() in {item.casefold() for item in config.companies.target}:
+                return True, "priority_company"
+            highest_priority_tier = min(
+                (tier.tier for tier in config.career_strategy.role_tiers), default=None
+            )
+            high_priority_roles = {
+                role.casefold()
+                for tier in config.career_strategy.role_tiers
+                if tier.tier == highest_priority_tier
+                for role in tier.roles
+            }
+            if job.title.casefold() in high_priority_roles:
+                return True, "priority_role"
+        for motivation in rules.motivations:
+            if not motivation.approved or not (motivation.companies or motivation.roles):
+                continue
+            company_match = not motivation.companies or job.company.casefold() in {
+                value.casefold() for value in motivation.companies
+            }
+            role_match = not motivation.roles or job.title.casefold() in {
+                value.casefold() for value in motivation.roles
+            }
+            if company_match and role_match:
+                return True, f"approved_motivation:{motivation.motivation_id}"
+        return False, None
+
+    @classmethod
+    def _cv_template(cls, config: CandidateConfig, job: GlobalJob) -> str:
+        job_terms = cls._material_terms(job.title)
+        matches = [
+            (len(cls._material_terms(role)), role, template)
+            for role, template in config.cv_rules.template_by_role.items()
+            if cls._material_terms(role) and cls._material_terms(role) <= job_terms
+        ]
+        if not matches:
+            return config.cv_rules.template_id
+        return sorted(matches, key=lambda item: (-item[0], item[1].casefold()))[0][2]
+
+    @staticmethod
+    def _build_material_policy(
+        request: GenerationRequest,
+        config: CandidateConfig,
+        job_version: JobVersion,
+    ) -> ApplicationMaterialPolicy:
+        included = DocumentKind.COVER_LETTER in request.requested_documents
+        return ApplicationMaterialPolicy(
+            generator_version="deterministic_material_v2",
+            job_version=job_version.version,
+            job_payload_sha256=job_version.payload_sha256,
+            cv_template_id=request.cv_template_id,
+            cv_template_version=config.cv_rules.template_version,
+            selected_experience_ids=request.selected_experience_ids,
+            selected_project_ids=request.selected_project_ids,
+            cover_letter={
+                "included": included,
+                "reason": request.cover_letter_reason,
+                "selected_experience_ids": request.cover_letter_experience_ids,
+                "selected_project_ids": request.cover_letter_project_ids,
+                "minimum_words": request.cover_letter_min_words,
+                "maximum_words": request.cover_letter_max_words,
+            },
+        )
+
     def _generation_request(
         self, config: CandidateConfig, application_id: UUID, job: GlobalJob
     ) -> GenerationRequest:
+        eligible_experiences = tuple(
+            item
+            for item in config.experience.items
+            if item.approved
+            and not item.archived
+            and item.confidentiality == "public"
+            and (item.cv_eligible or item.cover_letter_eligible)
+        )
+        ranked_experiences = tuple(
+            sorted(
+                eligible_experiences,
+                key=lambda item: (-self._experience_relevance(item, job), item.id),
+            )
+        )
+        eligible_projects = tuple(
+            item
+            for item in config.projects.items
+            if item.approved
+            and not item.archived
+            and item.confidentiality != "internal"
+            and (item.cv_eligible or item.cover_letter_eligible)
+        )
+        ranked_projects = tuple(
+            sorted(
+                eligible_projects,
+                key=lambda item: (-self._project_relevance(item, job), item.id),
+            )
+        )
+        cover_letter_included, cover_letter_reason = self._cover_letter_decision(config, job)
+        cv_experience_ids = {
+            item.id
+            for item in tuple(item for item in ranked_experiences if item.cv_eligible)[
+                : config.cv_rules.max_experiences
+            ]
+        }
+        cover_experience_ids = (
+            {
+                item.id
+                for item in tuple(
+                    item for item in ranked_experiences if item.cover_letter_eligible
+                )[: config.cover_letter_rules.max_experiences]
+            }
+            if cover_letter_included
+            else set()
+        )
+        cv_project_ids = {
+            item.id
+            for item in tuple(item for item in ranked_projects if item.cv_eligible)[
+                : config.cv_rules.max_projects
+            ]
+        }
+        cover_project_ids = (
+            {
+                item.id
+                for item in tuple(item for item in ranked_projects if item.cover_letter_eligible)[
+                    : config.cover_letter_rules.max_projects
+                ]
+            }
+            if cover_letter_included
+            else set()
+        )
         facts: list[ApprovedFact] = []
         if config.biography.approved:
             facts.append(
@@ -2897,20 +3173,24 @@ class ApplicationService:
                     fact_id="biography_summary",
                     text=config.biography.summary,
                     source_path="biography.summary",
+                    document_kinds=(
+                        (DocumentKind.CV, DocumentKind.COVER_LETTER)
+                        if cover_letter_included
+                        else (DocumentKind.CV,)
+                    ),
                 )
             )
         for experience in config.experience.items:
-            if (
-                not experience.approved
-                or experience.archived
-                or experience.confidentiality != "public"
-            ):
+            if experience.id not in cv_experience_ids | cover_experience_ids:
                 continue
             document_kinds = tuple(
                 kind
                 for kind, eligible in (
-                    (DocumentKind.CV, experience.cv_eligible),
-                    (DocumentKind.COVER_LETTER, experience.cover_letter_eligible),
+                    (DocumentKind.CV, experience.id in cv_experience_ids),
+                    (
+                        DocumentKind.COVER_LETTER,
+                        cover_letter_included and experience.id in cover_experience_ids,
+                    ),
                 )
                 if eligible
             )
@@ -2934,7 +3214,7 @@ class ApplicationService:
                     )
                 )
         for project in config.projects.items:
-            if not project.approved or project.archived or project.confidentiality == "internal":
+            if project.id not in cv_project_ids | cover_project_ids:
                 continue
             description = (
                 project.description
@@ -2946,8 +3226,11 @@ class ApplicationService:
             document_kinds = tuple(
                 kind
                 for kind, eligible in (
-                    (DocumentKind.CV, project.cv_eligible),
-                    (DocumentKind.COVER_LETTER, project.cover_letter_eligible),
+                    (DocumentKind.CV, project.id in cv_project_ids),
+                    (
+                        DocumentKind.COVER_LETTER,
+                        cover_letter_included and project.id in cover_project_ids,
+                    ),
                 )
                 if eligible
             )
@@ -3002,7 +3285,7 @@ class ApplicationService:
             for item in usable_answers
         )
         requested_documents = [DocumentKind.CV]
-        if config.cover_letter_rules.enabled:
+        if cover_letter_included:
             requested_documents.append(DocumentKind.COVER_LETTER)
         return GenerationRequest(
             candidate_id=config.manifest.candidate_id,
@@ -3016,10 +3299,26 @@ class ApplicationService:
                 for item in config.approved_answers.items
                 if not item.archived
             ),
+            cv_template_id=self._cv_template(config, job),
+            selected_experience_ids=tuple(
+                item.id for item in ranked_experiences if item.id in cv_experience_ids
+            ),
+            selected_project_ids=tuple(
+                item.id for item in ranked_projects if item.id in cv_project_ids
+            ),
+            cover_letter_experience_ids=tuple(
+                item.id for item in ranked_experiences if item.id in cover_experience_ids
+            ),
+            cover_letter_project_ids=tuple(
+                item.id for item in ranked_projects if item.id in cover_project_ids
+            ),
+            cover_letter_reason=cover_letter_reason,
+            cover_letter_min_words=config.cover_letter_rules.min_words,
+            cover_letter_max_words=config.cover_letter_rules.max_words,
         )
 
-    @staticmethod
     def _manual_document(
+        self,
         kind: DocumentKind,
         content: str,
         request: GenerationRequest,
@@ -3035,6 +3334,12 @@ class ApplicationService:
         if not paragraphs or paragraphs[0] != heading or "\r" in content:
             raise ApplicationConflictError(
                 "manual material must preserve the canonical job heading"
+            )
+        if kind is DocumentKind.COVER_LETTER:
+            return self._manual_cover_letter(
+                content,
+                request,
+                reject_duplicate_claims=reject_duplicate_claims,
             )
         approved_by_text: dict[str, list[str]] = {}
         for fact in request.approved_facts:
@@ -3068,6 +3373,59 @@ class ApplicationService:
             content=content,
             claims=tuple(claims),
             content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            minimum_words=None,
+            maximum_words=None,
+        )
+
+    def _manual_cover_letter(
+        self,
+        content: str,
+        request: GenerationRequest,
+        *,
+        reject_duplicate_claims: bool,
+    ) -> GeneratedDocument:
+        canonical = next(
+            document
+            for document in self._generator.generate(request).documents
+            if document.kind is DocumentKind.COVER_LETTER
+        )
+        canonical_claims = {f"{claim.text}.": claim for claim in canonical.claims}
+        canonical_static = tuple(
+            paragraph
+            for paragraph in canonical.content.split("\n\n")
+            if paragraph not in canonical_claims
+        )
+        paragraphs = tuple(content.split("\n\n"))
+        supplied_static = tuple(
+            paragraph for paragraph in paragraphs if paragraph not in canonical_claims
+        )
+        if supplied_static != canonical_static:
+            raise ApplicationConflictError(
+                "manual cover letter must preserve canonical evidence-safe prose"
+            )
+        claims: list[Claim] = []
+        seen: set[str] = set()
+        for paragraph in paragraphs:
+            claim = canonical_claims.get(paragraph)
+            if claim is None:
+                continue
+            if reject_duplicate_claims and claim.text in seen:
+                raise ApplicationConflictError("manual material contains a duplicate claim")
+            seen.add(claim.text)
+            claims.append(claim)
+        if not claims:
+            raise ApplicationConflictError("manual material must retain at least one approved fact")
+        canonical_content = "\n\n".join(paragraphs)
+        if canonical_content != content:
+            raise ApplicationConflictError("manual material formatting is not canonical")
+        return GeneratedDocument(
+            kind=DocumentKind.COVER_LETTER,
+            company=request.target.company,
+            content=content,
+            claims=tuple(claims),
+            content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            minimum_words=request.cover_letter_min_words,
+            maximum_words=request.cover_letter_max_words,
         )
 
     def _write_exclusive(
@@ -3660,7 +4018,7 @@ class ApplicationService:
                     if "FAILED" in item.event_type or "ERROR" in item.event_type
                 ],
                 required_document_kinds=(
-                    ("cv", "cover_letter") if config.cover_letter_rules.enabled else ("cv",)
+                    ("cv", "cover_letter") if self._cover_letter_included(application) else ("cv",)
                 ),
                 browser_pre_submit_screenshot=browser_screenshot,
                 browser_final_page_snapshot=browser_final_page,
@@ -3993,6 +4351,7 @@ class ApplicationService:
             archive_available=application.archive_uri is not None,
             confirmation_reference=application.confirmation_reference,
             submitted_at=application.submitted_at,
+            material_policy=self._material_policy_view(application),
         )
 
     @staticmethod

@@ -365,21 +365,45 @@ class ApprovedAnswers(StrictModel):
 
 class CVRules(StrictModel):
     max_pages: Annotated[int, Field(ge=1, le=5)]
+    max_experiences: Annotated[int, Field(ge=1, le=20)] = 4
+    max_projects: Annotated[int, Field(ge=0, le=20)] = 3
     template_id: Literal["technical_single_page", "technical_two_page"] = "technical_two_page"
     template_version: Literal["1.0"] = "1.0"
+    template_by_role: dict[NonEmptyStr, Literal["technical_single_page", "technical_two_page"]] = (
+        Field(default_factory=dict)
+    )
     allowed_sections: tuple[NonEmptyStr, ...]
     forbidden_claims: tuple[NonEmptyStr, ...]
     require_evidence_ids: bool
     approved: bool = False
 
 
+class CoverLetterMotivation(StrictModel):
+    motivation_id: StableId
+    text: NonEmptyStr
+    companies: tuple[NonEmptyStr, ...] = ()
+    roles: tuple[NonEmptyStr, ...] = ()
+    approved: bool = False
+
+
 class CoverLetterRules(StrictModel):
     enabled: bool
+    generation_mode: Literal["always", "priority_only", "motivated_only", "never"] = "always"
+    min_words: Annotated[int, Field(ge=50, le=250)] = 250
     max_words: Annotated[int, Field(ge=50, le=2000)]
+    max_experiences: Annotated[int, Field(ge=1, le=2)] = 2
+    max_projects: Annotated[int, Field(ge=0, le=2)] = 2
+    motivations: tuple[CoverLetterMotivation, ...] = ()
     tone: NonEmptyStr
     forbidden_claims: tuple[NonEmptyStr, ...]
     require_evidence_ids: bool
     approved: bool = False
+
+    @model_validator(mode="after")
+    def word_range_is_valid(self) -> CoverLetterRules:
+        if self.max_words < self.min_words:
+            raise ValueError("cover-letter maximum words must be at least minimum words")
+        return self
 
 
 class CompanyRules(StrictModel):

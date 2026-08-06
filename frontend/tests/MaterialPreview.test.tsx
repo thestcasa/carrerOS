@@ -61,6 +61,24 @@ const application: ApplicationDetail = {
   archive_available: false,
   confirmation_reference: null,
   submitted_at: null,
+  material_policy: {
+    schema_version: "1.0",
+    generator_version: "deterministic_material_v2",
+    job_version: 1,
+    job_payload_sha256: "b".repeat(64),
+    cv_template_id: "technical_two_page",
+    cv_template_version: "1.0",
+    selected_experience_ids: ["experience_example_1"],
+    selected_project_ids: [],
+    cover_letter: {
+      included: true,
+      reason: "candidate_policy",
+      selected_experience_ids: ["experience_example_1"],
+      selected_project_ids: [],
+      minimum_words: 250,
+      maximum_words: 400,
+    },
+  },
 };
 
 describe("MaterialPreview", () => {
