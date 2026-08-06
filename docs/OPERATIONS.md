@@ -40,6 +40,19 @@ python -m playwright install --with-deps chromium
 pytest tests/test_playwright_browser.py
 ```
 
+The frontend has a separate deterministic route, safety, and accessibility suite. It intercepts
+the API at the browser boundary and uses only fictional `.invalid` fixtures:
+
+```bash
+cd frontend
+npm ci
+npx playwright install --with-deps chromium
+npm run test:e2e
+```
+
+Use `npx playwright test --list` to validate suite discovery without launching a browser. Browser
+results and traces are written below `/tmp/carreros-playwright-results`, not into the repository.
+
 The fixture server rejects non-loopback binds. The browser worker starts its own loopback fixture,
 claims only `browser_dry_run` tasks, requires an exact configured URL, validates uploads against the
 candidate runtime directory and expected hashes, permits only its first GET document request, and
@@ -89,8 +102,8 @@ not fabricate a screenshot; its receipt explicitly reports that no confirmation 
 available.
 
 The autonomous development environment has no Docker binary, so Compose startup and configuration
-parsing must be verified on a Docker-capable host. Its minimal musl runtime also cannot launch the
-downloaded glibc Chromium
-binary because required shared libraries are absent. The Dockerfile installs the supported browser
+parsing must be verified on a Docker-capable host. Its minimal musl runtime downloads Chromium but
+cannot launch the glibc binary because `libnspr4.so` and other required system libraries are
+absent. The Dockerfile installs the supported browser
 and dependencies; SQLite migrations and non-browser backend/frontend quality gates are the offline
 verification path here.

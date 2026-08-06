@@ -309,9 +309,14 @@ import command key across uncertain failures.
 3. [Complete] Implement the remaining Milestone 3 policy surface as small end-to-end slices:
    role-specific template/content selection, configuration-driven cover-letter inclusion, and
    append-only free-text answer revision with backend-derived provenance and review.
-4. Add the missing browser route/accessibility-critical test layer using deterministic local
-   fixtures where the host permits it; document only genuinely external Chromium/Compose limits.
-5. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
+4. [Complete, browser execution externally limited] Add the missing browser
+   route/accessibility-critical test layer using deterministic local fixtures. Eleven Playwright
+   checks are discovered; the host can download Chromium but cannot launch it because its minimal
+   runtime lacks `libnspr4.so`. Component-level axe coverage remains host-runnable under Vitest.
+5. [Complete] Add a fail-closed exact submitted-package viewer that distinctly identifies the
+   immutable submitted CV, cover letter, answers, and final receipt and downloads/previews by exact
+   backend artifact ID without rendering HTML.
+6. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
    product/API/UI/documentation gaps, and run the full fictional workflow before final commits.
 
 Runtime agent routing and the normalized job expansion are complete. The deterministic provider

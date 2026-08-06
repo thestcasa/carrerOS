@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { MaterialPreview } from "@/components/MaterialPreview";
 import { StatusPill } from "@/components/StatusPill";
+import { SubmittedPackageViewer } from "@/components/SubmittedPackageViewer";
 import { api } from "@/lib/api";
 import type {
   AnswerRevisionInput,
@@ -588,6 +589,12 @@ export function ApplicationPageClient({
           <p className="muted">No associated recruiter correspondence.</p>
         )}
       </section>
+      <SubmittedPackageViewer
+        applicationId={applicationId}
+        artifacts={artifacts}
+        candidateId={candidateId}
+        confirmationReference={application.confirmation_reference}
+      />
       <section className="panel">
         <p className="eyebrow">Archive and receipt</p>
         <h2>{application.confirmation_reference ?? "No backend confirmation yet"}</h2>

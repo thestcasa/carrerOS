@@ -38,11 +38,15 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npx playwright install --with-deps chromium
+npm run test:e2e
 ```
 
 The web interface covers candidate onboarding/CV import/readiness, discovery and analysis, application
-materials and synthetic dry runs, human actions, security events, settings, analytics, and exact
-immutable artifact downloads. The CLI also provides `onboard`, local `import-cv`, deterministic
+materials and synthetic dry runs, human actions, security events, settings, analytics, and a
+labelled viewer for each exact immutable submitted artifact. The deterministic Playwright suite
+intercepts every API request and never contacts or mutates a real provider. The CLI also provides
+`onboard`, local `import-cv`, deterministic
 JSON/YAML `export-configuration`/`import-configuration`, fixture-safe `discover`, bounded
 `export-candidate`, and recoverable `delete-candidate`/`deletion-status` commands. Configuration
 transfer, lifecycle export, and irreversible deletion are distinct controls in settings; the

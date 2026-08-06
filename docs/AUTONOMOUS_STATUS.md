@@ -3,10 +3,9 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: browser E2E/accessibility-critical coverage, exact submitted-package presentation,
-  and final acceptance audit
-- Branch baseline: `autonomous-build`; latest completed commit is role-aware material policy
-  (`592a70b`), with append-only answer revision pending commit
+- Active phase: richer human-action evidence/takeover contract and final acceptance audit
+- Branch baseline: `autonomous-build`; append-only answer revision is complete in `eda81f3`, and
+  this checkpoint contains exact-package/accessibility/browser-route coverage
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -162,14 +161,23 @@
   that question; otherwise review fails closed. Gate/archive consumers use only the active latest
   revision, prompt withdrawals cannot resurrect older text, detail/UI retains immutable history,
   and interview preparation reads the hash-verified submitted-answer archive.
+- The application detail now presents a dedicated, fail-closed exact submitted-package viewer for
+  immutable submitted CV, cover letter, answers, and the v2+ final receipt. Each card exposes its
+  exact ID, version, SHA-256, content type, and backend confirmation. PDF bytes download by exact
+  artifact ID; JSON/HTML is shown only as escaped inert text, and drafts are never promoted.
+- The frontend now has host-runnable axe checks plus an 11-test Playwright route/safety/accessibility
+  suite with deterministic API interception. Suite discovery passes and fixtures use only
+  fictional data. Chromium downloaded successfully under `/tmp`, but the minimal host cannot
+  launch it because `libnspr4.so` is unavailable.
 
 ## Latest verification
 
 - Backend: `ruff format --check`, Ruff lint, strict mypy, and **279 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **58 Vitest tests**, and the Next.js production build pass
-  for all required routes.
+- Frontend: ESLint, strict TypeScript, **67 Vitest tests**, the Next.js production build, and
+  discovery of all **11 Playwright tests** pass for this checkpoint. Browser execution reaches
+  launch and then fails solely because the host lacks `libnspr4.so`.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `7f2c9d1e4a60`; answer and workflow-task deletion fences survive SQLite table rebuilds,
   legacy answers backfill conservatively, and models and Alembic report no missing operations.
@@ -197,7 +205,8 @@ the environment reasons recorded below.
   retention/pseudonymization policy for the minimal deletion tombstone before multi-user
   deployment. Configuration portability is complete; full lifecycle exports intentionally remain
   non-restorable because replaying operational/database state is outside the safe import boundary.
-- Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
+- Execute the committed browser E2E/accessibility suite and PostgreSQL/Compose checks on a capable
+  glibc/Docker host; suite discovery and host-runnable axe checks are complete here.
 - DOCX remains optional. Role-specific template/content selection, cover-letter policy, manual
   rendered-document and free-text-answer revision, cross-source identity, and fresh-source proof
   are complete.
@@ -208,6 +217,6 @@ the environment reasons recorded below.
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with browser/accessibility coverage, exact submitted
-   package UI, and remaining hosted productionization gaps.
+3. Continue the full specification audit with richer human-action evidence/takeover contracts and
+   remaining hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.
