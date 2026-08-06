@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
     submitSynthetic: vi.fn(),
     dryRun: vi.fn(),
     applicationCommand: vi.fn(),
+    reviseMaterial: vi.fn(),
     downloadArtifact: vi.fn(),
   },
 }));
@@ -60,11 +61,40 @@ const renderedCv: ArtifactView = {
   created_at: "2026-08-05T10:00:00Z",
 };
 
+const editable: ApplicationDetail = {
+  ...ready,
+  state: "review_pending",
+  next_action: "Review materials",
+  archive_available: false,
+  review: { decision: "pass", semantic_passed: true, report: {} },
+  documents: [{
+    document_id: "00000000-0000-0000-0000-000000000555",
+    kind: "cv",
+    version: 1,
+    content: "Original approved CV content",
+    sha256: "b".repeat(64),
+    immutable: false,
+    validated: true,
+    evidence_ids: ["experience_example_1"],
+    created_at: "2026-08-05T10:00:00Z",
+    provenance: [{ text: "Built typed APIs", evidence_ids: ["experience_example_1"] }],
+    revision_actor: null,
+    base_document_id: null,
+    render_metadata: {
+      template_id: "technical_two_page",
+      template_version: "1.0",
+      page_count: 2,
+      extraction_matches: true,
+    },
+  }],
+};
+
 describe("ApplicationPageClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.artifacts).mockReset();
     vi.mocked(api.application).mockReset();
+    vi.mocked(api.reviseMaterial).mockReset();
     vi.mocked(api.artifacts).mockResolvedValue([]);
     vi.mocked(api.application)
       .mockResolvedValueOnce(ready)
@@ -154,5 +184,66 @@ describe("ApplicationPageClient", () => {
       "snapshot 1.0.0 · 2 page(s) · extraction matched · validation passed",
     );
     expect(screen.getByRole("button", { name: "Download exact artifact" })).toBeEnabled();
+  });
+
+  it("sends the exact revision and reuses its idempotency key after an uncertain failure", async () => {
+    const revisionResult: ApplicationDetail = {
+      ...editable,
+      documents: [
+        {
+          ...editable.documents[0],
+          document_id: "00000000-0000-0000-0000-000000000666",
+          version: 2,
+          content: "Revised approved CV content",
+          sha256: "c".repeat(64),
+          revision_actor: "local-user",
+          base_document_id: editable.documents[0].document_id,
+        },
+        { ...editable.documents[0], immutable: true },
+      ],
+    };
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application).mockResolvedValue(editable);
+    vi.mocked(api.reviseMaterial)
+      .mockRejectedValueOnce(new Error("connection interrupted"))
+      .mockResolvedValueOnce(revisionResult);
+
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Edit selected draft" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Material content" }), {
+      target: { value: "Revised approved CV content" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Revision reason (optional)" }), {
+      target: { value: "Clarify approved experience" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save as new version" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("connection interrupted");
+    fireEvent.click(screen.getByRole("button", { name: "Save as new version" }));
+
+    await waitFor(() => expect(api.reviseMaterial).toHaveBeenCalledTimes(2));
+    const expectedRevision = {
+      document_id: editable.documents[0].document_id,
+      base_version: 1,
+      content: "Revised approved CV content",
+      reason: "Clarify approved experience",
+    };
+    expect(vi.mocked(api.reviseMaterial).mock.calls[0].slice(0, 3)).toEqual([
+      "example_candidate",
+      ready.application_id,
+      expectedRevision,
+    ]);
+    expect(vi.mocked(api.reviseMaterial).mock.calls[1].slice(0, 3)).toEqual([
+      "example_candidate",
+      ready.application_id,
+      expectedRevision,
+    ]);
+    expect(vi.mocked(api.reviseMaterial).mock.calls[1][3]).toBe(
+      vi.mocked(api.reviseMaterial).mock.calls[0][3],
+    );
   });
 });

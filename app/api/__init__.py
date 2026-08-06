@@ -29,6 +29,7 @@ from app.applications import (
     CorrespondenceView,
     DryRunCommand,
     HumanActionView,
+    MaterialRevisionRequest,
     NotificationView,
     SecurityEventView,
     SettingsUpdate,
@@ -429,6 +430,16 @@ def _application_router() -> APIRouter:
         idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.approve_materials(candidate_id, application_id, idempotency_key)
+
+    @router.post("/{application_id}/materials/revisions", response_model=ApplicationDetail)
+    def revise_material(
+        application_id: UUID,
+        revision: MaterialRevisionRequest,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> ApplicationDetail:
+        return service.revise_material(candidate_id, application_id, revision, idempotency_key)
 
     @router.post("/{application_id}/start", response_model=ApplicationDetail)
     def start_application(

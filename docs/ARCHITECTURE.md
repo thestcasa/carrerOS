@@ -223,6 +223,15 @@ version and one history snapshot. Readiness treats any active unapproved importe
 blocker, so extraction cannot silently authorize outward use.
 PDF input is rejected until a resource-isolated parser worker is available.
 
+Generated document revision is append-only and snapshot-bound. The client supplies a base document
+identity/version and edited canonical content, but the service reconstructs the approved fact
+allowlist from the exact candidate snapshot referenced by the base render report. Only the original
+heading and exact approved-fact bullets may remain; provenance, actor, target identity, hashes, and
+render metadata are server-derived. The service validates the base report and every unchanged peer
+render, appends source/report/PDF versions, re-runs independent review on the full package, and
+keeps every superseded document immutable. Approval and later package binding therefore consume
+the latest reviewed versions without rewriting application history.
+
 ## Candidate lifecycle and erasure
 
 Portable export holds the candidate lifecycle reader lease and reads candidate-owned SQL rows from

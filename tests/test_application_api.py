@@ -204,6 +204,48 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
         assert hashlib.sha256(rendered_download.content).hexdigest() == rendered_cv["sha256"]
         assert rendered_cv["metadata"]["extraction_matches"] is True
 
+        cv_document = next(item for item in generated.json()["documents"] if item["kind"] == "cv")
+        revised_content = "\n\n".join(cv_document["content"].split("\n\n")[:-1])
+        revision_body = {
+            "document_id": cv_document["document_id"],
+            "base_version": cv_document["version"],
+            "content": revised_content,
+            "reason": "Keep the fictional CV concise.",
+        }
+        revision_headers = {**mutation, "Idempotency-Key": "api-revision-0001"}
+        revised = client.post(
+            f"/api/applications/{application_id}/materials/revisions"
+            "?candidate_id=example_candidate",
+            headers=revision_headers,
+            json=revision_body,
+        )
+        replayed_revision = client.post(
+            f"/api/applications/{application_id}/materials/revisions"
+            "?candidate_id=example_candidate",
+            headers=revision_headers,
+            json=revision_body,
+        )
+        conflicting_revision = client.post(
+            f"/api/applications/{application_id}/materials/revisions"
+            "?candidate_id=example_candidate",
+            headers=revision_headers,
+            json={**revision_body, "content": cv_document["content"]},
+        )
+        forged_actor = client.post(
+            f"/api/applications/{application_id}/materials/revisions"
+            "?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-revision-forged-0001"},
+            json={**revision_body, "actor_id": "forged-user"},
+        )
+        assert revised.status_code == 200, revised.text
+        assert replayed_revision.json() == revised.json()
+        assert conflicting_revision.status_code == 409
+        assert forged_actor.status_code == 422
+        cv_versions = [item for item in revised.json()["documents"] if item["kind"] == "cv"]
+        assert [item["version"] for item in cv_versions] == [1, 2]
+        assert cv_versions[0]["immutable"] is True
+        assert cv_versions[1]["revision_actor"] == "local-user"
+
         for suffix, endpoint, body in (
             ("approve", "approve-materials", None),
             ("start", "start", None),

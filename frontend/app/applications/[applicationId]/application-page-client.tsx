@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { MaterialPreview } from "@/components/MaterialPreview";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
-import type { ApplicationDetail, ArtifactView } from "@/lib/types";
+import type { ApplicationDetail, ArtifactView, MaterialRevisionInput } from "@/lib/types";
 
 function metadataString(value: unknown): string | null {
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
@@ -144,6 +145,33 @@ export function ApplicationPageClient({
     }
   }
 
+  async function reviseMaterial(revision: MaterialRevisionInput): Promise<ApplicationDetail> {
+    const operation = `revise-material:${JSON.stringify(revision)}`;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.reviseMaterial(
+        candidateId,
+        applicationId,
+        revision,
+        commandKey(operation),
+      );
+      clearCommand(operation);
+      setApplication(updated);
+      try {
+        setArtifacts(await api.artifacts(candidateId, applicationId));
+      } catch {
+        setError("The revision was saved, but its downloadable artifacts could not be refreshed.");
+      }
+      return updated;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Material revision failed safely.");
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (error && !application) {
     return (
       <div className="page-wrap">
@@ -211,30 +239,21 @@ export function ApplicationPageClient({
           </button>
         ) : null}
       </section>
-      <section className="detail-columns">
-        <article className="panel">
-          <p className="eyebrow">Exact documents</p>
-          <h2>{application.archive_available ? "Immutable submitted set" : "Versioned drafts"}</h2>
-          {application.documents.map((document) => (
-            <details key={document.document_id} open>
-              <summary>{document.kind.replaceAll("_", " ")} v{document.version} · {document.immutable ? "immutable" : "draft"}</summary>
-              <pre>{document.content}</pre>
-              <p className="artifact-hash">SHA-256 {document.sha256}</p>
-              <div>{document.evidence_ids.map((id) => <code key={id}>{id}</code>)}</div>
-            </details>
-          ))}
-        </article>
-        <article className="panel">
-          <p className="eyebrow">Exact answers</p>
-          <h2>Application questions</h2>
-          {application.answers.map((answer) => (
-            <div className="answer-row" key={answer.answer_id}>
-              <strong>{answer.question}</strong>
-              <p>{answer.answer}</p>
-              <StatusPill status={answer.supported ? "READY" : "BLOCKED"} />
-            </div>
-          ))}
-        </article>
+      <MaterialPreview
+        application={application}
+        disabled={busy}
+        onSaveRevision={reviseMaterial}
+      />
+      <section className="panel">
+        <p className="eyebrow">Exact answers</p>
+        <h2>Application questions</h2>
+        {application.answers.map((answer) => (
+          <div className="answer-row" key={answer.answer_id}>
+            <strong>{answer.question}</strong>
+            <p>{answer.answer}</p>
+            <StatusPill status={answer.supported ? "READY" : "BLOCKED"} />
+          </div>
+        ))}
       </section>
       <section className="panel">
         <p className="eyebrow">Correspondence</p>

@@ -101,13 +101,20 @@
   authorization, and synthetic submission each revalidate at their own boundary; failed evidence
   commits independently while the protected mutation remains unchanged. Job views expose stale
   and possible-duplicate state, and completed command replays do not refetch.
+- Generated CV and cover-letter drafts now expose real versioned preview data, exact source-fact
+  provenance paths, render/template/snapshot metadata, and independent-review results in the
+  application UI. A labelled inline editor appends a new version without overwriting history.
+  Backend validation accepts only the canonical job heading and exact approved-snapshot facts,
+  derives provenance and actor identity server-side, verifies the base report and unchanged peer
+  renders, then re-renders and re-reviews the complete package. Stale, cross-candidate, tampered,
+  unsupported, no-op, and post-approval revisions deny without creating a new version.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **221 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **224 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **45 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **46 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `e2b4c7d8f901`; the candidate-deletion application triggers are verified present after
@@ -131,9 +138,9 @@
   tenant-bound deletion recovery, and a legal retention/pseudonymization policy for the minimal
   deletion tombstone before multi-user deployment.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
-- Complete role-specific template/content selection, richer cover-letter policy, and manual
-  rendered-material revision; DOCX remains an optional format. Cross-source identity and
-  fresh-source proof are complete.
+- Complete role-specific template/content selection, richer cover-letter policy, and versioned
+  free-text-answer revision; DOCX remains optional. Manual rendered-document revision,
+  cross-source identity, and fresh-source proof are complete.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
   worktree clean apart from the preserved user-owned paths.
 

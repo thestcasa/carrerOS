@@ -54,6 +54,14 @@ CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate
 2. Persist immutable draft versions and manual edits without overwriting history.
 3. Add material preview, download, provenance, validation/review, and version UI.
 
+Status: deterministic generated documents now have an integrated preview and append-only manual
+revision path. A revision can only preserve the canonical target heading and select, remove, or
+reorder exact approved-fact bullets from the immutable application snapshot; arbitrary prose,
+forged provenance, stale bases, changed destinations, and post-approval edits fail closed. Each
+revision creates new source/report/PDF versions, re-reviews the full package, records actor and
+lineage metadata, and keeps prior versions immutable. Role-aware selection, full cover-letter
+policy, and versioned free-text-answer editing remain open within this milestone.
+
 ### Phase 2A — integration and tenant-safety repair
 
 Before expanding UI surface area, close the cross-cutting gaps exposed by the baseline audit:

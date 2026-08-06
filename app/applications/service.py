@@ -26,6 +26,7 @@ from app.applications.contracts import (
     DryRunCommand,
     EventView,
     HumanActionView,
+    MaterialRevisionRequest,
     NotificationView,
     ReviewView,
     SecurityEventView,
@@ -98,7 +99,11 @@ from app.materials.contracts import (
     AnswerPrompt,
     ApprovedAnswerFact,
     ApprovedFact,
+    Claim,
+    GeneratedAnswer,
+    GeneratedDocument,
     GenerationRequest,
+    GenerationResult,
     JobTarget,
     MaterialReview,
 )
@@ -410,6 +415,9 @@ class ApplicationService:
                 evidence_ids = sorted(
                     {evidence for claim in document.claims for evidence in claim.evidence_ids}
                 )
+                approved_fact_sources = {
+                    fact.fact_id: fact.source_path for fact in request.approved_facts
+                }
                 session.add(
                     ApplicationDocument(
                         candidate_id=candidate_id,
@@ -429,6 +437,18 @@ class ApplicationService:
                     "candidate_snapshot_id": str(snapshot.snapshot_id),
                     "document_version": version,
                     "evidence_ids": evidence_ids,
+                    "manual_revision": False,
+                    "actor_id": "material-generator",
+                    "provenance": [
+                        {
+                            "text": claim.text,
+                            "evidence_ids": list(claim.evidence_ids),
+                            "source_paths": [
+                                approved_fact_sources[item] for item in claim.evidence_ids
+                            ],
+                        }
+                        for claim in document.claims
+                    ],
                 }
                 report_content = canonical_json_bytes(render_metadata)
                 report_path = self._write_exclusive(
@@ -535,6 +555,369 @@ class ApplicationService:
                 session,
                 candidate_id,
                 "generate_materials",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
+
+    def revise_material(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        revision: MaterialRevisionRequest,
+        idempotency_key: str,
+    ) -> ApplicationDetail:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = revision.model_dump(mode="json")
+            payload["application_id"] = str(application_id)
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "revise_material", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
+            application = self._application(session, candidate_id, application_id)
+            if application.state not in {
+                ApplicationState.REVIEW_PENDING,
+                ApplicationState.REVIEW_FAILED,
+            }:
+                raise ApplicationConflictError(
+                    "materials can only be revised while independent review is pending or failed"
+                )
+            base_document = session.scalar(
+                select(ApplicationDocument).where(
+                    ApplicationDocument.id == revision.document_id,
+                    ApplicationDocument.candidate_id == candidate_id,
+                    ApplicationDocument.application_id == application_id,
+                )
+            )
+            if base_document is None:
+                raise ApplicationConflictError("material revision target was not found")
+            latest_version = session.scalar(
+                select(func.max(ApplicationDocument.version)).where(
+                    ApplicationDocument.candidate_id == candidate_id,
+                    ApplicationDocument.application_id == application_id,
+                    ApplicationDocument.kind == base_document.kind,
+                )
+            )
+            if (
+                latest_version is None
+                or base_document.version != latest_version
+                or revision.base_version != latest_version
+            ):
+                raise ApplicationConflictError("material revision base version is stale")
+            if not self._source_document_valid(base_document):
+                raise ApplicationConflictError("material revision source is missing or corrupted")
+            if Path(base_document.storage_uri).read_text(encoding="utf-8") == revision.content:
+                raise ApplicationConflictError("material revision must change the selected facts")
+
+            job = session.get(GlobalJob, application.job_id)
+            if job is None:
+                raise ApplicationConflictError("application job is missing")
+            base_report = session.scalar(
+                select(ApplicationArtifact).where(
+                    ApplicationArtifact.candidate_id == candidate_id,
+                    ApplicationArtifact.application_id == application_id,
+                    ApplicationArtifact.kind == f"render_report_{base_document.kind.value}",
+                    ApplicationArtifact.version == base_document.version,
+                )
+            )
+            if base_report is None or not self._render_report_artifact_valid(
+                base_report, document=base_document
+            ):
+                raise ApplicationConflictError("material render report is missing or corrupted")
+            try:
+                snapshot_id = UUID(str(base_report.artifact_metadata["candidate_snapshot_id"]))
+            except (KeyError, ValueError) as exc:
+                raise ApplicationConflictError("material snapshot identity is invalid") from exc
+            snapshot_record = session.get(CandidateSnapshotRecord, snapshot_id)
+            if (
+                snapshot_record is None
+                or snapshot_record.candidate_id != candidate_id
+                or snapshot_record.application_id != application_id
+                or base_report.artifact_metadata.get("candidate_snapshot_version")
+                != snapshot_record.profile_version
+                or base_report.artifact_metadata.get("candidate_snapshot_sha256")
+                != snapshot_record.sha256
+            ):
+                raise ApplicationConflictError("material snapshot identity is invalid")
+            snapshot = self._load_candidate_snapshot(application, snapshot_record)
+            try:
+                snapshot_config = CandidateConfig.model_validate_json(snapshot.config_json)
+            except ValueError as exc:
+                raise ApplicationConflictError(
+                    "candidate snapshot configuration is invalid"
+                ) from exc
+            generation_request = self._generation_request(snapshot_config, application_id, job)
+            if base_document.kind not in generation_request.requested_documents:
+                raise ApplicationConflictError(
+                    "material kind is not enabled by the candidate snapshot"
+                )
+            revised_document = self._manual_document(
+                base_document.kind,
+                revision.content,
+                generation_request,
+                reject_duplicate_claims=True,
+            )
+
+            all_documents = session.scalars(
+                select(ApplicationDocument)
+                .where(
+                    ApplicationDocument.candidate_id == candidate_id,
+                    ApplicationDocument.application_id == application_id,
+                )
+                .order_by(ApplicationDocument.version.desc())
+            ).all()
+            latest_by_kind: dict[DocumentKind, ApplicationDocument] = {}
+            for document in all_documents:
+                latest_by_kind.setdefault(document.kind, document)
+            generated_documents: list[GeneratedDocument] = []
+            document_versions: dict[DocumentKind, int] = {}
+            for kind in generation_request.requested_documents:
+                stored = latest_by_kind.get(kind)
+                if stored is None or not self._source_document_valid(stored):
+                    raise ApplicationConflictError(
+                        f"latest {kind.value} source is missing or corrupted"
+                    )
+                document_versions[kind] = (
+                    stored.version + 1 if kind is base_document.kind else stored.version
+                )
+                if kind is not base_document.kind:
+                    peer_artifact = session.scalar(
+                        select(ApplicationArtifact).where(
+                            ApplicationArtifact.candidate_id == candidate_id,
+                            ApplicationArtifact.application_id == application_id,
+                            ApplicationArtifact.kind == f"rendered_{kind.value}",
+                            ApplicationArtifact.version == stored.version,
+                        )
+                    )
+                    if peer_artifact is None or not self._render_artifact_valid(
+                        peer_artifact,
+                        document=stored,
+                        snapshot=snapshot_record,
+                    ):
+                        raise ApplicationConflictError(
+                            f"latest {kind.value} render is missing or corrupted"
+                        )
+                generated_documents.append(
+                    revised_document
+                    if kind is base_document.kind
+                    else self._manual_document(
+                        kind,
+                        Path(stored.storage_uri).read_text(encoding="utf-8"),
+                        generation_request,
+                        reject_duplicate_claims=False,
+                    )
+                )
+            stored_answers = session.scalars(
+                select(ApplicationAnswer).where(
+                    ApplicationAnswer.candidate_id == candidate_id,
+                    ApplicationAnswer.application_id == application_id,
+                )
+            ).all()
+            generated_answers = tuple(
+                GeneratedAnswer(
+                    question_key=answer.question_key,
+                    question=answer.question,
+                    answer=answer.answer,
+                    approved_source_key=answer.approved_source_key,
+                    evidence_ids=tuple(answer.evidence_ids.get("items", [])),
+                    supported=answer.supported,
+                )
+                for answer in stored_answers
+            )
+            generated = GenerationResult(
+                candidate_id=candidate_id,
+                application_id=application_id,
+                target=generation_request.target,
+                documents=tuple(generated_documents),
+                answers=generated_answers,
+            )
+            rendered = tuple(
+                self._renderer.render(
+                    document,
+                    template_id=template_for(
+                        document.kind,
+                        snapshot_config.cv_rules.template_id,
+                        snapshot_config.cv_rules.template_version,
+                    )[0],
+                    template_version=template_for(
+                        document.kind,
+                        snapshot_config.cv_rules.template_id,
+                        snapshot_config.cv_rules.template_version,
+                    )[1],
+                    maximum_pages=(
+                        snapshot_config.cv_rules.max_pages
+                        if document.kind is DocumentKind.CV
+                        else 2
+                    ),
+                    document_version=document_versions[document.kind],
+                )
+                for document in generated.documents
+            )
+            review = self._reviewer.review(
+                generation_request, generated, tuple(item.report for item in rendered)
+            )
+            revised_render = next(
+                item for item in rendered if item.document.kind is base_document.kind
+            )
+            new_version = document_versions[base_document.kind]
+            evidence_ids = sorted(
+                {evidence for claim in revised_document.claims for evidence in claim.evidence_ids}
+            )
+            document_path = self._write_exclusive(
+                candidate_id,
+                application_id,
+                base_document.kind.value,
+                f"v{new_version}.txt",
+                revised_document.content.encode("utf-8"),
+            )
+            new_document = ApplicationDocument(
+                candidate_id=candidate_id,
+                application_id=application_id,
+                kind=base_document.kind,
+                version=new_version,
+                storage_uri=str(document_path),
+                sha256=revised_document.content_sha256,
+                evidence_ids={"items": evidence_ids},
+                validated=review.documents_supported and revised_render.report.valid,
+            )
+            session.add(new_document)
+            session.flush()
+            fact_sources = {
+                fact.fact_id: fact.source_path for fact in generation_request.approved_facts
+            }
+            lineage: dict[str, object] = {
+                "candidate_snapshot_version": snapshot.profile_version,
+                "candidate_snapshot_sha256": snapshot.config_sha256,
+                "candidate_snapshot_id": str(snapshot.snapshot_id),
+                "document_version": new_version,
+                "evidence_ids": evidence_ids,
+                "manual_revision": True,
+                "base_document_id": str(base_document.id),
+                "base_version": base_document.version,
+                "reason": revision.reason,
+                "actor_id": "local-user",
+                "provenance": [
+                    {
+                        "text": claim.text,
+                        "evidence_ids": list(claim.evidence_ids),
+                        "source_paths": [fact_sources[item] for item in claim.evidence_ids],
+                    }
+                    for claim in revised_document.claims
+                ],
+            }
+            render_metadata = {
+                **revised_render.report.model_dump(mode="json"),
+                **lineage,
+            }
+            report_content = canonical_json_bytes(render_metadata)
+            report_path = self._write_exclusive(
+                candidate_id,
+                application_id,
+                f"render_report_{base_document.kind.value}",
+                f"v{new_version}.json",
+                report_content,
+            )
+            session.add(
+                ApplicationArtifact(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    kind=f"render_report_{base_document.kind.value}",
+                    version=new_version,
+                    storage_uri=str(report_path),
+                    sha256=hashlib.sha256(report_content).hexdigest(),
+                    content_type="application/json",
+                    immutable=False,
+                    artifact_metadata=render_metadata,
+                )
+            )
+            if revised_render.report.valid:
+                pdf_path = self._write_exclusive(
+                    candidate_id,
+                    application_id,
+                    f"rendered_{base_document.kind.value}",
+                    f"v{new_version}.pdf",
+                    revised_render.pdf_bytes,
+                )
+                session.add(
+                    ApplicationArtifact(
+                        candidate_id=candidate_id,
+                        application_id=application_id,
+                        kind=f"rendered_{base_document.kind.value}",
+                        version=new_version,
+                        storage_uri=str(pdf_path),
+                        sha256=revised_render.report.pdf_sha256 or "",
+                        content_type="application/pdf",
+                        immutable=False,
+                        artifact_metadata=render_metadata,
+                    )
+                )
+            session.add(
+                AgentReview(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    decision=review.decision,
+                    semantic_passed=review.semantic_review_passed,
+                    report=review.model_dump(mode="json"),
+                )
+            )
+
+            previous_state = application.state
+            if previous_state is ApplicationState.REVIEW_FAILED:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.MATERIALS_GENERATING,
+                    f"{idempotency_key}:generating",
+                    "MANUAL_MATERIAL_REVISION_STARTED",
+                )
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.MATERIALS_READY,
+                    f"{idempotency_key}:ready",
+                    "MATERIALS_READY",
+                )
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.REVIEW_PENDING,
+                    f"{idempotency_key}:review",
+                    "INDEPENDENT_REVIEW_COMPLETED",
+                    payload=review.model_dump(mode="json"),
+                )
+            session.add(
+                ApplicationEvent(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    idempotency_key=f"{idempotency_key}:revision",
+                    event_type="MATERIAL_MANUALLY_REVISED",
+                    from_state=application.state,
+                    to_state=application.state,
+                    payload={
+                        **lineage,
+                        "document_id": str(new_document.id),
+                        "content_sha256": revised_document.content_sha256,
+                        "semantic_review_passed": review.semantic_review_passed,
+                    },
+                )
+            )
+            if not review.semantic_review_passed:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.REVIEW_FAILED,
+                    f"{idempotency_key}:review-failed",
+                    "INDEPENDENT_REVIEW_FAILED",
+                    payload=review.model_dump(mode="json"),
+                )
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "revise_material",
                 key_sha256,
                 request_sha256,
                 view.model_dump(mode="json"),
@@ -2182,6 +2565,58 @@ class ApplicationService:
             ),
         )
 
+    @staticmethod
+    def _manual_document(
+        kind: DocumentKind,
+        content: str,
+        request: GenerationRequest,
+        *,
+        reject_duplicate_claims: bool,
+    ) -> GeneratedDocument:
+        heading = (
+            f"CV — {request.target.title} at {request.target.company}"
+            if kind is DocumentKind.CV
+            else f"Application for {request.target.title} at {request.target.company}"
+        )
+        paragraphs = content.split("\n\n")
+        if not paragraphs or paragraphs[0] != heading or "\r" in content:
+            raise ApplicationConflictError(
+                "manual material must preserve the canonical job heading"
+            )
+        approved_by_text: dict[str, list[str]] = {}
+        for fact in request.approved_facts:
+            if kind in fact.document_kinds:
+                approved_by_text.setdefault(fact.text, []).append(fact.fact_id)
+        claims: list[Claim] = []
+        seen: set[str] = set()
+        for paragraph in paragraphs[1:]:
+            if not paragraph.startswith("- ") or "\n" in paragraph:
+                raise ApplicationConflictError(
+                    "manual material may contain only canonical approved-fact bullets"
+                )
+            text = paragraph[2:]
+            evidence_ids = approved_by_text.get(text)
+            if not text or evidence_ids is None:
+                raise ApplicationConflictError(
+                    "manual material contains a claim not present in the approved snapshot"
+                )
+            if reject_duplicate_claims and text in seen:
+                raise ApplicationConflictError("manual material contains a duplicate claim")
+            seen.add(text)
+            claims.append(Claim(text=text, evidence_ids=tuple(sorted(evidence_ids))))
+        if not claims:
+            raise ApplicationConflictError("manual material must retain at least one approved fact")
+        canonical = "\n\n".join((heading, *(f"- {claim.text}" for claim in claims)))
+        if canonical != content:
+            raise ApplicationConflictError("manual material formatting is not canonical")
+        return GeneratedDocument(
+            kind=kind,
+            company=request.target.company,
+            content=content,
+            claims=tuple(claims),
+            content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        )
+
     def _write_exclusive(
         self,
         candidate_id: str,
@@ -2279,6 +2714,39 @@ class ApplicationService:
         if path != expected or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
             return False
         return hashlib.sha256(path.read_bytes()).hexdigest() == artifact.sha256
+
+    def _render_report_artifact_valid(
+        self,
+        artifact: ApplicationArtifact,
+        *,
+        document: ApplicationDocument,
+    ) -> bool:
+        if (
+            artifact.content_type != "application/json"
+            or artifact.artifact_metadata.get("source_sha256") != document.sha256
+            or artifact.artifact_metadata.get("document_version") != document.version
+            or artifact.candidate_id != document.candidate_id
+            or artifact.application_id != document.application_id
+            or artifact.version != document.version
+            or artifact.kind != f"render_report_{document.kind.value}"
+        ):
+            return False
+        try:
+            application_root = self._candidate_application_root(
+                artifact.candidate_id, artifact.application_id, create=False
+            )
+        except ApplicationConflictError:
+            return False
+        path = Path(artifact.storage_uri).absolute()
+        expected = application_root / artifact.kind / f"v{artifact.version}.json"
+        if path != expected or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+            return False
+        content = path.read_bytes()
+        return hashlib.sha256(
+            content
+        ).hexdigest() == artifact.sha256 and content == canonical_json_bytes(
+            artifact.artifact_metadata
+        )
 
     def _source_document_valid(self, document: ApplicationDocument) -> bool:
         try:
@@ -2833,36 +3301,64 @@ class ApplicationService:
             )
             .order_by(StoredCorrespondence.received_at)
         ).all()
-        immutable_kinds = {
-            item.kind
-            for item in session.scalars(
-                select(ApplicationArtifact).where(
-                    ApplicationArtifact.candidate_id == application.candidate_id,
-                    ApplicationArtifact.application_id == application.id,
-                    ApplicationArtifact.immutable.is_(True),
-                )
-            ).all()
+        artifacts = session.scalars(
+            select(ApplicationArtifact).where(
+                ApplicationArtifact.candidate_id == application.candidate_id,
+                ApplicationArtifact.application_id == application.id,
+            )
+        ).all()
+        report_metadata = {
+            (item.kind.removeprefix("render_report_"), item.version): item.artifact_metadata
+            for item in artifacts
+            if item.kind.startswith("render_report_")
+        }
+        latest_versions = {
+            kind: max(item.version for item in documents if item.kind is kind)
+            for kind in {item.kind for item in documents}
         }
         if any(not self._source_document_valid(item) for item in documents):
             raise ApplicationConflictError("application source document is missing or corrupted")
+
+        def document_view(item: ApplicationDocument) -> DocumentView:
+            metadata = report_metadata.get((item.kind.value, item.version), {})
+            raw_base_id = metadata.get("base_document_id")
+            try:
+                base_id = UUID(str(raw_base_id)) if raw_base_id is not None else None
+            except ValueError:
+                base_id = None
+            raw_provenance = metadata.get("provenance", [])
+            provenance = (
+                tuple(entry for entry in raw_provenance if isinstance(entry, dict))
+                if isinstance(raw_provenance, list)
+                else ()
+            )
+            editable_state = application.state in {
+                ApplicationState.REVIEW_PENDING,
+                ApplicationState.REVIEW_FAILED,
+            }
+            return DocumentView(
+                document_id=item.id,
+                kind=item.kind.value,
+                version=item.version,
+                content=Path(item.storage_uri).read_text(encoding="utf-8"),
+                sha256=item.sha256,
+                immutable=not editable_state or item.version != latest_versions[item.kind],
+                validated=item.validated,
+                evidence_ids=tuple(item.evidence_ids.get("items", [])),
+                created_at=item.created_at,
+                provenance=provenance,
+                revision_actor=(
+                    str(metadata["actor_id"]) if metadata.get("actor_id") is not None else None
+                ),
+                base_document_id=base_id,
+                render_metadata=metadata,
+            )
+
         return ApplicationDetail(
             **summary.model_dump(),
             source_url=job.url if job else "",
             ats_platform=job.ats_platform if job else None,
-            documents=tuple(
-                DocumentView(
-                    document_id=item.id,
-                    kind=item.kind.value,
-                    version=item.version,
-                    content=Path(item.storage_uri).read_text(encoding="utf-8"),
-                    sha256=item.sha256,
-                    immutable=item.kind.value in immutable_kinds,
-                    validated=item.validated,
-                    evidence_ids=tuple(item.evidence_ids.get("items", [])),
-                    created_at=item.created_at,
-                )
-                for item in documents
-            ),
+            documents=tuple(document_view(item) for item in documents),
             answers=tuple(
                 AnswerView(
                     answer_id=item.id,
@@ -2904,6 +3400,7 @@ class ApplicationService:
     def _next_action(state: ApplicationState) -> str:
         return {
             ApplicationState.REVIEW_PENDING: "Approve materials",
+            ApplicationState.REVIEW_FAILED: "Revise or regenerate materials",
             ApplicationState.APPLICATION_STARTED: "Start synthetic dry run",
             ApplicationState.FORM_FILLING: "Complete dry run",
             ApplicationState.HUMAN_ACTION_REQUIRED: "Complete human action",

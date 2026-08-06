@@ -342,6 +342,17 @@ export interface ApplicationDocumentView {
   validated: boolean;
   evidence_ids: string[];
   created_at: string;
+  provenance: JsonObject[];
+  revision_actor: string | null;
+  base_document_id: string | null;
+  render_metadata: JsonObject;
+}
+
+export interface MaterialRevisionInput {
+  document_id: string;
+  base_version: number;
+  content: string;
+  reason?: string;
 }
 
 export interface ApplicationAnswerView {

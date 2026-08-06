@@ -23,6 +23,7 @@ import type {
   JsonObject,
   JobDetail,
   JobSummary,
+  MaterialRevisionInput,
   ReadinessReport,
   SecurityEventView,
   SettingsView,
@@ -253,6 +254,20 @@ export const api = {
     request<ApplicationSummary[]>(`/api/applications?candidate_id=${encodeURIComponent(candidateId)}`),
   application: (candidateId: string, applicationId: string) =>
     request<ApplicationDetail>(`/api/applications/${encodeURIComponent(applicationId)}?candidate_id=${encodeURIComponent(candidateId)}`),
+  reviseMaterial: (
+    candidateId: string,
+    applicationId: string,
+    revision: MaterialRevisionInput,
+    idempotencyKey: string,
+  ) =>
+    request<ApplicationDetail>(
+      `/api/applications/${encodeURIComponent(applicationId)}/materials/revisions?candidate_id=${encodeURIComponent(candidateId)}`,
+      {
+        method: "POST",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify(revision),
+      },
+    ),
   applicationCommand: (candidateId: string, applicationId: string, command: "approve-materials" | "start", idempotencyKey: string) =>
     request<ApplicationDetail>(`/api/applications/${encodeURIComponent(applicationId)}/${command}?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   dryRun: (candidateId: string, applicationId: string, challenge: "captcha" | "otp" | null, idempotencyKey: string) =>

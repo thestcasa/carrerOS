@@ -156,6 +156,9 @@ h3 { margin: 0; font-size: 17px; }
 .material-state.draft { color: #85540d; background: var(--gold-soft); }
 .material-state.immutable { color: var(--green-dark); background: var(--green-soft); }
 .document-preview pre { margin: 28px 0; padding: 24px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: white; font: 14px/1.7 ui-monospace, "Cascadia Code", monospace; white-space: pre-wrap; }
+.material-editor { display: grid; gap: 16px; margin: 28px 0; }
+.material-editor textarea { min-height: 320px; resize: vertical; font: 14px/1.7 ui-monospace, "Cascadia Code", monospace; }
+.material-editor .editor-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .artifact-hash { color: var(--muted); font: 11px ui-monospace, "Cascadia Code", monospace; }
 .provenance-list { display: grid; gap: 16px; margin: 24px 0 0; }
 .provenance-list div { padding-top: 16px; border-top: 1px solid var(--line); }

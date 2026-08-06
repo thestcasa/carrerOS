@@ -36,6 +36,10 @@ class DocumentView(ApplicationContract):
     validated: bool
     evidence_ids: tuple[str, ...]
     created_at: datetime
+    provenance: tuple[dict[str, object], ...] = ()
+    revision_actor: str | None = None
+    base_document_id: UUID | None = None
+    render_metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class AnswerView(ApplicationContract):
@@ -126,6 +130,13 @@ class ArtifactView(ApplicationContract):
 
 class DryRunCommand(ApplicationContract):
     challenge: Literal["captcha", "otp"] | None = None
+
+
+class MaterialRevisionRequest(ApplicationContract):
+    document_id: UUID
+    base_version: int = Field(ge=1)
+    content: str = Field(min_length=1, max_length=100_000)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class AuthorizationView(ApplicationContract):
