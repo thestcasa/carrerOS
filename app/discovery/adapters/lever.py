@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.discovery.adapters.base import build_job, nested_string, parse_datetime, required_string
+from app.discovery.adapters.base import (
+    build_job,
+    nested_string,
+    optional_string,
+    parse_datetime,
+    required_string,
+)
 from app.discovery.contracts import NormalizedJob
 
 
@@ -35,4 +41,8 @@ class LeverAdapter:
             company_domain=company_domain,
             posted_at=parse_datetime(payload.get("createdAt")),
             discovered_at=discovered_at,
+            remote_policy=optional_string(payload, "workplaceType"),
+            employment_type=nested_string(payload, "categories", "commitment"),
+            seniority=nested_string(payload, "categories", "level"),
+            team=nested_string(payload, "categories", "team"),
         )

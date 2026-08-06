@@ -46,6 +46,9 @@ not add browser automation or live submission.
   minimal scoring projection, a candidate lifecycle fence, version/policy hashes, exact semantic
   response correlation, service-owned provenance, and independent deterministic policy
   recomputation.
+- [x] Complete section 9.3 normalized-job fields across strict adapters, append-only payloads,
+  nullable database storage, scoring input, API contracts, and job-detail presentation without
+  inferring facts absent from provider evidence.
 
 ## Milestone 3 and later
 

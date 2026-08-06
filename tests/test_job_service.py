@@ -145,6 +145,73 @@ def test_discovery_is_versioned_idempotent_and_candidate_scored(
         assert inspection_session.scalar(select(func.count(CandidateDiscoveryCommand.id))) == 2
 
 
+def test_discovery_persists_and_exposes_complete_normalized_job(
+    copied_candidates_root: Path,
+) -> None:
+    service, factory = _service(copied_candidates_root)
+    payload = _greenhouse_payload(external_id=4100, requisition_id="req-rich-4100")
+    payload.update(
+        {
+            "company_stage": "growth",
+            "team": "Applied AI",
+            "normalized_location": "remote europe",
+            "remote_policy": "remote",
+            "employment_type": "permanent",
+            "seniority": "senior",
+            "required_skills": ["Python", "SQL"],
+            "preferred_skills": ["PyTorch"],
+            "required_languages": [{"language": "Spanish", "minimum_level": "B2"}],
+            "required_experience_years_min": 3,
+            "required_experience_years_max": 6,
+            "salary_min": "90000.00",
+            "salary_max": "120000.00",
+            "salary_currency": "EUR",
+            "salary_period": "year",
+            "salary_source": "official ATS payload",
+            "visa_requirements": "Sponsorship unavailable.",
+            "work_authorization_requirements": "EU work authorization required.",
+            "deadline": "2026-09-30T23:59:00Z",
+            "expected_start_date": "2026-11-02",
+        }
+    )
+    result = service.discover(
+        DiscoveryRequest(
+            candidate_id="example_candidate",
+            platform="greenhouse",
+            company="Fictional Rich Jobs Ltd",
+            company_domain="fictional-rich.invalid",
+            payloads=(payload,),
+        ),
+        "rich-discovery-4100",
+    )
+
+    view = service.get_job("example_candidate", result.job_ids[0])
+
+    assert view.external_job_id == "4100"
+    assert view.requisition_id == "req-rich-4100"
+    assert view.company_stage == "growth"
+    assert view.team == "Applied AI"
+    assert view.normalized_location == "remote europe"
+    assert view.employment_type == "permanent"
+    assert view.seniority == "senior"
+    assert view.required_skills == ("Python", "SQL")
+    assert view.required_languages == ({"language": "Spanish", "minimum_level": "B2"},)
+    assert view.required_experience_years_min == 3
+    assert view.required_experience_years_max == 6
+    assert view.salary_min == "90000.00"
+    assert view.salary_display == "EUR 90000.00-120000.00 year"
+    assert view.salary_period == "year"
+    assert view.salary_source == "official ATS payload"
+    assert view.deadline is not None
+    assert view.expected_start_date is not None
+    with factory() as session:
+        job = session.get(GlobalJob, result.job_ids[0])
+        assert job is not None
+        assert job.salary_max == 120000
+        assert job.visa_requirements == "Sponsorship unavailable."
+        assert job.work_authorization_requirements == "EU work authorization required."
+
+
 def test_runtime_analysis_uses_redacted_context_and_replay_skips_agent(
     copied_candidates_root: Path,
 ) -> None:

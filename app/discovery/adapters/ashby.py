@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.discovery.adapters.base import build_job, parse_datetime, required_string
+from app.discovery.adapters.base import build_job, optional_string, parse_datetime, required_string
 from app.discovery.contracts import NormalizedJob
 
 
@@ -35,4 +35,8 @@ class AshbyAdapter:
             company_domain=company_domain,
             posted_at=parse_datetime(payload.get("publishedAt")),
             discovered_at=discovered_at,
+            remote_policy=optional_string(payload, "workplaceType"),
+            employment_type=optional_string(payload, "employmentType"),
+            seniority=optional_string(payload, "seniority"),
+            team=optional_string(payload, "team") or optional_string(payload, "department"),
         )

@@ -87,6 +87,78 @@ def test_adapter_rejects_cross_domain_application_url() -> None:
         LeverAdapter().parse(payload, company="Fictional Labs", company_domain="fictional.invalid")
 
 
+def test_adapter_preserves_explicit_normalized_job_evidence_without_inference() -> None:
+    payload: dict[str, Any] = {
+        "id": "rich-1",
+        "text": "Senior Data Engineer",
+        "descriptionPlain": "Build typed Python data services.",
+        "categories": {
+            "location": "Paris, France",
+            "commitment": "permanent",
+            "level": "senior",
+            "team": "Data Platform",
+        },
+        "workplaceType": "hybrid",
+        "hostedUrl": "https://jobs.lever.co/fictional/rich-1",
+        "required_skills": ["Python", "SQL", "Python"],
+        "preferred_skills": ["dbt"],
+        "required_languages": [{"language": "French", "minimum_level": "B2"}],
+        "required_experience_years_min": 4,
+        "required_experience_years_max": 7,
+        "salary_min": "80000",
+        "salary_max": 100000,
+        "salary_currency": "eur",
+        "salary_period": "year",
+        "salary_source": "official posting",
+        "visa_requirements": "No sponsorship stated.",
+        "work_authorization_requirements": "Authorized to work in France.",
+        "deadline": "2026-09-30T23:59:00Z",
+        "expected_start_date": "2026-11-02",
+        "company_stage": "growth",
+    }
+
+    job = LeverAdapter().parse(
+        payload,
+        company="Fictional Labs",
+        company_domain="fictional.invalid",
+        discovered_at=NOW,
+    )
+
+    assert job.normalized_location == "paris, france"
+    assert job.remote_policy == "hybrid"
+    assert job.employment_type == "permanent"
+    assert job.seniority == "senior"
+    assert job.team == "Data Platform"
+    assert job.company_stage == "growth"
+    assert job.required_skills == ("Python", "SQL")
+    assert job.required_languages[0].minimum_level == "B2"
+    assert job.required_experience_years_min == 4
+    assert job.salary_currency == "EUR"
+    assert str(job.salary_max) == "100000"
+    assert job.deadline == datetime(2026, 9, 30, 23, 59, tzinfo=UTC)
+    assert job.expected_start_date is not None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"required_experience_years_min": 8, "required_experience_years_max": 2},
+        {"salary_min": 100000, "salary_max": 50000},
+        {"required_languages": [{"language": "French", "minimum_level": "expert"}]},
+    ],
+)
+def test_adapter_rejects_invalid_normalized_ranges(overrides: dict[str, Any]) -> None:
+    payload: dict[str, Any] = {
+        "id": "invalid-rich",
+        "text": "Engineer",
+        "descriptionPlain": "Build systems.",
+        "hostedUrl": "https://jobs.lever.co/fictional/invalid-rich",
+        **overrides,
+    }
+    with pytest.raises((AdapterPayloadError, ValidationError)):
+        LeverAdapter().parse(payload, company="Fictional Labs", company_domain="fictional.invalid")
+
+
 def test_url_validation_is_https_exact_or_subdomain_only() -> None:
     assert validate_https_url("https://jobs.lever.co/acme/1", ("lever.co",)).allowed
     assert not validate_https_url("http://jobs.lever.co/acme/1", ("lever.co",)).allowed

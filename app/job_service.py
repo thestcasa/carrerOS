@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -36,7 +36,12 @@ from app.domain.models import (
     JobVersion,
     SecurityEvent,
 )
-from app.jobs.scoring import CandidateScoringContext, JobEvaluation, evaluate_job_with_context
+from app.jobs.scoring import (
+    CandidateScoringContext,
+    JobEvaluation,
+    RequiredLanguage,
+    evaluate_job_with_context,
+)
 from app.jobs.scoring import NormalizedJob as ScoringJob
 
 
@@ -78,18 +83,39 @@ class DiscoveryResult(_Contract):
 class JobView(_Contract):
     job_id: UUID
     candidate_id: str
+    external_job_id: str
+    requisition_id: str | None
     company: str
+    company_domain: str | None
+    company_stage: str | None
+    team: str | None
     title: str
+    normalized_title: str | None
     location: str | None
+    normalized_location: str | None
     remote_policy: str | None
+    employment_type: str | None
+    seniority: str | None
     source: str
     source_url: str
     ats_platform: str | None
     posted_at: datetime | None
+    deadline: datetime | None
+    expected_start_date: date | None
     verified_open_at: datetime | None
     verification_status: str | None = None
     verification_reason: str | None = None
     salary_display: str | None
+    salary_min: str | None
+    salary_max: str | None
+    salary_currency: str | None
+    salary_period: str | None
+    salary_source: str | None
+    visa_requirements: str | None
+    work_authorization_requirements: str | None
+    required_experience_years_min: int | None
+    required_experience_years_max: int | None
+    required_languages: tuple[dict[str, Any], ...] = ()
     role_category: str | None
     score: int | None = None
     state: str = "discovered"
@@ -100,7 +126,7 @@ class JobView(_Contract):
     description_normalized: str
     source_verified: bool
     source_trust_level: str
-    classification_confidence: int | None = None
+    classification_confidence: float | None = Field(default=None, ge=0, le=1)
     proposed_action: str = "review"
     required_skills: tuple[str, ...] = ()
     preferred_skills: tuple[str, ...] = ()
@@ -375,10 +401,31 @@ class JobService:
             employment_type=job.employment_type,
             required_skills=tuple(job.required_skills),
             preferred_skills=tuple(job.preferred_skills),
+            required_languages=tuple(
+                RequiredLanguage(
+                    language=item["language"],
+                    minimum_level=item["minimum_level"],
+                )
+                for item in job.required_languages
+                if item.get("minimum_level") is not None
+            ),
             salary_min=int(job.salary_min) if job.salary_min is not None else None,
             salary_max=int(job.salary_max) if job.salary_max is not None else None,
             salary_currency=job.salary_currency,
         )
+
+    @staticmethod
+    def _salary_display(job: GlobalJob) -> str | None:
+        if job.salary_min is None and job.salary_max is None and job.salary_currency is None:
+            return None
+        minimum = str(job.salary_min) if job.salary_min is not None else "?"
+        maximum = str(job.salary_max) if job.salary_max is not None else "?"
+        parts = tuple(
+            item
+            for item in (job.salary_currency, f"{minimum}-{maximum}", job.salary_period)
+            if item
+        )
+        return " ".join(parts)
 
     @staticmethod
     def _validate_analysis_response(
@@ -560,18 +607,38 @@ class JobService:
             "requisition_id": normalized.requisition_id,
             "company": normalized.company,
             "company_domain": normalized.company_domain,
+            "company_stage": normalized.company_stage,
+            "team": normalized.team,
             "title": normalized.title,
             "normalized_title": normalized.normalized_title,
             "location": normalized.location,
+            "normalized_location": normalized.normalized_location,
             "remote_policy": normalized.remote_policy,
             "employment_type": normalized.employment_type,
+            "seniority": normalized.seniority,
             "description": normalized.description_raw,
             "description_normalized": normalized.description_normalized,
             "url": str(normalized.source_url),
             "application_url": str(normalized.application_url),
             "ats_platform": normalized.ats_platform,
+            "required_skills": list(normalized.required_skills),
+            "preferred_skills": list(normalized.preferred_skills),
+            "required_languages": [
+                item.model_dump(mode="json") for item in normalized.required_languages
+            ],
+            "required_experience_years_min": normalized.required_experience_years_min,
+            "required_experience_years_max": normalized.required_experience_years_max,
+            "salary_min": normalized.salary_min,
+            "salary_max": normalized.salary_max,
+            "salary_currency": normalized.salary_currency,
+            "salary_period": normalized.salary_period,
+            "salary_source": normalized.salary_source,
+            "visa_requirements": normalized.visa_requirements,
+            "work_authorization_requirements": normalized.work_authorization_requirements,
             "source_trust_level": normalized.source_trust_level.value,
             "posted_at": normalized.posted_at,
+            "deadline": normalized.deadline,
+            "expected_start_date": normalized.expected_start_date,
             "semantic_fingerprint": semantic_description_fingerprint(
                 normalized.description_normalized
             ),
@@ -667,14 +734,25 @@ class JobService:
         return JobView(
             job_id=job.id,
             candidate_id=candidate_id,
+            external_job_id=job.external_id,
+            requisition_id=job.requisition_id,
             company=job.company,
+            company_domain=job.company_domain,
+            company_stage=job.company_stage,
+            team=job.team,
             title=job.title,
+            normalized_title=job.normalized_title,
             location=job.location,
+            normalized_location=job.normalized_location,
             remote_policy=job.remote_policy,
+            employment_type=job.employment_type,
+            seniority=job.seniority,
             source=job.source,
             source_url=job.url,
             ats_platform=job.ats_platform,
             posted_at=job.posted_at,
+            deadline=job.deadline,
+            expected_start_date=job.expected_start_date,
             verified_open_at=job.verified_open_at,
             verification_status=job.verification_status,
             verification_reason=(
@@ -682,11 +760,17 @@ class JobService:
                 if job.verification_evidence.get("reason") is not None
                 else None
             ),
-            salary_display=(
-                f"{job.salary_currency} {job.salary_min or '?'}-{job.salary_max or '?'}"
-                if job.salary_currency
-                else None
-            ),
+            salary_display=self._salary_display(job),
+            salary_min=str(job.salary_min) if job.salary_min is not None else None,
+            salary_max=str(job.salary_max) if job.salary_max is not None else None,
+            salary_currency=job.salary_currency,
+            salary_period=job.salary_period,
+            salary_source=job.salary_source,
+            visa_requirements=job.visa_requirements,
+            work_authorization_requirements=job.work_authorization_requirements,
+            required_experience_years_min=job.required_experience_years_min,
+            required_experience_years_max=job.required_experience_years_max,
+            required_languages=tuple(job.required_languages),
             role_category=classification if isinstance(classification, str) else None,
             score=int(score.total_score) if score is not None else None,
             state=decision.state
@@ -700,9 +784,25 @@ class JobService:
             source_trust_level=job.source_trust_level,
             possible_duplicate=possible_duplicate,
             stale=stale,
+            classification_confidence=1.0 if classification is not None else None,
             proposed_action=rationale.get("proposed_action", "review"),
             required_skills=tuple(job.required_skills),
             preferred_skills=tuple(job.preferred_skills),
+            requirements=tuple(
+                {
+                    "requirement": skill,
+                    "kind": kind,
+                    "status": "ambiguous",
+                    "evidence": [],
+                }
+                for kind, skills in (
+                    ("mandatory", job.required_skills),
+                    ("preferred", job.preferred_skills),
+                )
+                for skill in skills
+            ),
+            salary_evidence=job.salary_source,
+            salary_confidence=1 if job.salary_source else None,
             score_dimensions=tuple(
                 {
                     "name": item["name"],

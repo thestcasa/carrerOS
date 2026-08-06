@@ -159,19 +159,45 @@ export interface ApiErrorBody {
 export type JobWorkflowState = "discovered" | "saved" | "ignored" | "blocked" | "shortlisted";
 export type JobRoleCategory = "target" | "adjacent" | "non_target";
 
+export interface RequiredJobLanguage {
+  language: string;
+  minimum_level: "A1" | "A2" | "B1" | "B2" | "C1" | "C2" | "native" | null;
+}
+
 export interface JobSummary {
   job_id: string;
   candidate_id: string;
+  external_job_id: string;
+  requisition_id: string | null;
   company: string;
+  company_domain: string | null;
+  company_stage: string | null;
+  team: string | null;
   title: string;
+  normalized_title: string | null;
   location: string | null;
+  normalized_location: string | null;
   remote_policy: string | null;
+  employment_type: string | null;
+  seniority: string | null;
   source: string;
   source_url: string;
   ats_platform: string | null;
   posted_at: string | null;
+  deadline: string | null;
+  expected_start_date: string | null;
   verified_open_at: string | null;
   salary_display: string | null;
+  salary_min: string | null;
+  salary_max: string | null;
+  salary_currency: string | null;
+  salary_period: string | null;
+  salary_source: string | null;
+  visa_requirements: string | null;
+  work_authorization_requirements: string | null;
+  required_experience_years_min: number | null;
+  required_experience_years_max: number | null;
+  required_languages: RequiredJobLanguage[];
   role_category: JobRoleCategory | null;
   score: number | null;
   state: JobWorkflowState;

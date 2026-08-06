@@ -3,10 +3,9 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: complete Milestone 2 runtime agent/schema gaps, then remaining role-aware material
-  policy and answer revision
-- Branch baseline: `autonomous-build`; latest completed slice is durable isolated browser evidence
-  (`b1824cc`)
+- Active phase: remaining role-aware material policy and append-only answer revision
+- Branch baseline: `autonomous-build`; latest completed security slice is lifecycle-fenced runtime
+  analysis (`f1084d2`), with normalized-job completeness pending commit
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -139,16 +138,21 @@
   mismatches persist no partial analysis.
 - Discovery UI mutations retain their idempotency key across uncertain manual-discovery,
   source-create, and source-toggle responses and rotate it only after backend confirmation.
+- The complete normalized-job schema is strict, versioned, persisted, and exposed through the API
+  and job detail. Provider-explicit company stage/team, normalized location, employment/seniority,
+  skills/languages, experience ranges, salary evidence/period, authorization constraints,
+  deadline, and expected start remain null when absent rather than being inferred. Migration
+  `9c4e2a7b6d10` adds the previously missing database columns.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **264 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **269 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **54 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **55 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `f3c5d8e9012a`; workflow-task deletion fences are present after the table rebuild and
+  pass through `9c4e2a7b6d10`; workflow-task deletion fences are present after the table rebuild and
   models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
