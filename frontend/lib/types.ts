@@ -532,8 +532,20 @@ export interface HumanActionView {
   created_at: string;
   expires_at: string | null;
   screenshot_available: boolean;
+  screenshot_artifact_id: string | null;
+  screenshot_sha256: string | null;
+  screenshot_download_path: string | null;
   browser_session_id: string | null;
   session_opened: boolean;
+  browser_session_health: "unavailable" | "paused" | "takeover_opened" | "resuming" | "ready" | "failed" | "closed" | "expired";
+  safe_origin: string | null;
+  takeover_capability_status: "unavailable" | "not_required";
+  takeover_handshake_status: "unavailable" | "ready_to_open" | "opened" | "closed" | "expired" | "not_required";
+  verifier_state: "not_required" | "awaiting_human" | "awaiting_browser_verification" | "verified" | "cancelled" | "expired" | "unavailable";
+  continue_available: boolean;
+  cancel_available: boolean;
+  continue_consequence: string;
+  cancel_consequence: string;
 }
 
 export interface SecurityEventView {

@@ -9,7 +9,9 @@ test("CAPTCHA remains an explicit same-session human action", async ({ page }) =
   await page.goto(`/actions?candidate_id=${fixtureIds.candidateId}`);
   await expect(page.getByRole("heading", { name: "Human actions" })).toBeVisible();
   await expect(page.getByText(/CAPTCHA requires human completion/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open recoverable browser session" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Record local takeover handshake" })).toBeVisible();
+  await expect(page.getByText("http://127.0.0.1:8090")).toBeVisible();
+  await expect(page.getByText("unavailable")).toBeVisible();
   await expect(page.getByText(/never bypasses them/i)).toBeVisible();
   await expect(page.getByText(/bypass captcha/i)).toHaveCount(0);
 });

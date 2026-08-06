@@ -598,6 +598,92 @@ def test_retention_sweep_removes_expired_human_takeover_profile(
         assert event.payload["session_metadata_retained"] is True
 
 
+def test_expired_human_action_reconciles_before_profile_retention(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = build_session_factory(engine)
+    candidates = CandidateService(copied_candidates_root)
+    now = datetime(2026, 8, 5, 12, tzinfo=UTC)
+    with sessions.begin() as session:
+        job = GlobalJob(
+            source="fictional-board",
+            external_id="prompt-expiry",
+            company="Fictional Systems",
+            title="Prompt Expiry",
+            description="Fictional role.",
+            url="https://fictional.invalid/jobs/prompt-expiry",
+        )
+        session.add(job)
+        session.flush()
+        application = Application(
+            candidate_id="example_candidate",
+            job_id=job.id,
+            duplicate_hash="2" * 64,
+            submission_identity_hash="3" * 64,
+            state=ApplicationState.HUMAN_ACTION_REQUIRED,
+        )
+        session.add(application)
+        session.flush()
+        browser_session = BrowserSession(
+            candidate_id="example_candidate",
+            application_id=application.id,
+            status="human_takeover_opened",
+            updated_at=now - timedelta(minutes=20),
+        )
+        session.add(browser_session)
+        session.flush()
+        action = HumanAction(
+            candidate_id="example_candidate",
+            application_id=application.id,
+            actor_id="system",
+            action=HumanActionKind.PAUSE,
+            status="pending",
+            browser_session_id=browser_session.id,
+            expires_at=now - timedelta(minutes=1),
+        )
+        session.add_all(
+            [
+                action,
+                CandidateSettingsRecord(
+                    candidate_id="example_candidate", browser_session_retention_days=30
+                ),
+            ]
+        )
+        session.flush()
+        application_id = application.id
+        action_id = action.id
+        session_id = browser_session.id
+    session_root = (
+        tmp_path / "runtime" / "candidates" / "example_candidate" / "sessions" / str(session_id)
+    )
+    session_root.mkdir(parents=True)
+    (session_root / "cookies.json").write_text("fictional", encoding="utf-8")
+    service = CandidateLifecycleService(sessions, candidates, tmp_path / "runtime")
+
+    assert service.purge_expired_browser_sessions("example_candidate", now=now) == 0
+    assert session_root.is_dir()
+    with sessions() as session:
+        stored_session = session.get(BrowserSession, session_id)
+        stored_action = session.get(HumanAction, action_id)
+        stored_application = session.get(Application, application_id)
+        assert stored_session is not None and stored_session.status == "expired"
+        assert stored_action is not None and stored_action.status == "cancelled"
+        assert (
+            stored_application is not None
+            and stored_application.state is ApplicationState.FORM_FILLING
+        )
+        event = session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.application_id == application_id,
+                ApplicationEvent.event_type == "HUMAN_ACTION_EXPIRED",
+            )
+        )
+        assert event is not None
+        assert event.payload["browser_profile_deleted"] is False
+
+
 def test_retention_restores_quarantine_when_metadata_transaction_fails(
     copied_candidates_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

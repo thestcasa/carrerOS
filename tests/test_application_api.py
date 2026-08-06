@@ -127,6 +127,12 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
 
         denied_scope = client.get("/api/jobs?candidate_id=candidate_beta", headers=auth)
         assert denied_scope.status_code == 403
+        human_actions = client.get(
+            "/api/human-actions?candidate_id=example_candidate", headers=auth
+        )
+        assert human_actions.status_code == 200
+        assert human_actions.headers["cache-control"] == "no-store"
+        assert human_actions.json() == []
         missing_csrf = client.post(
             f"/api/jobs/{job_id}/generate-materials?candidate_id=example_candidate",
             headers={**auth, "Idempotency-Key": "api-generate-0001"},

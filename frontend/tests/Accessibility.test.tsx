@@ -1,17 +1,30 @@
 import axe from "axe-core";
 import { render, type RenderResult } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ActionsPageClient } from "@/app/actions/actions-page-client";
+import { SettingsPageClient } from "@/app/settings/settings-page-client";
 import { JobDetail } from "@/components/JobDetail";
 import { JobsInbox } from "@/components/JobsInbox";
 import { MaterialPreview } from "@/components/MaterialPreview";
 import { ReadinessBoard } from "@/components/ReadinessBoard";
 import { SubmittedPackageViewer } from "@/components/SubmittedPackageViewer";
+import { api } from "@/lib/api";
 import type {
   ApplicationDetail,
   ArtifactView,
+  HumanActionView,
   JobDetail as JobDetailData,
   ReadinessReport,
 } from "@/lib/types";
+
+vi.mock("@/lib/api", () => ({
+  api: {
+    candidate: vi.fn(),
+    deletionStatus: vi.fn(),
+    humanActions: vi.fn(),
+    settings: vi.fn(),
+  },
+}));
 
 async function expectNoBlockingViolations(view: RenderResult) {
   const result = await axe.run(view.container, {
@@ -79,6 +92,34 @@ const submittedArtifacts: ArtifactView[] = [
   metadata: { backend_confirmed: true },
   created_at: "2026-08-06T10:00:00Z",
 }));
+
+const humanAction: HumanActionView = {
+  action_id: "action-1",
+  candidate_id: "example_candidate",
+  application_id: "application-1",
+  company: "Fictional Labs",
+  role: "ML Engineer",
+  kind: "captcha",
+  status: "pending",
+  reason: "CAPTCHA requires human completion in this isolated session.",
+  created_at: "2026-08-06T10:00:00Z",
+  expires_at: "2026-08-06T10:15:00Z",
+  screenshot_available: true,
+  screenshot_artifact_id: "screenshot-1",
+  screenshot_sha256: "a".repeat(64),
+  screenshot_download_path: "/api/fixture",
+  browser_session_id: "session-1",
+  session_opened: false,
+  browser_session_health: "paused",
+  safe_origin: "http://127.0.0.1:8090",
+  takeover_capability_status: "unavailable",
+  takeover_handshake_status: "ready_to_open",
+  verifier_state: "awaiting_human",
+  continue_available: true,
+  cancel_available: true,
+  continue_consequence: "Resume the isolated dry run without authorizing submission.",
+  cancel_consequence: "Withdraw without attempting submission.",
+};
 
 const job: JobDetailData = {
   job_id: "job-1",
@@ -221,5 +262,46 @@ describe("accessibility-critical component checks", () => {
         />,
       ),
     );
+  });
+
+  it("has no serious or critical violations in human-action evidence", async () => {
+    vi.mocked(api.humanActions).mockResolvedValue([humanAction]);
+    const view = render(<ActionsPageClient candidateId="example_candidate" />);
+    await view.findByText("Fictional Labs · ML Engineer");
+    await expectNoBlockingViolations(view);
+  });
+
+  it("has no serious or critical violations in blocked automation settings", async () => {
+    vi.mocked(api.settings).mockResolvedValue({
+      candidate_id: "example_candidate",
+      automation_mode: "approval_required",
+      discovery_enabled: true,
+      emergency_stopped: false,
+      allowed_ats_adapters: ["greenhouse"],
+      tested_ats_adapters: [],
+      dry_run_acceptance_passed: false,
+      explicit_autonomy_confirmation: false,
+      maximum_applications_per_day: 3,
+      maximum_applications_per_week: 10,
+      maximum_applications_per_company_30_days: 1,
+      browser_session_retention_days: 30,
+      autonomy_blockers: ["no_tested_ats_adapter"],
+    });
+    vi.mocked(api.candidate).mockResolvedValue({
+      candidate_id: "example_candidate",
+      profile_version: "fixture-v1",
+      config: {},
+      readiness: {
+        candidate_id: "example_candidate",
+        status: "not_ready",
+        issues: [],
+        domains: [],
+        capabilities: [],
+      },
+    });
+    vi.mocked(api.deletionStatus).mockRejectedValue({ code: "deletion_not_found" });
+    const view = render(<SettingsPageClient candidateId="example_candidate" />);
+    await view.findByRole("button", { name: "autonomous" });
+    await expectNoBlockingViolations(view);
   });
 });

@@ -758,7 +758,7 @@ class CandidateLifecycleService:
                         BrowserSession.candidate_id == candidate_id,
                         or_(
                             BrowserSession.status.in_(
-                                ("confirmed", "ready", "synthetic_ready", "cancelled")
+                                ("confirmed", "ready", "synthetic_ready", "cancelled", "expired")
                             ),
                             and_(
                                 BrowserSession.status.in_(
@@ -778,6 +778,60 @@ class CandidateLifecycleService:
                         BrowserSession.updated_at < cutoff,
                     )
                 ).all()
+                expired_session_ids = {item.id for item in expired}
+                expired_actions = session.scalars(
+                    select(HumanAction).where(
+                        HumanAction.candidate_id == candidate_id,
+                        HumanAction.status == "pending",
+                        HumanAction.expires_at.is_not(None),
+                        HumanAction.expires_at <= current,
+                    )
+                ).all()
+                for action in expired_actions:
+                    action.status = "cancelled"
+                    action.completed_at = current
+                    browser_session = (
+                        session.get(BrowserSession, action.browser_session_id)
+                        if action.browser_session_id is not None
+                        else None
+                    )
+                    if (
+                        browser_session is not None
+                        and browser_session.candidate_id == candidate_id
+                        and browser_session.application_id == action.application_id
+                        and browser_session.id not in expired_session_ids
+                    ):
+                        browser_session.status = "expired"
+                    application = session.get(Application, action.application_id)
+                    profile_deleted = (
+                        browser_session is not None and browser_session.id in expired_session_ids
+                    )
+                    if (
+                        application is not None
+                        and application.candidate_id == candidate_id
+                        and application.state is ApplicationState.HUMAN_ACTION_REQUIRED
+                    ):
+                        session.add(
+                            ApplicationEvent(
+                                candidate_id=candidate_id,
+                                application_id=application.id,
+                                idempotency_key=f"expiry:human-action:{action.id}",
+                                event_type="HUMAN_ACTION_EXPIRED",
+                                from_state=application.state,
+                                to_state=ApplicationState.FORM_FILLING,
+                                payload={
+                                    "action_id": str(action.id),
+                                    "browser_session_id": (
+                                        str(action.browser_session_id)
+                                        if action.browser_session_id is not None
+                                        else None
+                                    ),
+                                    "browser_profile_deleted": profile_deleted,
+                                    "session_metadata_retained": True,
+                                },
+                            )
+                        )
+                        application.state = ApplicationState.FORM_FILLING
                 for browser_session in expired:
                     quarantine_pair = self._quarantine_browser_session_tree(
                         candidate_id, browser_session.id
@@ -792,41 +846,9 @@ class CandidateLifecycleService:
                     ).all()
                     for action in actions:
                         action.screenshot_uri = None
-                        if (
-                            action.status == "pending"
-                            and action.expires_at is not None
-                            and _utc(action.expires_at) <= current
-                        ):
-                            action.status = "cancelled"
-                            action.completed_at = current
-                            application = session.get(Application, action.application_id)
-                            if (
-                                application is not None
-                                and application.candidate_id == candidate_id
-                                and application.state is ApplicationState.HUMAN_ACTION_REQUIRED
-                            ):
-                                session.add(
-                                    ApplicationEvent(
-                                        candidate_id=candidate_id,
-                                        application_id=application.id,
-                                        idempotency_key=(
-                                            f"retention:expired-human-action:{action.id}"
-                                        ),
-                                        event_type="HUMAN_ACTION_EXPIRED",
-                                        from_state=application.state,
-                                        to_state=ApplicationState.FORM_FILLING,
-                                        payload={
-                                            "action_id": str(action.id),
-                                            "browser_session_id": str(browser_session.id),
-                                            "browser_profile_deleted": True,
-                                            "session_metadata_retained": True,
-                                        },
-                                    )
-                                )
-                                application.state = ApplicationState.FORM_FILLING
                     browser_session.external_session_ref = None
                     browser_session.status = "retained_metadata"
-                if expired:
+                if expired or expired_actions:
                     self._append_audit(session, candidate_id, "candidate.browser_retention_applied")
                 expired_count = len(expired)
         except Exception:

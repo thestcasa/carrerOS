@@ -234,8 +234,43 @@ class HumanActionView(ApplicationContract):
     created_at: datetime
     expires_at: datetime | None
     screenshot_available: bool
+    screenshot_artifact_id: UUID | None = None
+    screenshot_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    screenshot_download_path: str | None = None
     browser_session_id: UUID | None
     session_opened: bool
+    browser_session_health: Literal[
+        "unavailable",
+        "paused",
+        "takeover_opened",
+        "resuming",
+        "ready",
+        "failed",
+        "closed",
+        "expired",
+    ] = "unavailable"
+    safe_origin: str | None = None
+    takeover_capability_status: Literal["unavailable", "not_required"] = "unavailable"
+    takeover_handshake_status: Literal[
+        "unavailable", "ready_to_open", "opened", "closed", "expired", "not_required"
+    ] = "unavailable"
+    verifier_state: Literal[
+        "not_required",
+        "awaiting_human",
+        "awaiting_browser_verification",
+        "verified",
+        "cancelled",
+        "expired",
+        "unavailable",
+    ] = "unavailable"
+    continue_available: bool = False
+    cancel_available: bool = False
+    continue_consequence: str = (
+        "Career OS requires backend validation before any workflow can continue."
+    )
+    cancel_consequence: str = (
+        "Career OS cancels this workflow and withdraws the application; no submission is attempted."
+    )
 
 
 class SecurityEventView(ApplicationContract):

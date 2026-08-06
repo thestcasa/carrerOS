@@ -9,6 +9,8 @@ vi.mock("@/lib/api", () => ({
     humanActions: vi.fn(),
     openHumanSession: vi.fn(),
     completeHumanAction: vi.fn(),
+    cancelHumanAction: vi.fn(),
+    downloadArtifact: vi.fn(),
   },
 }));
 
@@ -24,8 +26,20 @@ const pending: HumanActionView = {
   created_at: "2026-08-05T10:00:00Z",
   expires_at: "2026-08-05T10:15:00Z",
   screenshot_available: true,
+  screenshot_artifact_id: "00000000-0000-0000-0000-000000000004",
+  screenshot_sha256: "a".repeat(64),
+  screenshot_download_path: "/api/fixture-screenshot",
   browser_session_id: "00000000-0000-0000-0000-000000000003",
   session_opened: false,
+  browser_session_health: "paused",
+  safe_origin: "http://127.0.0.1:8090",
+  takeover_capability_status: "unavailable",
+  takeover_handshake_status: "ready_to_open",
+  verifier_state: "awaiting_human",
+  continue_available: true,
+  cancel_available: true,
+  continue_consequence: "Resume the same isolated dry run without authorizing submission.",
+  cancel_consequence: "Withdraw without submitting.",
 };
 
 describe("ActionsPageClient", () => {
@@ -39,7 +53,7 @@ describe("ActionsPageClient", () => {
     render(<ActionsPageClient candidateId="example_candidate" />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Open recoverable browser session" }),
+      await screen.findByRole("button", { name: "Record local takeover handshake" }),
     );
 
     await waitFor(() => expect(api.openHumanSession).toHaveBeenCalledOnce());
@@ -52,7 +66,7 @@ describe("ActionsPageClient", () => {
       .mockResolvedValueOnce({ ...pending, session_opened: true });
     render(<ActionsPageClient candidateId="example_candidate" />);
     const button = await screen.findByRole("button", {
-      name: "Open recoverable browser session",
+      name: "Record local takeover handshake",
     });
 
     fireEvent.click(button);
@@ -63,5 +77,43 @@ describe("ActionsPageClient", () => {
     expect(vi.mocked(api.openHumanSession).mock.calls[1][2]).toBe(
       vi.mocked(api.openHumanSession).mock.calls[0][2],
     );
+  });
+
+  it("shows scoped evidence, safe origin, verifier state, and cancellation consequences", async () => {
+    render(<ActionsPageClient candidateId="example_candidate" />);
+
+    expect(await screen.findByText("http://127.0.0.1:8090")).toBeVisible();
+    expect(screen.getByText("awaiting human")).toBeVisible();
+    expect(screen.getByText("Withdraw without submitting.")).toBeVisible();
+    expect(screen.getByText(pending.screenshot_artifact_id!)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel and withdraw" })).toBeEnabled();
+    expect(screen.getByText("unavailable")).toBeVisible();
+  });
+
+  it("downloads only the exact screenshot artifact ID", async () => {
+    const blob = new Blob(["png"], { type: "image/png" });
+    vi.mocked(api.downloadArtifact).mockResolvedValue(blob);
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:human-action-screenshot"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(<ActionsPageClient candidateId="example_candidate" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open evidence screenshot" }));
+
+    await waitFor(() =>
+      expect(api.downloadArtifact).toHaveBeenCalledWith(
+        "example_candidate",
+        pending.application_id,
+        pending.screenshot_artifact_id,
+      ),
+    );
+    expect(click).toHaveBeenCalledOnce();
+    click.mockRestore();
   });
 });

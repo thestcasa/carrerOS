@@ -366,6 +366,8 @@ export const api = {
     request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/open-session?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   completeHumanAction: (candidateId: string, actionId: string, idempotencyKey: string) =>
     request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/complete?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
+  cancelHumanAction: (candidateId: string, actionId: string, idempotencyKey: string) =>
+    request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/cancel?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   securityEvents: (candidateId: string) =>
     request<SecurityEventView[]>(`/api/security-events?candidate_id=${encodeURIComponent(candidateId)}`),
   resolveSecurityEvent: (

@@ -607,16 +607,20 @@ def _operations_router() -> APIRouter:
     @router.get("/human-actions", response_model=tuple[HumanActionView, ...])
     def human_actions(
         service: ApplicationServiceDependency,
+        response: Response,
         candidate_id: Annotated[str, Query(min_length=1)],
     ) -> tuple[HumanActionView, ...]:
+        response.headers["Cache-Control"] = "no-store"
         return service.list_human_actions(candidate_id)
 
     @router.get("/human-actions/{action_id}", response_model=HumanActionView)
     def human_action(
         action_id: UUID,
         service: ApplicationServiceDependency,
+        response: Response,
         candidate_id: Annotated[str, Query(min_length=1)],
     ) -> HumanActionView:
+        response.headers["Cache-Control"] = "no-store"
         match = next(
             (
                 item
@@ -633,27 +637,33 @@ def _operations_router() -> APIRouter:
     def open_human_session(
         action_id: UUID,
         service: ApplicationServiceDependency,
+        response: Response,
         candidate_id: Annotated[str, Query(min_length=1)],
         idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
+        response.headers["Cache-Control"] = "no-store"
         return service.open_human_session(candidate_id, action_id, idempotency_key)
 
     @router.post("/human-actions/{action_id}/complete", response_model=HumanActionView)
     def complete_human_action(
         action_id: UUID,
         service: ApplicationServiceDependency,
+        response: Response,
         candidate_id: Annotated[str, Query(min_length=1)],
         idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
+        response.headers["Cache-Control"] = "no-store"
         return service.complete_human_action(candidate_id, action_id, idempotency_key)
 
     @router.post("/human-actions/{action_id}/cancel", response_model=HumanActionView)
     def cancel_human_action(
         action_id: UUID,
         service: ApplicationServiceDependency,
+        response: Response,
         candidate_id: Annotated[str, Query(min_length=1)],
         idempotency_key: IdempotencyKey,
     ) -> HumanActionView:
+        response.headers["Cache-Control"] = "no-store"
         return service.complete_human_action(candidate_id, action_id, idempotency_key, cancel=True)
 
     @router.get("/security-events", response_model=tuple[SecurityEventView, ...])

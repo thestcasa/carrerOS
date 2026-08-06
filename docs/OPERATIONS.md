@@ -89,10 +89,13 @@ a failed receipt with the same payload. Use `deletion-status` to inspect recover
 exposes the same controls even when normal candidate reads are fenced. `example_candidate` is
 deliberately protected.
 
-The scheduler enqueues a daily retention sweep. `browser_session_retention_days` defaults to 30
+The scheduler enqueues a retention/expiry sweep every 15 minutes.
+`browser_session_retention_days` defaults to 30
 and is configurable from 1 to 3650 in settings. Eligible confirmed/cancelled/ready sessions and
 expired human-takeover profiles are quarantined, committed as retained metadata, then removed.
-Expired human actions return their application to form filling with an audit event. Submitted
+Expired human actions return their application to form filling with an audit event as soon as a
+sweep observes their deadline; their profile is removed only after its separate retention age.
+Submitted
 immutable archives are retained until intentional candidate deletion.
 
 Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts and browser

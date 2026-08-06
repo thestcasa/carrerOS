@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, update
@@ -4977,14 +4978,159 @@ class ApplicationService:
             created_at=item.created_at,
         )
 
-    @staticmethod
-    def _human_action_view(session: Session, action: HumanAction) -> HumanActionView:
+    def _human_action_view(self, session: Session, action: HumanAction) -> HumanActionView:
         application = session.get(Application, action.application_id)
         job = session.get(GlobalJob, application.job_id) if application else None
         browser_session = (
             session.get(BrowserSession, action.browser_session_id)
             if action.browser_session_id is not None
             else None
+        )
+        expected_task_id = action.payload.get("task_id")
+        expected_attempt = action.payload.get("attempt")
+        screenshot = next(
+            (
+                item
+                for item in session.scalars(
+                    select(ApplicationArtifact)
+                    .where(
+                        ApplicationArtifact.candidate_id == action.candidate_id,
+                        ApplicationArtifact.application_id == action.application_id,
+                        ApplicationArtifact.kind == "browser_pre_submit_screenshot",
+                        ApplicationArtifact.immutable.is_(True),
+                    )
+                    .order_by(ApplicationArtifact.version.desc())
+                ).all()
+                if (
+                    str(item.artifact_metadata.get("session_id")) == str(action.browser_session_id)
+                    and item.artifact_metadata.get("task_id") == expected_task_id
+                    and item.artifact_metadata.get("attempt") == expected_attempt
+                )
+            ),
+            None,
+        )
+        if screenshot is not None:
+            raw_screenshot_path = Path(screenshot.storage_uri).absolute()
+            expected_screenshot_directory = (
+                self._runtime_root
+                / "candidates"
+                / action.candidate_id
+                / "browser_evidence"
+                / str(expected_task_id)
+                / f"attempt-{expected_attempt}"
+            )
+            screenshot_parent_symlinked = any(
+                parent.is_symlink()
+                for parent in (raw_screenshot_path, *raw_screenshot_path.parents)
+                if parent != self._runtime_root
+            )
+            try:
+                resolved_screenshot = raw_screenshot_path.resolve(strict=True)
+                screenshot_content = resolved_screenshot.read_bytes()
+            except OSError:
+                screenshot = None
+            else:
+                if (
+                    screenshot_parent_symlinked
+                    or not raw_screenshot_path.is_relative_to(self._runtime_root)
+                    or resolved_screenshot.parent != expected_screenshot_directory.resolve()
+                    or hashlib.sha256(screenshot_content).hexdigest() != screenshot.sha256
+                ):
+                    screenshot = None
+        expired = action.expires_at is not None and _utc(action.expires_at) <= datetime.now(UTC)
+        session_reference_valid = False
+        if browser_session is not None and browser_session.external_session_ref:
+            supplied_reference = Path(browser_session.external_session_ref)
+            expected_reference = (
+                self._runtime_root
+                / "candidates"
+                / action.candidate_id
+                / "sessions"
+                / str(browser_session.id)
+            )
+            session_reference_valid = (
+                not supplied_reference.is_symlink()
+                and not any(
+                    parent.is_symlink()
+                    for parent in supplied_reference.parents
+                    if parent != self._runtime_root
+                )
+                and supplied_reference.resolve() == expected_reference.resolve()
+                and supplied_reference.is_dir()
+            )
+        browser_status = (
+            browser_session.status
+            if browser_session is not None
+            and browser_session.candidate_id == action.candidate_id
+            and browser_session.application_id == action.application_id
+            and session_reference_valid
+            else None
+        )
+        browser_health = (
+            {
+                "human_action_required": "paused",
+                "human_takeover_opened": "takeover_opened",
+                "queued": "resuming",
+                "ready": "ready",
+                "failed": "failed",
+                "cancelled": "closed",
+                "retained_metadata": "expired",
+            }.get(browser_status, "unavailable")
+            if browser_status is not None
+            else "unavailable"
+        )
+        if expired:
+            browser_health = "expired"
+        # The current local flow records an authenticated handshake but has no interactive broker.
+        # Never represent that handshake as a one-time transport capability.
+        capability_status = "not_required" if action.browser_session_id is None else "unavailable"
+        if action.browser_session_id is None:
+            handshake_status = "not_required"
+        elif expired:
+            handshake_status = "expired"
+        elif action.status != "pending":
+            handshake_status = "closed"
+        elif browser_status == "human_action_required":
+            handshake_status = "ready_to_open"
+        elif browser_status == "human_takeover_opened":
+            handshake_status = "opened"
+        else:
+            handshake_status = "unavailable"
+        if expired:
+            verifier_state = "expired"
+        elif action.status == "completed":
+            verifier_state = "verified"
+        elif action.status == "cancelled":
+            verifier_state = "cancelled"
+        elif action.browser_session_id is None:
+            verifier_state = "not_required"
+        elif browser_status == "human_action_required":
+            verifier_state = "awaiting_human"
+        elif browser_status == "human_takeover_opened":
+            verifier_state = "awaiting_browser_verification"
+        else:
+            verifier_state = "unavailable"
+        source_url = action.payload.get("final_page", {}).get("source_url")
+        safe_origin: str | None = None
+        if isinstance(source_url, str):
+            try:
+                parsed = urlsplit(source_url)
+                if (
+                    parsed.scheme in {"http", "https"}
+                    and parsed.hostname in {"127.0.0.1", "localhost"}
+                    and parsed.username is None
+                    and parsed.password is None
+                ):
+                    port = parsed.port
+                    default_port = 80 if parsed.scheme == "http" else 443
+                    port_suffix = f":{port}" if port is not None and port != default_port else ""
+                    safe_origin = f"{parsed.scheme}://{parsed.hostname}{port_suffix}"
+            except ValueError:
+                safe_origin = None
+        pending = action.status == "pending" and not expired
+        continue_available = pending and (
+            action.browser_session_id is None
+            or browser_status in {"human_action_required", "human_takeover_opened"}
         )
         return HumanActionView(
             action_id=action.id,
@@ -4997,10 +5143,35 @@ class ApplicationService:
             reason=action.reason,
             created_at=action.occurred_at,
             expires_at=action.expires_at,
-            screenshot_available=action.screenshot_uri is not None,
+            screenshot_available=screenshot is not None,
+            screenshot_artifact_id=screenshot.id if screenshot is not None else None,
+            screenshot_sha256=screenshot.sha256 if screenshot is not None else None,
+            screenshot_download_path=(
+                f"/api/applications/{action.application_id}/artifacts/{screenshot.id}"
+                f"?candidate_id={action.candidate_id}"
+                if screenshot is not None
+                else None
+            ),
             browser_session_id=action.browser_session_id,
-            session_opened=browser_session is not None
-            and browser_session.status == "human_takeover_opened",
+            session_opened=browser_status == "human_takeover_opened",
+            browser_session_health=browser_health,
+            safe_origin=safe_origin,
+            takeover_capability_status=capability_status,
+            takeover_handshake_status=handshake_status,
+            verifier_state=verifier_state,
+            continue_available=continue_available,
+            cancel_available=pending,
+            continue_consequence=(
+                "After browser verification, Career OS resumes this same isolated dry run; "
+                "this does not authorize submission."
+                if action.browser_session_id is not None
+                else "Career OS records the reviewed action and continues to backend validation; "
+                "this does not authorize submission."
+            ),
+            cancel_consequence=(
+                "Career OS cancels this workflow and withdraws the application; no submission "
+                "is attempted."
+            ),
         )
 
     @staticmethod

@@ -52,7 +52,7 @@ def run_scheduler_once(
                     queue.enqueue(
                         candidate_id=candidate.candidate_id,
                         kind="candidate_retention_sweep",
-                        idempotency_key=f"retention:{current.date().isoformat()}",
+                        idempotency_key=f"retention:{bucket}",
                         payload={},
                         scheduled_for=current,
                     )

@@ -102,6 +102,14 @@ deterministic tests. The gate and archive verify the exact attempt manifest and 
 worker has no submit operation. The actual Chromium test is skipped on this host; the Docker path
 and deployment-specific interactive transport remain external.
 
+Hardening update: human-action views now bind the exact task/attempt/session screenshot artifact,
+validate the candidate session directory before reporting browser health, expose only a normalized
+loopback origin, and show verifier, expiry, continuation, and cancellation state. The UI can
+download evidence by exact authenticated artifact ID and cancel explicitly. A local handshake is
+reported separately from the interactive transport capability, which truthfully remains
+unavailable until a deployment-specific broker exists. Fifteen-minute action expiry is reconciled
+on the 15-minute scheduler cadence independently of long-term browser-profile retention.
+
 ### Phase 4 — Milestones 5 and 6: controlled submission and operations
 
 1. Complete the required pre-submit archive and one-time, short-lived authorization consumption.
@@ -316,7 +324,10 @@ import command key across uncertain failures.
 5. [Complete] Add a fail-closed exact submitted-package viewer that distinctly identifies the
    immutable submitted CV, cover letter, answers, and final receipt and downloads/previews by exact
    backend artifact ID without rendering HTML.
-6. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
+6. [Complete for local evidence; transport external] Expand the human-action evidence and expiry
+   contract without exposing browser profile paths, CDP/WebSocket secrets, or claiming that a
+   database handshake is an interactive takeover capability.
+7. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
    product/API/UI/documentation gaps, and run the full fictional workflow before final commits.
 
 Runtime agent routing and the normalized job expansion are complete. The deterministic provider

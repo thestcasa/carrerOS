@@ -279,11 +279,13 @@ Completed operations retain only the minimal tombstone and keyed pseudonymous de
 raw candidate identifier in the tombstone is currently required for stale-writer rejection; hosted
 deployment must define its legal retention or replace it with a tenant-safe keyed subject.
 
-Browser-profile retention uses candidate-configured days and daily leased tasks. Eligible terminal
-sessions and expired human-takeover sessions move to a same-root quarantine before the metadata
+Browser-profile retention uses candidate-configured days and 15-minute leased tasks. Eligible
+terminal sessions and expired human-takeover sessions move to a same-root quarantine before the metadata
 transaction. Transaction failure restores the live directory; committed quarantine is finalized
-idempotently on the current or a later sweep. An expired human action is cancelled and its
-application returns to `FORM_FILLING` through a durable event, allowing a fresh safe dry run.
+idempotently on the current or a later sweep. Action expiry is reconciled as soon as a sweep sees
+the 15-minute deadline, independently of whether the profile has reached its longer retention age.
+An expired human action is cancelled and its application returns to `FORM_FILLING` through a
+durable event, allowing a fresh safe dry run.
 Immutable submitted archives are outside this sweep.
 
 ## Materials and synthetic browser dry runs
@@ -321,6 +323,15 @@ The worker holds the candidate lifecycle fence across browser I/O and evidence p
 intentional deletion cannot race and recreate private files. Evidence sources are read by exact
 session-relative names with `O_NOFOLLOW`; stale-lease publications are discarded, and the bounded
 candidate lifecycle export includes the immutable attempt-evidence tree.
+
+Human-action presentation resolves screenshots by the exact task, attempt, and browser session
+recorded in the action evidence. It reports browser health only after validating the candidate and
+application binding plus the expected non-symlinked session directory, and reduces the observed
+page to an allowlisted origin. Raw runtime paths never cross the API. Opening records an
+authenticated, idempotent local handshake; it is not an interactive transport capability. That
+capability remains unavailable until a deployment provides a server-side broker with one-time
+candidate/action/session-bound grants. Completion remains separately gated by the browser-owned
+same-session verifier and opening the handshake never counts as verification.
 
 ## Candidate configuration portability
 

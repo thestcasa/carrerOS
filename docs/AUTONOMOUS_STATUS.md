@@ -3,7 +3,7 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: richer human-action evidence/takeover contract and final acceptance audit
+- Active phase: controlled-submission architecture and final acceptance audit
 - Branch baseline: `autonomous-build`; append-only answer revision is complete in `eda81f3`, and
   this checkpoint contains exact-package/accessibility/browser-route coverage
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
@@ -169,13 +169,20 @@
   suite with deterministic API interception. Suite discovery passes and fixtures use only
   fictional data. Chromium downloaded successfully under `/tmp`, but the minimal host cannot
   launch it because `libnspr4.so` is unavailable.
+- Human actions now expose the exact immutable screenshot artifact ID/hash, validated browser
+  session health, normalized safe loopback origin, expiry, fixed consequences, local handshake
+  state, verifier state, and explicit cancellation. The API is `no-store`, and the UI downloads
+  evidence only through the candidate-authorized artifact route. The interactive transport
+  capability remains explicitly unavailable: no CDP/WebSocket secret, browser profile path, or
+  pretend resume link is exposed. Expired actions reconcile every 15 minutes independently of the
+  longer profile-retention window and return the application to auditable form filling.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **279 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **280 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **67 Vitest tests**, the Next.js production build, and
+- Frontend: ESLint, strict TypeScript, **71 Vitest tests**, the Next.js production build, and
   discovery of all **11 Playwright tests** pass for this checkpoint. Browser execution reaches
   launch and then fails solely because the host lacks `libnspr4.so`.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
@@ -217,6 +224,6 @@ the environment reasons recorded below.
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with richer human-action evidence/takeover contracts and
-   remaining hosted productionization gaps.
+3. Continue the full specification audit with the default-disabled controlled-submission adapter
+   architecture and remaining hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

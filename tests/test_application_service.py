@@ -16,6 +16,7 @@ from app.applications import (
     ApplicationService,
     CorrespondenceIngestRequest,
     DryRunCommand,
+    HumanActionView,
     SettingsUpdate,
     SyntheticSubmissionRequest,
 )
@@ -37,6 +38,7 @@ from app.domain.models import (
     Base,
     BrowserSession,
     CandidateSettingsRecord,
+    HumanAction,
     SecurityEvent,
 )
 from app.job_service import DiscoveryRequest, JobService
@@ -733,6 +735,74 @@ def test_captcha_creates_visible_resumable_human_action(
     assert actions[0].status == "pending"
     assert actions[0].browser_session_id is not None
     assert actions[0].screenshot_available
+    assert actions[0].screenshot_artifact_id is not None
+    assert actions[0].screenshot_sha256 is not None
+    assert actions[0].screenshot_download_path is not None
+    assert actions[0].safe_origin == "http://127.0.0.1:8090"
+    assert actions[0].browser_session_health == "paused"
+    assert actions[0].takeover_capability_status == "unavailable"
+    assert actions[0].takeover_handshake_status == "ready_to_open"
+    assert actions[0].verifier_state == "awaiting_human"
+    assert actions[0].continue_available
+    assert actions[0].cancel_available
+    assert "external_session_ref" not in actions[0].model_dump_json()
+
+    original_screenshot_id = actions[0].screenshot_artifact_id
+    with sessions() as session:
+        screenshot_record = session.get(ApplicationArtifact, original_screenshot_id)
+        assert screenshot_record is not None
+        screenshot_path = Path(screenshot_record.storage_uri)
+    screenshot_content = screenshot_path.read_bytes()
+    screenshot_path.write_bytes(b"tampered screenshot")
+    tampered_view = applications.list_human_actions("example_candidate")[0]
+    assert not tampered_view.screenshot_available
+    assert tampered_view.screenshot_artifact_id is None
+    screenshot_path.write_bytes(screenshot_content)
+
+    with sessions.begin() as session:
+        stored_action = session.get(HumanAction, actions[0].action_id)
+        assert stored_action is not None
+        later_screenshot = runtime_root / "later-attempt.png"
+        later_screenshot.write_bytes(b"later fictional screenshot")
+        session.add(
+            ApplicationArtifact(
+                candidate_id="example_candidate",
+                application_id=generated.application_id,
+                kind="browser_pre_submit_screenshot",
+                version=2,
+                storage_uri=str(later_screenshot),
+                sha256=hashlib.sha256(later_screenshot.read_bytes()).hexdigest(),
+                content_type="image/png",
+                immutable=True,
+                artifact_metadata={
+                    "task_id": "different-task",
+                    "attempt": 99,
+                    "session_id": str(actions[0].browser_session_id),
+                },
+            )
+        )
+    assert (
+        applications.list_human_actions("example_candidate")[0].screenshot_artifact_id
+        == original_screenshot_id
+    )
+
+    with sessions.begin() as session:
+        browser_session = session.get(BrowserSession, actions[0].browser_session_id)
+        assert browser_session is not None
+        valid_session_reference = browser_session.external_session_ref
+        browser_session.external_session_ref = str(runtime_root / "wrong-session")
+    unavailable = applications.list_human_actions("example_candidate")[0]
+    assert unavailable.browser_session_health == "unavailable"
+    assert unavailable.takeover_handshake_status == "unavailable"
+    assert not unavailable.continue_available
+    with pytest.raises(ApplicationConflictError, match="reference is invalid"):
+        applications.open_human_session(
+            "example_candidate", actions[0].action_id, "open-invalid-session-captcha-502"
+        )
+    with sessions.begin() as session:
+        browser_session = session.get(BrowserSession, actions[0].browser_session_id)
+        assert browser_session is not None
+        browser_session.external_session_ref = valid_session_reference
 
     with pytest.raises(ApplicationConflictError, match="open the recoverable browser session"):
         applications.complete_human_action(
@@ -742,6 +812,29 @@ def test_captcha_creates_visible_resumable_human_action(
         "example_candidate", actions[0].action_id, "open-captcha-502"
     )
     assert opened.session_opened
+    assert opened.browser_session_health == "takeover_opened"
+    assert opened.takeover_capability_status == "unavailable"
+    assert opened.takeover_handshake_status == "opened"
+    assert opened.verifier_state == "awaiting_browser_verification"
+    legacy_receipt = opened.model_dump()
+    for field in (
+        "screenshot_artifact_id",
+        "screenshot_sha256",
+        "screenshot_download_path",
+        "browser_session_health",
+        "safe_origin",
+        "takeover_capability_status",
+        "takeover_handshake_status",
+        "verifier_state",
+        "continue_available",
+        "cancel_available",
+        "continue_consequence",
+        "cancel_consequence",
+    ):
+        legacy_receipt.pop(field)
+    assert (
+        HumanActionView.model_validate(legacy_receipt).takeover_capability_status == "unavailable"
+    )
     assert (
         applications.open_human_session(
             "example_candidate", actions[0].action_id, "open-captcha-502"
@@ -752,6 +845,11 @@ def test_captcha_creates_visible_resumable_human_action(
         "example_candidate", actions[0].action_id, "complete-captcha-502"
     )
     assert completed.status == "completed"
+    assert completed.browser_session_health == "resuming"
+    assert completed.takeover_handshake_status == "closed"
+    assert completed.verifier_state == "verified"
+    assert not completed.continue_available
+    assert not completed.cancel_available
     assert (
         applications.complete_human_action(
             "example_candidate", actions[0].action_id, "complete-captcha-502"

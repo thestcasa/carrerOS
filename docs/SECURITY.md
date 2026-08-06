@@ -18,6 +18,10 @@ archives, fixtures, logs, or Git.
 CAPTCHA, OTP, magic links, and identity checks always pause and create a human action in the same
 session. CAPTCHA farms, fingerprint spoofing, hidden ATS text, fake identities, and anti-bot or
 rate-limit evasion are forbidden. This repository has no live final-click implementation.
+Human-action responses expose only exact authenticated screenshot artifact references, normalized
+safe origins, and status. They never expose browser profile paths, cookies, CDP/WebSocket URLs, or
+transport credentials. The local open-session command is an idempotent handshake, not a takeover
+capability; the UI reports interactive transport as unavailable until a secure broker exists.
 
 Browser workers hold the candidate lifecycle fence for the complete external attempt and evidence
 publication, preventing erasure races from recreating candidate files. Attempt screenshots and
