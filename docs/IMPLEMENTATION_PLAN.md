@@ -58,6 +58,9 @@ not add browser automation or live submission.
 - [x] Rank role-relevant approved facts with configured caps, choose allowlisted role templates,
   persist cover-letter inclusion reasons and word policy, and bind gate/archive requirements to the
   immutable application material decision.
+- [x] Append versioned free-text-answer generation, manual revision, withdrawal tombstones,
+  snapshot-derived provenance, exact review identity binding, latest-only downstream consumption,
+  and accessible history/edit controls without overwriting prior answers.
 - [x] Synthetic restricted browser dry-run contracts that stop at CAPTCHA/OTP and cannot click.
 - [x] Persist synthetic browser sessions/screenshots/human actions and complete queue/resume UI.
 - [x] Add synthetic one-time submission authorization consumption, emergency stop, rate limits,

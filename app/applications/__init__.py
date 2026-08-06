@@ -1,5 +1,6 @@
 from app.applications.contracts import (
     AnalyticsOverview,
+    AnswerRevisionRequest,
     ApplicationDetail,
     ApplicationSummary,
     ArtifactView,
@@ -24,6 +25,7 @@ from app.applications.service import (
 
 __all__ = [
     "AnalyticsOverview",
+    "AnswerRevisionRequest",
     "ApplicationConflictError",
     "ApplicationDetail",
     "ApplicationNotFoundError",

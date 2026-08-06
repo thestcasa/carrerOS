@@ -400,13 +400,32 @@ export interface MaterialRevisionInput {
   reason?: string;
 }
 
+export interface AnswerRevisionInput {
+  answer_id: string;
+  base_version: number;
+  answer: string;
+  reason?: string;
+}
+
 export interface ApplicationAnswerView {
   answer_id: string;
   question_key: string;
   question: string;
   answer: string;
+  version: number;
+  sha256: string;
+  immutable: boolean;
+  revision_kind: "generated" | "manual" | "withdrawn" | "legacy_unknown";
+  revision_actor: string;
+  base_answer_id: string | null;
+  reason: string | null;
+  approved_source_key: string | null;
+  candidate_snapshot_id: string | null;
+  candidate_snapshot_version: string | null;
+  candidate_snapshot_sha256: string | null;
   supported: boolean;
   evidence_ids: string[];
+  created_at: string;
 }
 
 export interface ApplicationEventView {

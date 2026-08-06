@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -239,6 +240,25 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
     assert submitted_cv_bytes.startswith(b"%PDF-1.4")
     assert submitted_cv_bytes == rendered_cv_bytes
     assert submitted_cv.sha256 == rendered_cv.sha256
+    submitted_answers = next(
+        artifact for artifact in artifacts if artifact.kind == "submitted_answers"
+    )
+    submitted_answer_payload = json.loads(
+        applications.artifact_path(
+            "example_candidate", generated.application_id, submitted_answers.artifact_id
+        ).read_text(encoding="utf-8")
+    )
+    assert {item["question_key"] for item in submitted_answer_payload} == {
+        "sponsorship",
+        "work_authorization",
+    }
+    assert all(
+        item["version"] == 1
+        and item["sha256"] == hashlib.sha256(item["answer"].encode()).hexdigest()
+        and item["actor_id"] == "material-generator"
+        and item["candidate_snapshot_id"]
+        for item in submitted_answer_payload
+    )
     result = applications.submit_synthetic(
         "example_candidate",
         generated.application_id,

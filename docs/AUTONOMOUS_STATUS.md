@@ -3,10 +3,10 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: append-only free-text answer revision, then browser E2E/accessibility-critical
-  coverage and final acceptance audit
-- Branch baseline: `autonomous-build`; latest completed slice is normalized-job completeness
-  (`da66429`), with role-aware material policy pending commit
+- Active phase: browser E2E/accessibility-critical coverage, exact submitted-package presentation,
+  and final acceptance audit
+- Branch baseline: `autonomous-build`; latest completed commit is role-aware material policy
+  (`592a70b`), with append-only answer revision pending commit
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -153,17 +153,26 @@
   current candidate settings later change. Missing or malformed policies deny rather than omitting
   a cover letter. Migration `4e8b1c2d3f40` conservatively marks legacy applications with existing
   cover letters.
+- Application answers are append-only and snapshot-bound. Generation, manual editing, and removed
+  prompts append exact version/hash/actor/predecessor records; a composite self-reference prevents
+  cross-candidate, cross-application, or cross-question lineage and database triggers reject row
+  updates or non-erasure deletes. Review records bind exact active answer IDs, versions, hashes,
+  and snapshot IDs. Manual
+  text receives approved provenance only when it exactly matches the snapshot-approved answer for
+  that question; otherwise review fails closed. Gate/archive consumers use only the active latest
+  revision, prompt withdrawals cannot resurrect older text, detail/UI retains immutable history,
+  and interview preparation reads the hash-verified submitted-answer archive.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **273 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **279 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **56 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **58 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `4e8b1c2d3f40`; workflow-task deletion fences are present after the table rebuild and
-  models and Alembic report no missing operations.
+  pass through `7f2c9d1e4a60`; answer and workflow-task deletion fences survive SQLite table rebuilds,
+  legacy answers backfill conservatively, and models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
   dependencies with `playwright install --with-deps chromium`.
@@ -189,9 +198,9 @@ the environment reasons recorded below.
   deployment. Configuration portability is complete; full lifecycle exports intentionally remain
   non-restorable because replaying operational/database state is outside the safe import boundary.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
-- Complete versioned free-text-answer revision; DOCX remains optional. Role-specific
-  template/content selection, cover-letter policy, manual rendered-document revision,
-  cross-source identity, and fresh-source proof are complete.
+- DOCX remains optional. Role-specific template/content selection, cover-letter policy, manual
+  rendered-document and free-text-answer revision, cross-source identity, and fresh-source proof
+  are complete.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
   worktree clean apart from the preserved user-owned paths.
 
@@ -199,6 +208,6 @@ the environment reasons recorded below.
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with role-aware material policy and remaining hosted
-   productionization gaps.
+3. Continue the full specification audit with browser/accessibility coverage, exact submitted
+   package UI, and remaining hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

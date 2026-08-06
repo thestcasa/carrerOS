@@ -246,6 +246,18 @@ render, appends source/report/PDF versions, re-runs independent review on the fu
 keeps every superseded document immutable. Approval and later package binding therefore consume
 the latest reviewed versions without rewriting application history.
 
+Application-answer revision follows the same boundary but retains logical-question lineage in the
+database. Every generation, manual edit, or prompt withdrawal appends a row with a monotonically
+increasing version, exact content hash, actor, predecessor, reason, and candidate-snapshot
+identity. Composite self-references prevent lineage from crossing a candidate, application, or
+question; database triggers reject updates and deletes outside deliberate candidate erasure.
+Review records bind the exact active
+answer IDs, versions, hashes, and snapshot IDs. All gate, archive, and interview preparation reads
+select the latest revision per question after resolving withdrawals, while application detail
+exposes the complete immutable history. User text receives approved-answer provenance only when it
+exactly matches the same snapshot-approved question key; otherwise support is cleared and
+independent review fails closed.
+
 ## Candidate lifecycle and erasure
 
 Portable export holds the candidate lifecycle reader lease and reads candidate-owned SQL rows from

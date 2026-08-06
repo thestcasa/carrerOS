@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.applications import (
     AnalyticsOverview,
+    AnswerRevisionRequest,
     ApplicationConflictError,
     ApplicationDetail,
     ApplicationNotFoundError,
@@ -499,6 +500,16 @@ def _application_router() -> APIRouter:
         idempotency_key: IdempotencyKey,
     ) -> ApplicationDetail:
         return service.revise_material(candidate_id, application_id, revision, idempotency_key)
+
+    @router.post("/{application_id}/answers/revisions", response_model=ApplicationDetail)
+    def revise_answer(
+        application_id: UUID,
+        revision: AnswerRevisionRequest,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> ApplicationDetail:
+        return service.revise_answer(candidate_id, application_id, revision, idempotency_key)
 
     @router.post("/{application_id}/start", response_model=ApplicationDetail)
     def start_application(

@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -415,12 +416,61 @@ class ApplicationAnswer(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "application_answers"
     __table_args__ = (
         UniqueConstraint(
-            "candidate_id", "application_id", "question_key", name="uq_application_answer"
+            "candidate_id",
+            "application_id",
+            "question_key",
+            "version",
+            name="uq_application_answer_version",
+        ),
+        UniqueConstraint(
+            "candidate_id",
+            "application_id",
+            "question_key",
+            "id",
+            name="uq_application_answer_scope",
+        ),
+        UniqueConstraint(
+            "candidate_id",
+            "application_id",
+            "question_key",
+            "previous_answer_id",
+            name="uq_application_answer_previous",
         ),
         ForeignKeyConstraint(
             ["candidate_id", "application_id"],
             ["applications.candidate_id", "applications.id"],
             name="fk_application_answer_scope",
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id", "question_key", "previous_answer_id"],
+            [
+                "application_answers.candidate_id",
+                "application_answers.application_id",
+                "application_answers.question_key",
+                "application_answers.id",
+            ],
+            name="fk_application_answer_previous_scope",
+        ),
+        CheckConstraint("version >= 1", name="ck_application_answer_version_positive"),
+        CheckConstraint(
+            "(version = 1 AND previous_answer_id IS NULL) OR "
+            "(version > 1 AND previous_answer_id IS NOT NULL)",
+            name="ck_application_answer_lineage",
+        ),
+        CheckConstraint(
+            "revision_kind IN ('generated', 'manual', 'withdrawn', 'legacy_unknown')",
+            name="ck_application_answer_revision_kind",
+        ),
+        CheckConstraint(
+            "supported = false OR approved_source_key IS NOT NULL",
+            name="ck_application_answer_supported_source",
+        ),
+        Index(
+            "ix_application_answers_latest",
+            "candidate_id",
+            "application_id",
+            "question_key",
+            "version",
         ),
     )
 
@@ -431,6 +481,15 @@ class ApplicationAnswer(Base, TimestampMixin, CandidateScopedMixin):
     question_key: Mapped[str] = mapped_column(String(255), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_answer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    reason: Mapped[str | None] = mapped_column(Text)
+    candidate_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    candidate_snapshot_version: Mapped[str | None] = mapped_column(String(32))
+    candidate_snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
     approved_source_key: Mapped[str | None] = mapped_column(String(255))
     evidence_ids: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     supported: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -7,11 +7,212 @@ import { MaterialPreview } from "@/components/MaterialPreview";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
 import type {
+  AnswerRevisionInput,
+  ApplicationAnswerView,
   ApplicationDetail,
   ArtifactView,
   MaterialPolicy,
   MaterialRevisionInput,
 } from "@/lib/types";
+
+function groupedAnswers(answers: ApplicationAnswerView[]): ApplicationAnswerView[][] {
+  const groups = new Map<string, ApplicationAnswerView[]>();
+  for (const answer of answers) {
+    const group = groups.get(answer.question_key) ?? [];
+    group.push(answer);
+    groups.set(answer.question_key, group);
+  }
+  return [...groups.values()]
+    .map((group) => group.sort((left, right) => right.version - left.version))
+    .sort((left, right) => left[0].question.localeCompare(right[0].question));
+}
+
+function AnswerHistory({
+  answers,
+  disabled,
+  onSaveRevision,
+}: {
+  answers: ApplicationAnswerView[];
+  disabled: boolean;
+  onSaveRevision: (revision: AnswerRevisionInput) => Promise<ApplicationDetail>;
+}) {
+  const latest = answers[0];
+  const [selectedId, setSelectedId] = useState(latest.answer_id);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(latest.answer);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const selected = answers.find((answer) => answer.answer_id === selectedId) ?? latest;
+
+  function select(answer: ApplicationAnswerView) {
+    setSelectedId(answer.answer_id);
+    setDraft(answer.answer);
+    setReason("");
+    setEditing(false);
+  }
+
+  async function save() {
+    const revision: AnswerRevisionInput = {
+      answer_id: selected.answer_id,
+      base_version: selected.version,
+      answer: draft,
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
+    };
+    setSaving(true);
+    try {
+      const updated = await onSaveRevision(revision);
+      const updatedAnswers = updated.answers
+        .filter((answer) => answer.question_key === selected.question_key)
+        .sort((left, right) => right.version - left.version);
+      const updatedLatest = updatedAnswers[0];
+      if (updatedLatest) {
+        setSelectedId(updatedLatest.answer_id);
+        setDraft(updatedLatest.answer);
+      }
+      setReason("");
+      setEditing(false);
+    } catch {
+      // The parent renders the API error; retain the exact draft for an idempotent retry.
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="answer-row" aria-label={latest.question}>
+      <h3>{latest.question}</h3>
+      <div aria-label={`Version history for ${latest.question}`}>
+        {answers.map((answer) => (
+          <button
+            className="text-button"
+            type="button"
+            key={answer.answer_id}
+            aria-current={answer.answer_id === selected.answer_id ? "true" : undefined}
+            onClick={() => select(answer)}
+          >
+            Version {answer.version}{answer.answer_id === latest.answer_id ? " (latest)" : ""}
+          </button>
+        ))}
+      </div>
+      {editing ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <label htmlFor={`answer-content-${selected.answer_id}`}>Answer content</label>
+          <textarea
+            id={`answer-content-${selected.answer_id}`}
+            maxLength={10_000}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <label htmlFor={`answer-reason-${selected.answer_id}`}>
+            Revision reason (optional)
+          </label>
+          <input
+            id={`answer-reason-${selected.answer_id}`}
+            maxLength={500}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <p className="muted">
+            Saving appends a version. The backend revalidates the answer and derives its
+            evidence and candidate-snapshot provenance.
+          </p>
+          <div aria-live="polite">{saving ? "Saving answer revision…" : null}</div>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={disabled || saving || !draft.trim() || draft === selected.answer}
+          >
+            Save as new answer version
+          </button>
+          <button
+            className="text-button"
+            type="button"
+            disabled={saving}
+            onClick={() => {
+              setDraft(selected.answer);
+              setReason("");
+              setEditing(false);
+            }}
+          >
+            Cancel answer edit
+          </button>
+        </form>
+      ) : (
+        <>
+          <p>{selected.answer}</p>
+          <StatusPill status={selected.supported ? "READY" : "BLOCKED"} />
+          {!selected.immutable ? (
+            <button
+              className="text-button"
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                setDraft(selected.answer);
+                setReason("");
+                setEditing(true);
+              }}
+            >
+              Edit latest answer
+            </button>
+          ) : (
+            <p className="muted">Immutable answer history</p>
+          )}
+        </>
+      )}
+      <p className="eyebrow">Backend-derived provenance</p>
+      <dl className="metadata-list">
+        <div>
+          <dt>Revision</dt>
+          <dd>{selected.revision_kind.replaceAll("_", " ")} by {selected.revision_actor}</dd>
+        </div>
+        <div>
+          <dt>Version state</dt>
+          <dd>{selected.immutable ? "Immutable history" : "Latest editable answer"}</dd>
+        </div>
+        <div>
+          <dt>Base answer</dt>
+          <dd>{selected.base_answer_id ?? "Initial version"}</dd>
+        </div>
+        <div>
+          <dt>Created</dt>
+          <dd>{new Date(selected.created_at).toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Reason</dt>
+          <dd>{selected.reason ?? "No reason recorded"}</dd>
+        </div>
+        <div>
+          <dt>Approved source</dt>
+          <dd>{selected.approved_source_key ?? "Not recorded"}</dd>
+        </div>
+        <div>
+          <dt>Evidence IDs</dt>
+          <dd>{selectedIds(selected.evidence_ids)}</dd>
+        </div>
+        <div>
+          <dt>Candidate snapshot</dt>
+          <dd>
+            {selected.candidate_snapshot_version ?? "Not recorded"}
+            {selected.candidate_snapshot_id ? ` · ${selected.candidate_snapshot_id}` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Candidate snapshot SHA-256</dt>
+          <dd><code>{selected.candidate_snapshot_sha256 ?? "Not recorded"}</code></dd>
+        </div>
+        <div>
+          <dt>Answer SHA-256</dt>
+          <dd><code>{selected.sha256}</code></dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
 
 function metadataString(value: unknown): string | null {
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
@@ -255,6 +456,28 @@ export function ApplicationPageClient({
     }
   }
 
+  async function reviseAnswer(revision: AnswerRevisionInput): Promise<ApplicationDetail> {
+    const operation = `revise-answer:${JSON.stringify(revision)}`;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.reviseAnswer(
+        candidateId,
+        applicationId,
+        revision,
+        commandKey(operation),
+      );
+      clearCommand(operation);
+      setApplication(updated);
+      return updated;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Answer revision failed safely.");
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (error && !application) {
     return (
       <div className="page-wrap">
@@ -335,13 +558,18 @@ export function ApplicationPageClient({
       <section className="panel">
         <p className="eyebrow">Exact answers</p>
         <h2>Application questions</h2>
-        {application.answers.map((answer) => (
-          <div className="answer-row" key={answer.answer_id}>
-            <strong>{answer.question}</strong>
-            <p>{answer.answer}</p>
-            <StatusPill status={answer.supported ? "READY" : "BLOCKED"} />
-          </div>
-        ))}
+        {application.answers.length ? (
+          groupedAnswers(application.answers).map((answers) => (
+            <AnswerHistory
+              answers={answers}
+              disabled={busy}
+              key={answers[0].question_key}
+              onSaveRevision={reviseAnswer}
+            />
+          ))
+        ) : (
+          <p className="muted">No application questions have been generated.</p>
+        )}
       </section>
       <section className="panel">
         <p className="eyebrow">Correspondence</p>

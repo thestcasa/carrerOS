@@ -47,8 +47,20 @@ class AnswerView(ApplicationContract):
     question_key: str
     question: str
     answer: str
+    version: int
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    immutable: bool
+    revision_kind: Literal["generated", "manual", "withdrawn", "legacy_unknown"]
+    revision_actor: str
+    base_answer_id: UUID | None
+    reason: str | None
+    approved_source_key: str | None
+    candidate_snapshot_id: UUID | None
+    candidate_snapshot_version: str | None
+    candidate_snapshot_sha256: str | None
     supported: bool
     evidence_ids: tuple[str, ...]
+    created_at: datetime
 
 
 class EventView(ApplicationContract):
@@ -167,6 +179,19 @@ class MaterialRevisionRequest(ApplicationContract):
     base_version: int = Field(ge=1)
     content: str = Field(min_length=1, max_length=100_000)
     reason: str | None = Field(default=None, max_length=500)
+
+
+class AnswerRevisionRequest(ApplicationContract):
+    answer_id: UUID
+    base_version: int = Field(ge=1)
+    answer: str = Field(min_length=1, max_length=10_000)
+    reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def answer_is_not_blank(self) -> AnswerRevisionRequest:
+        if not self.answer.strip():
+            raise ValueError("answer revision must contain non-whitespace text")
+        return self
 
 
 class AuthorizationView(ApplicationContract):

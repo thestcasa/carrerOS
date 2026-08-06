@@ -1,4 +1,5 @@
 import type {
+  AnswerRevisionInput,
   ApiErrorBody,
   AnalyticsOverview,
   ApplicationDetail,
@@ -302,6 +303,20 @@ export const api = {
   ) =>
     request<ApplicationDetail>(
       `/api/applications/${encodeURIComponent(applicationId)}/materials/revisions?candidate_id=${encodeURIComponent(candidateId)}`,
+      {
+        method: "POST",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify(revision),
+      },
+    ),
+  reviseAnswer: (
+    candidateId: string,
+    applicationId: string,
+    revision: AnswerRevisionInput,
+    idempotencyKey: string,
+  ) =>
+    request<ApplicationDetail>(
+      `/api/applications/${encodeURIComponent(applicationId)}/answers/revisions?candidate_id=${encodeURIComponent(candidateId)}`,
       {
         method: "POST",
         headers: commandHeaders(idempotencyKey),

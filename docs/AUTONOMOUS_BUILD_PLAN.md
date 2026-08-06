@@ -65,7 +65,9 @@ reorder exact approved-fact bullets from the immutable application snapshot; arb
 forged provenance, stale bases, changed destinations, and post-approval edits fail closed. Each
 revision creates new source/report/PDF versions, re-reviews the full package, records actor and
 lineage metadata, and keeps prior versions immutable. Role-aware selection, full cover-letter
-policy, and versioned free-text-answer editing remain open within this milestone.
+policy, and versioned free-text-answer editing are complete. Answer generation, manual edits, and
+removed prompts append exact hash/snapshot-bound revisions; review, gate, archive, and interview
+consumers resolve only the active latest revision while detail retains immutable history.
 
 ### Phase 2A — integration and tenant-safety repair
 
@@ -304,10 +306,9 @@ import command key across uncertain failures.
    normalized job contract to the specification fields and route runtime job analysis through a
    provider-neutral, strictly typed `JobAnalysisAgent` boundary with a deterministic local
    provider.
-3. [Role-aware documents complete; answer revision next] Implement the remaining Milestone 3
-   policy surface as small end-to-end slices: role-specific template/content selection,
-   configuration-driven cover-letter inclusion, then append-only free-text answer revision with
-   backend-derived provenance and review.
+3. [Complete] Implement the remaining Milestone 3 policy surface as small end-to-end slices:
+   role-specific template/content selection, configuration-driven cover-letter inclusion, and
+   append-only free-text answer revision with backend-derived provenance and review.
 4. Add the missing browser route/accessibility-critical test layer using deterministic local
    fixtures where the host permits it; document only genuinely external Chromium/Compose limits.
 5. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining

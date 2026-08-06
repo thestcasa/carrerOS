@@ -9,13 +9,14 @@ from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications.contracts import (
     AnalyticsOverview,
+    AnswerRevisionRequest,
     AnswerView,
     ApplicationDetail,
     ApplicationMaterialPolicy,
@@ -112,6 +113,7 @@ from app.materials import (
 )
 from app.materials.contracts import (
     AnswerPrompt,
+    AnswerReviewIdentity,
     ApprovedAnswerFact,
     ApprovedFact,
     Claim,
@@ -121,6 +123,7 @@ from app.materials.contracts import (
     GenerationResult,
     JobTarget,
     MaterialReview,
+    RenderValidationReport,
 )
 from app.operations import AuthorizationConsumer
 from app.submission_gate import SubmissionGate, SubmissionGateInput
@@ -460,8 +463,89 @@ class ApplicationService:
                 )
                 for document in generated.documents
             )
+            previous_answers = {
+                answer.question_key: answer
+                for answer in self._latest_answers(
+                    session, candidate_id, application.id, include_withdrawn=True
+                )
+            }
+            answer_rows: list[ApplicationAnswer] = []
+            generated_keys: set[str] = set()
+            for answer in generated.answers:
+                generated_keys.add(answer.question_key)
+                previous = previous_answers.get(answer.question_key)
+                approved_answer = next(
+                    (
+                        item
+                        for item in request.approved_answers
+                        if item.key == answer.question_key
+                        and item.question_pattern == answer.question
+                        and item.answer == answer.answer
+                    ),
+                    None,
+                )
+                answer_rows.append(
+                    ApplicationAnswer(
+                        id=uuid4(),
+                        candidate_id=candidate_id,
+                        application_id=application.id,
+                        question_key=answer.question_key,
+                        question=answer.question,
+                        answer=answer.answer,
+                        version=(previous.version + 1 if previous is not None else 1),
+                        sha256=self._answer_sha256(answer.answer),
+                        actor_id="material-generator",
+                        revision_kind="generated",
+                        previous_answer_id=previous.id if previous is not None else None,
+                        candidate_snapshot_id=snapshot_record.id,
+                        candidate_snapshot_version=snapshot_record.profile_version,
+                        candidate_snapshot_sha256=snapshot_record.sha256,
+                        approved_source_key=(
+                            approved_answer.key if approved_answer is not None else None
+                        ),
+                        evidence_ids={
+                            "items": list(approved_answer.evidence_ids) if approved_answer else []
+                        },
+                        supported=approved_answer is not None,
+                    )
+                )
+            for question_key, previous in previous_answers.items():
+                if question_key in generated_keys or previous.revision_kind == "withdrawn":
+                    continue
+                withdrawn = "[withdrawn]"
+                answer_rows.append(
+                    ApplicationAnswer(
+                        id=uuid4(),
+                        candidate_id=candidate_id,
+                        application_id=application.id,
+                        question_key=question_key,
+                        question=previous.question,
+                        answer=withdrawn,
+                        version=previous.version + 1,
+                        sha256=self._answer_sha256(withdrawn),
+                        actor_id="material-generator",
+                        revision_kind="withdrawn",
+                        previous_answer_id=previous.id,
+                        candidate_snapshot_id=snapshot_record.id,
+                        candidate_snapshot_version=snapshot_record.profile_version,
+                        candidate_snapshot_sha256=snapshot_record.sha256,
+                        evidence_ids={"items": []},
+                        supported=False,
+                    )
+                )
+            active_answer_rows = tuple(
+                sorted(
+                    (row for row in answer_rows if row.revision_kind != "withdrawn"),
+                    key=lambda row: row.question_key,
+                )
+            )
+            generated = generated.model_copy(
+                update={"answers": tuple(self._generated_answer(row) for row in active_answer_rows)}
+            )
             review = self._reviewer.review(
                 request, generated, tuple(item.report for item in rendered)
+            ).model_copy(
+                update={"answer_reports": self._answer_review_identities(active_answer_rows)}
             )
             for rendered_document in rendered:
                 document = rendered_document.document
@@ -553,28 +637,7 @@ class ApplicationService:
                             artifact_metadata=render_metadata,
                         )
                     )
-            for answer in generated.answers:
-                stored_answer = session.scalar(
-                    select(ApplicationAnswer).where(
-                        ApplicationAnswer.candidate_id == candidate_id,
-                        ApplicationAnswer.application_id == application.id,
-                        ApplicationAnswer.question_key == answer.question_key,
-                    )
-                )
-                if stored_answer is None:
-                    stored_answer = ApplicationAnswer(
-                        candidate_id=candidate_id,
-                        application_id=application.id,
-                        question_key=answer.question_key,
-                        question=answer.question,
-                        answer=answer.answer,
-                    )
-                    session.add(stored_answer)
-                stored_answer.question = answer.question
-                stored_answer.answer = answer.answer
-                stored_answer.approved_source_key = answer.approved_source_key
-                stored_answer.evidence_ids = {"items": list(answer.evidence_ids)}
-                stored_answer.supported = answer.supported
+            session.add_all(answer_rows)
             session.add(
                 AgentReview(
                     candidate_id=candidate_id,
@@ -802,23 +865,8 @@ class ApplicationService:
                         )
                     )
                 )
-            stored_answers = session.scalars(
-                select(ApplicationAnswer).where(
-                    ApplicationAnswer.candidate_id == candidate_id,
-                    ApplicationAnswer.application_id == application_id,
-                )
-            ).all()
-            generated_answers = tuple(
-                GeneratedAnswer(
-                    question_key=answer.question_key,
-                    question=answer.question,
-                    answer=answer.answer,
-                    approved_source_key=answer.approved_source_key,
-                    evidence_ids=tuple(answer.evidence_ids.get("items", [])),
-                    supported=answer.supported,
-                )
-                for answer in stored_answers
-            )
+            stored_answers = self._latest_answers(session, candidate_id, application_id)
+            generated_answers = tuple(self._generated_answer(answer) for answer in stored_answers)
             generated = GenerationResult(
                 candidate_id=candidate_id,
                 application_id=application_id,
@@ -850,7 +898,7 @@ class ApplicationService:
             )
             review = self._reviewer.review(
                 generation_request, generated, tuple(item.report for item in rendered)
-            )
+            ).model_copy(update={"answer_reports": self._answer_review_identities(stored_answers)})
             revised_render = next(
                 item for item in rendered if item.document.kind is base_document.kind
             )
@@ -1017,6 +1065,316 @@ class ApplicationService:
             )
             return view
 
+    def revise_answer(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        revision: AnswerRevisionRequest,
+        idempotency_key: str,
+    ) -> ApplicationDetail:
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = revision.model_dump(mode="json")
+            payload["application_id"] = str(application_id)
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session, candidate_id, "revise_answer", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
+            application = self._application(session, candidate_id, application_id)
+            if application.state not in {
+                ApplicationState.REVIEW_PENDING,
+                ApplicationState.REVIEW_FAILED,
+            }:
+                raise ApplicationConflictError(
+                    "answers can only be revised while independent review is pending or failed"
+                )
+            base_answer = session.scalar(
+                select(ApplicationAnswer).where(
+                    ApplicationAnswer.id == revision.answer_id,
+                    ApplicationAnswer.candidate_id == candidate_id,
+                    ApplicationAnswer.application_id == application_id,
+                )
+            )
+            if base_answer is None:
+                raise ApplicationConflictError("answer revision target was not found")
+            latest_by_key = {
+                item.question_key: item
+                for item in self._latest_answers(
+                    session, candidate_id, application_id, include_withdrawn=True
+                )
+            }
+            latest = latest_by_key.get(base_answer.question_key)
+            if (
+                latest is None
+                or latest.id != base_answer.id
+                or latest.version != revision.base_version
+            ):
+                raise ApplicationConflictError("answer revision base version is stale")
+            if base_answer.revision_kind in {"withdrawn", "legacy_unknown"}:
+                raise ApplicationConflictError(
+                    "answer revision requires regenerated snapshot-bound provenance"
+                )
+            if revision.answer == base_answer.answer:
+                raise ApplicationConflictError("answer revision must change the answer text")
+            if (
+                base_answer.candidate_snapshot_id is None
+                or base_answer.candidate_snapshot_version is None
+                or base_answer.candidate_snapshot_sha256 is None
+            ):
+                raise ApplicationConflictError("answer snapshot identity is invalid")
+            snapshot_record = session.get(
+                CandidateSnapshotRecord, base_answer.candidate_snapshot_id
+            )
+            if (
+                snapshot_record is None
+                or snapshot_record.candidate_id != candidate_id
+                or snapshot_record.application_id != application_id
+                or snapshot_record.profile_version != base_answer.candidate_snapshot_version
+                or snapshot_record.sha256 != base_answer.candidate_snapshot_sha256
+            ):
+                raise ApplicationConflictError("answer snapshot identity is invalid")
+            snapshot = self._load_candidate_snapshot(application, snapshot_record)
+            try:
+                snapshot_config = CandidateConfig.model_validate_json(snapshot.config_json)
+            except ValueError as exc:
+                raise ApplicationConflictError(
+                    "candidate snapshot configuration is invalid"
+                ) from exc
+            job = session.get(GlobalJob, application.job_id)
+            if job is None:
+                raise ApplicationConflictError("application job is missing")
+            persisted_policy = self._material_policy(application)
+            latest_job_version = session.scalar(
+                select(JobVersion)
+                .where(JobVersion.job_id == job.id)
+                .order_by(JobVersion.version.desc())
+                .limit(1)
+            )
+            if (
+                latest_job_version is None
+                or latest_job_version.version != persisted_policy.job_version
+                or latest_job_version.payload_sha256 != persisted_policy.job_payload_sha256
+            ):
+                raise ApplicationConflictError(
+                    "answer revision requires the original unchanged job snapshot"
+                )
+            generation_request = self._generation_request(snapshot_config, application_id, job)
+            if (
+                self._build_material_policy(generation_request, snapshot_config, latest_job_version)
+                != persisted_policy
+            ):
+                raise ApplicationConflictError(
+                    "answer revision policy no longer matches the reviewed application"
+                )
+
+            stored_review = session.scalar(
+                select(AgentReview)
+                .where(
+                    AgentReview.candidate_id == candidate_id,
+                    AgentReview.application_id == application_id,
+                )
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
+                .limit(1)
+            )
+            if stored_review is None:
+                raise ApplicationConflictError("material review is missing")
+            try:
+                prior_review = MaterialReview.model_validate(stored_review.report)
+            except ValueError as exc:
+                raise ApplicationConflictError("material review record is invalid") from exc
+            if not prior_review.render_reports:
+                raise ApplicationConflictError("material review has no rendered document identity")
+            canonical_by_kind = {
+                document.kind: document
+                for document in self._generator.generate(generation_request).documents
+            }
+            generated_documents: list[GeneratedDocument] = []
+            seen_kinds: set[DocumentKind] = set()
+            for report in prior_review.render_reports:
+                if report.document_kind in seen_kinds:
+                    raise ApplicationConflictError(
+                        "material review contains duplicate document identity"
+                    )
+                seen_kinds.add(report.document_kind)
+                document = session.scalar(
+                    select(ApplicationDocument).where(
+                        ApplicationDocument.candidate_id == candidate_id,
+                        ApplicationDocument.application_id == application_id,
+                        ApplicationDocument.kind == report.document_kind,
+                        ApplicationDocument.version == report.document_version,
+                    )
+                )
+                render_report = session.scalar(
+                    select(ApplicationArtifact).where(
+                        ApplicationArtifact.candidate_id == candidate_id,
+                        ApplicationArtifact.application_id == application_id,
+                        ApplicationArtifact.kind == f"render_report_{report.document_kind.value}",
+                        ApplicationArtifact.version == report.document_version,
+                    )
+                )
+                if (
+                    document is None
+                    or render_report is None
+                    or not self._source_document_valid(document)
+                    or not self._render_report_artifact_valid(render_report, document=document)
+                    or render_report.artifact_metadata.get("candidate_snapshot_id")
+                    != str(snapshot_record.id)
+                ):
+                    raise ApplicationConflictError(
+                        "reviewed document evidence is missing or corrupted"
+                    )
+                try:
+                    stored_report_identity = RenderValidationReport.model_validate(
+                        {
+                            field: render_report.artifact_metadata[field]
+                            for field in RenderValidationReport.model_fields
+                        }
+                    )
+                except (KeyError, ValueError) as exc:
+                    raise ApplicationConflictError(
+                        "reviewed document report identity is invalid"
+                    ) from exc
+                if stored_report_identity != report:
+                    raise ApplicationConflictError(
+                        "reviewed document report identity does not match"
+                    )
+                canonical = canonical_by_kind.get(document.kind)
+                if canonical is None:
+                    raise ApplicationConflictError(
+                        "reviewed document kind is not enabled by the snapshot"
+                    )
+                content = Path(document.storage_uri).read_text(encoding="utf-8")
+                generated_documents.append(
+                    canonical
+                    if content == canonical.content
+                    else self._manual_document(
+                        document.kind,
+                        content,
+                        generation_request,
+                        reject_duplicate_claims=False,
+                    )
+                )
+            if seen_kinds != set(generation_request.requested_documents):
+                raise ApplicationConflictError("reviewed document set is incomplete")
+
+            approved = next(
+                (
+                    item
+                    for item in generation_request.approved_answers
+                    if item.key == base_answer.question_key and item.answer == revision.answer
+                ),
+                None,
+            )
+            new_answer = ApplicationAnswer(
+                id=uuid4(),
+                candidate_id=candidate_id,
+                application_id=application_id,
+                question_key=base_answer.question_key,
+                question=base_answer.question,
+                answer=revision.answer,
+                version=base_answer.version + 1,
+                sha256=self._answer_sha256(revision.answer),
+                actor_id="local-user",
+                revision_kind="manual",
+                previous_answer_id=base_answer.id,
+                reason=revision.reason,
+                candidate_snapshot_id=snapshot_record.id,
+                candidate_snapshot_version=snapshot_record.profile_version,
+                candidate_snapshot_sha256=snapshot_record.sha256,
+                approved_source_key=approved.key if approved is not None else None,
+                evidence_ids={"items": list(approved.evidence_ids) if approved else []},
+                supported=approved is not None,
+            )
+            current_answers = [
+                new_answer if item.question_key == base_answer.question_key else item
+                for item in self._latest_answers(session, candidate_id, application_id)
+            ]
+            generated = GenerationResult(
+                candidate_id=candidate_id,
+                application_id=application_id,
+                target=generation_request.target,
+                documents=tuple(generated_documents),
+                answers=tuple(self._generated_answer(item) for item in current_answers),
+            )
+            review = self._reviewer.review(
+                generation_request, generated, prior_review.render_reports
+            ).model_copy(update={"answer_reports": self._answer_review_identities(current_answers)})
+            session.add(new_answer)
+            session.add(
+                AgentReview(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    decision=review.decision,
+                    semantic_passed=review.semantic_review_passed,
+                    report=review.model_dump(mode="json"),
+                )
+            )
+            previous_state = application.state
+            if previous_state is ApplicationState.REVIEW_FAILED:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.MATERIALS_GENERATING,
+                    f"{idempotency_key}:generating",
+                    "MANUAL_ANSWER_REVISION_STARTED",
+                )
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.MATERIALS_READY,
+                    f"{idempotency_key}:ready",
+                    "MATERIALS_READY",
+                )
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.REVIEW_PENDING,
+                    f"{idempotency_key}:review",
+                    "INDEPENDENT_REVIEW_COMPLETED",
+                    payload=review.model_dump(mode="json"),
+                )
+            session.add(
+                ApplicationEvent(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    idempotency_key=f"{idempotency_key}:revision",
+                    event_type="ANSWER_MANUALLY_REVISED",
+                    from_state=application.state,
+                    to_state=application.state,
+                    payload={
+                        "answer_id": str(new_answer.id),
+                        "base_answer_id": str(base_answer.id),
+                        "question_key": new_answer.question_key,
+                        "version": new_answer.version,
+                        "sha256": new_answer.sha256,
+                        "actor_id": new_answer.actor_id,
+                        "reason": new_answer.reason,
+                        "supported": new_answer.supported,
+                        "semantic_review_passed": review.semantic_review_passed,
+                    },
+                )
+            )
+            if not review.semantic_review_passed:
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.REVIEW_FAILED,
+                    f"{idempotency_key}:review-failed",
+                    "INDEPENDENT_REVIEW_FAILED",
+                    payload=review.model_dump(mode="json"),
+                )
+            session.flush()
+            view = self._detail(session, application)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "revise_answer",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
+
     def approve_materials(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> ApplicationDetail:
@@ -1034,7 +1392,7 @@ class ApplicationService:
                     AgentReview.candidate_id == candidate_id,
                     AgentReview.application_id == application_id,
                 )
-                .order_by(AgentReview.created_at.desc())
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
                 .limit(1)
             )
             if review is None:
@@ -1140,7 +1498,7 @@ class ApplicationService:
                     AgentReview.candidate_id == candidate_id,
                     AgentReview.application_id == application_id,
                 )
-                .order_by(AgentReview.created_at.desc())
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
                 .limit(1)
             )
             if review is None:
@@ -1344,7 +1702,7 @@ class ApplicationService:
                     AgentReview.candidate_id == task.candidate_id,
                     AgentReview.application_id == application_id,
                 )
-                .order_by(AgentReview.created_at.desc())
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
                 .limit(1)
             )
             if review is None:
@@ -1693,7 +2051,7 @@ class ApplicationService:
                     AgentReview.candidate_id == candidate_id,
                     AgentReview.application_id == application_id,
                 )
-                .order_by(AgentReview.created_at.desc())
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
                 .limit(1)
             )
             reviewed_materials = (
@@ -1702,12 +2060,7 @@ class ApplicationService:
             reviewed_documents = tuple(item[0] for item in reviewed_materials)
             rendered_artifacts = tuple(item[1] for item in reviewed_materials)
 
-            answers = session.scalars(
-                select(ApplicationAnswer).where(
-                    ApplicationAnswer.candidate_id == candidate_id,
-                    ApplicationAnswer.application_id == application_id,
-                )
-            ).all()
+            answers = self._latest_answers(session, candidate_id, application_id)
             unresolved_actions = session.scalar(
                 select(func.count(HumanAction.id)).where(
                     HumanAction.candidate_id == candidate_id,
@@ -1981,7 +2334,7 @@ class ApplicationService:
                     AgentReview.candidate_id == candidate_id,
                     AgentReview.application_id == application_id,
                 )
-                .order_by(AgentReview.created_at.desc())
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
                 .limit(1)
             )
             if review is None:
@@ -2393,12 +2746,7 @@ class ApplicationService:
                     ApplicationDocument.application_id == application_id,
                 )
             ).all()
-            answers = session.scalars(
-                select(ApplicationAnswer).where(
-                    ApplicationAnswer.candidate_id == candidate_id,
-                    ApplicationAnswer.application_id == application_id,
-                )
-            ).all()
+            submitted_answers = self._archived_submitted_answers(application)
             correspondence = session.scalars(
                 select(StoredCorrespondence).where(
                     StoredCorrespondence.candidate_id == candidate_id,
@@ -2427,10 +2775,7 @@ class ApplicationService:
                         if cover_letter
                         else None
                     ),
-                    submitted_answers=tuple(
-                        SubmittedAnswer(question=item.question, answer=item.answer)
-                        for item in answers
-                    ),
+                    submitted_answers=submitted_answers,
                     original_job_description=job.description,
                     job_score=int(score.total_score),
                     score_rationale=json.dumps(score.rationale, sort_keys=True),
@@ -3608,6 +3953,157 @@ class ApplicationService:
             raise ApplicationConflictError("candidate snapshot identity mismatch")
         return snapshot
 
+    @staticmethod
+    def _answer_sha256(answer: str) -> str:
+        return hashlib.sha256(answer.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _generated_answer(answer: ApplicationAnswer) -> GeneratedAnswer:
+        return GeneratedAnswer(
+            question_key=answer.question_key,
+            question=answer.question,
+            answer=answer.answer,
+            approved_source_key=answer.approved_source_key,
+            evidence_ids=tuple(answer.evidence_ids.get("items", [])),
+            supported=answer.supported,
+        )
+
+    @staticmethod
+    def _answer_review_identities(
+        answers: Sequence[ApplicationAnswer],
+    ) -> tuple[AnswerReviewIdentity, ...]:
+        identities: list[AnswerReviewIdentity] = []
+        for answer in sorted(answers, key=lambda item: item.question_key):
+            if (
+                answer.revision_kind in {"withdrawn", "legacy_unknown"}
+                or answer.candidate_snapshot_id is None
+                or answer.sha256 != hashlib.sha256(answer.answer.encode("utf-8")).hexdigest()
+            ):
+                raise ApplicationConflictError("answer revision provenance is invalid")
+            identities.append(
+                AnswerReviewIdentity(
+                    answer_id=answer.id,
+                    question_key=answer.question_key,
+                    version=answer.version,
+                    sha256=answer.sha256,
+                    candidate_snapshot_id=answer.candidate_snapshot_id,
+                )
+            )
+        return tuple(identities)
+
+    @staticmethod
+    def _latest_answers(
+        session: Session,
+        candidate_id: str,
+        application_id: UUID,
+        *,
+        include_withdrawn: bool = False,
+    ) -> list[ApplicationAnswer]:
+        latest = (
+            select(
+                ApplicationAnswer.candidate_id.label("candidate_id"),
+                ApplicationAnswer.application_id.label("application_id"),
+                ApplicationAnswer.question_key.label("question_key"),
+                func.max(ApplicationAnswer.version).label("version"),
+            )
+            .where(
+                ApplicationAnswer.candidate_id == candidate_id,
+                ApplicationAnswer.application_id == application_id,
+            )
+            .group_by(
+                ApplicationAnswer.candidate_id,
+                ApplicationAnswer.application_id,
+                ApplicationAnswer.question_key,
+            )
+            .subquery()
+        )
+        statement = (
+            select(ApplicationAnswer)
+            .join(
+                latest,
+                (ApplicationAnswer.candidate_id == latest.c.candidate_id)
+                & (ApplicationAnswer.application_id == latest.c.application_id)
+                & (ApplicationAnswer.question_key == latest.c.question_key)
+                & (ApplicationAnswer.version == latest.c.version),
+            )
+            .order_by(ApplicationAnswer.question_key)
+        )
+        if not include_withdrawn:
+            statement = statement.where(ApplicationAnswer.revision_kind != "withdrawn")
+        return list(session.scalars(statement).all())
+
+    def _validate_reviewed_answers(
+        self, session: Session, application: Application, material_review: MaterialReview
+    ) -> tuple[ApplicationAnswer, ...]:
+        answers = tuple(self._latest_answers(session, application.candidate_id, application.id))
+        reports = {report.question_key: report for report in material_review.answer_reports}
+        if len(reports) != len(material_review.answer_reports) or len(reports) != len(answers):
+            raise ApplicationConflictError("material review answer identity is incomplete")
+        snapshot_configs: dict[UUID, CandidateConfig] = {}
+        for answer in answers:
+            report = reports.get(answer.question_key)
+            snapshot = (
+                session.get(CandidateSnapshotRecord, answer.candidate_snapshot_id)
+                if answer.candidate_snapshot_id is not None
+                else None
+            )
+            snapshot_config: CandidateConfig | None = None
+            if snapshot is not None:
+                snapshot_config = snapshot_configs.get(snapshot.id)
+                if snapshot_config is None:
+                    loaded_snapshot = self._load_candidate_snapshot(application, snapshot)
+                    try:
+                        snapshot_config = CandidateConfig.model_validate_json(
+                            loaded_snapshot.config_json
+                        )
+                    except ValueError as exc:
+                        raise ApplicationConflictError(
+                            "reviewed answer snapshot configuration is invalid"
+                        ) from exc
+                    snapshot_configs[snapshot.id] = snapshot_config
+            approved_answer = (
+                next(
+                    (
+                        item
+                        for item in snapshot_config.approved_answers.items
+                        if item.key == answer.question_key
+                    ),
+                    None,
+                )
+                if snapshot_config is not None
+                else None
+            )
+            today = date.today()
+            if (
+                report is None
+                or report.answer_id != answer.id
+                or report.version != answer.version
+                or report.sha256 != answer.sha256
+                or report.candidate_snapshot_id != answer.candidate_snapshot_id
+                or answer.sha256 != self._answer_sha256(answer.answer)
+                or answer.revision_kind in {"withdrawn", "legacy_unknown"}
+                or not answer.supported
+                or answer.approved_source_key is None
+                or snapshot is None
+                or snapshot.candidate_id != application.candidate_id
+                or snapshot.application_id != application.id
+                or snapshot.profile_version != answer.candidate_snapshot_version
+                or snapshot.sha256 != answer.candidate_snapshot_sha256
+                or approved_answer is None
+                or not approved_answer.approved
+                or not approved_answer.auto_submit_allowed
+                or approved_answer.archived
+                or (approved_answer.valid_from is not None and approved_answer.valid_from > today)
+                or (approved_answer.valid_until is not None and approved_answer.valid_until < today)
+                or approved_answer.question_pattern != answer.question
+                or approved_answer.answer != answer.answer
+                or approved_answer.key != answer.approved_source_key
+                or tuple(approved_answer.evidence_ids)
+                != tuple(answer.evidence_ids.get("items", []))
+            ):
+                raise ApplicationConflictError("reviewed answer identity is invalid")
+        return answers
+
     def _reviewed_materials(
         self, session: Session, application: Application, review: AgentReview
     ) -> tuple[tuple[ApplicationDocument, ApplicationArtifact], ...]:
@@ -3617,6 +4113,7 @@ class ApplicationService:
             raise ApplicationConflictError("material review record is invalid") from exc
         if not review.semantic_passed or not material_review.semantic_review_passed:
             raise ApplicationConflictError("materials did not pass independent review")
+        self._validate_reviewed_answers(session, application, material_review)
         if not material_review.render_reports:
             raise ApplicationConflictError("material review has no rendered document identity")
         reviewed: list[tuple[ApplicationDocument, ApplicationArtifact]] = []
@@ -3900,6 +4397,50 @@ class ApplicationService:
                 return None
         return path
 
+    def _archived_submitted_answers(self, application: Application) -> tuple[SubmittedAnswer, ...]:
+        if application.archive_uri is None:
+            raise ApplicationConflictError("submitted answer archive is missing")
+        archive_path = self._safe_archive_path(application.archive_uri)
+        if archive_path is None or not self._archives.verify(archive_path):
+            raise ApplicationConflictError("submitted answer archive is invalid")
+        try:
+            raw_answers = json.loads(
+                (archive_path / "answers" / "final_answers.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise ApplicationConflictError("submitted answer archive is invalid") from exc
+        if not isinstance(raw_answers, list):
+            raise ApplicationConflictError("submitted answer archive is invalid")
+        answers: list[SubmittedAnswer] = []
+        seen_keys: set[str] = set()
+        for raw in raw_answers:
+            if not isinstance(raw, dict):
+                raise ApplicationConflictError("submitted answer archive is invalid")
+            question_key = raw.get("question_key")
+            question = raw.get("question")
+            answer = raw.get("answer")
+            sha256 = raw.get("sha256")
+            version = raw.get("version")
+            if (
+                not isinstance(question_key, str)
+                or not question_key
+                or question_key in seen_keys
+                or not isinstance(question, str)
+                or not question
+                or not isinstance(answer, str)
+                or not answer
+                or not isinstance(version, int)
+                or version < 1
+                or not isinstance(sha256, str)
+                or not hmac.compare_digest(sha256, self._answer_sha256(answer))
+            ):
+                raise ApplicationConflictError("submitted answer archive is invalid")
+            seen_keys.add(question_key)
+            answers.append(SubmittedAnswer(question=question, answer=answer))
+        if not answers:
+            raise ApplicationConflictError("submitted answer archive is incomplete")
+        return tuple(answers)
+
     def _create_archive(
         self,
         session: Session,
@@ -3927,7 +4468,7 @@ class ApplicationService:
                 AgentReview.candidate_id == application.candidate_id,
                 AgentReview.application_id == application.id,
             )
-            .order_by(AgentReview.created_at.desc())
+            .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
             .limit(1)
         )
         if review is None:
@@ -3979,9 +4520,25 @@ class ApplicationService:
                 ],
                 answers=[
                     {
+                        "answer_id": str(item.id),
                         "question": item.question,
                         "question_key": item.question_key,
                         "answer": item.answer,
+                        "version": item.version,
+                        "sha256": item.sha256,
+                        "revision_kind": item.revision_kind,
+                        "actor_id": item.actor_id,
+                        "previous_answer_id": (
+                            str(item.previous_answer_id) if item.previous_answer_id else None
+                        ),
+                        "reason": item.reason,
+                        "approved_source_key": item.approved_source_key,
+                        "evidence_ids": item.evidence_ids.get("items", []),
+                        "candidate_snapshot_id": (
+                            str(item.candidate_snapshot_id) if item.candidate_snapshot_id else None
+                        ),
+                        "candidate_snapshot_version": item.candidate_snapshot_version,
+                        "candidate_snapshot_sha256": item.candidate_snapshot_sha256,
                         "supported": item.supported,
                     }
                     for item in answers
@@ -4228,10 +4785,12 @@ class ApplicationService:
             .order_by(ApplicationDocument.kind, ApplicationDocument.version)
         ).all()
         answers = session.scalars(
-            select(ApplicationAnswer).where(
+            select(ApplicationAnswer)
+            .where(
                 ApplicationAnswer.candidate_id == application.candidate_id,
                 ApplicationAnswer.application_id == application.id,
             )
+            .order_by(ApplicationAnswer.question_key, ApplicationAnswer.version)
         ).all()
         events = session.scalars(
             select(ApplicationEvent)
@@ -4247,7 +4806,7 @@ class ApplicationService:
                 AgentReview.candidate_id == application.candidate_id,
                 AgentReview.application_id == application.id,
             )
-            .order_by(AgentReview.created_at.desc())
+            .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
             .limit(1)
         )
         correspondence = session.scalars(
@@ -4322,8 +4881,30 @@ class ApplicationService:
                     question_key=item.question_key,
                     question=item.question,
                     answer=item.answer,
+                    version=item.version,
+                    sha256=item.sha256,
+                    immutable=(
+                        item.revision_kind in {"withdrawn", "legacy_unknown"}
+                        or application.state
+                        not in {ApplicationState.REVIEW_PENDING, ApplicationState.REVIEW_FAILED}
+                        or item.version
+                        != max(
+                            answer.version
+                            for answer in answers
+                            if answer.question_key == item.question_key
+                        )
+                    ),
+                    revision_kind=item.revision_kind,
+                    revision_actor=item.actor_id,
+                    base_answer_id=item.previous_answer_id,
+                    reason=item.reason,
+                    approved_source_key=item.approved_source_key,
+                    candidate_snapshot_id=item.candidate_snapshot_id,
+                    candidate_snapshot_version=item.candidate_snapshot_version,
+                    candidate_snapshot_sha256=item.candidate_snapshot_sha256,
                     supported=item.supported,
                     evidence_ids=tuple(item.evidence_ids.get("items", [])),
+                    created_at=item.created_at,
                 )
                 for item in answers
             ),

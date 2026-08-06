@@ -211,6 +211,63 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
         assert hashlib.sha256(rendered_download.content).hexdigest() == rendered_cv["sha256"]
         assert rendered_cv["metadata"]["extraction_matches"] is True
 
+        sponsorship_answer = next(
+            item for item in generated.json()["answers"] if item["question_key"] == "sponsorship"
+        )
+        answer_revision_body = {
+            "answer_id": sponsorship_answer["answer_id"],
+            "base_version": sponsorship_answer["version"],
+            "answer": "Human legal review required.",
+            "reason": "Exercise the append-only API boundary.",
+        }
+        answer_revision_headers = {
+            **mutation,
+            "Idempotency-Key": "api-answer-revision-0001",
+        }
+        answer_revision = client.post(
+            f"/api/applications/{application_id}/answers/revisions?candidate_id=example_candidate",
+            headers=answer_revision_headers,
+            json=answer_revision_body,
+        )
+        answer_replay = client.post(
+            f"/api/applications/{application_id}/answers/revisions?candidate_id=example_candidate",
+            headers=answer_revision_headers,
+            json=answer_revision_body,
+        )
+        assert answer_revision.status_code == 200, answer_revision.text
+        assert answer_replay.json() == answer_revision.json()
+        assert answer_revision.json()["state"] == "review_failed"
+        sponsorship_v2 = next(
+            item
+            for item in answer_revision.json()["answers"]
+            if item["question_key"] == "sponsorship" and item["version"] == 2
+        )
+        assert sponsorship_v2["supported"] is False
+        assert sponsorship_v2["revision_actor"] == "local-user"
+        forged_answer_provenance = client.post(
+            f"/api/applications/{application_id}/answers/revisions?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-answer-forged-0001"},
+            json={
+                "answer_id": sponsorship_v2["answer_id"],
+                "base_version": 2,
+                "answer": "No",
+                "supported": True,
+            },
+        )
+        assert forged_answer_provenance.status_code == 422
+        recovered_answer = client.post(
+            f"/api/applications/{application_id}/answers/revisions?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-answer-recover-0001"},
+            json={
+                "answer_id": sponsorship_v2["answer_id"],
+                "base_version": 2,
+                "answer": "No",
+                "reason": "Restore the snapshot-approved legal answer.",
+            },
+        )
+        assert recovered_answer.status_code == 200, recovered_answer.text
+        assert recovered_answer.json()["state"] == "review_pending"
+
         cv_document = next(item for item in generated.json()["documents"] if item["kind"] == "cv")
         revised_content = "\n\n".join(cv_document["content"].split("\n\n")[:-1])
         revision_body = {

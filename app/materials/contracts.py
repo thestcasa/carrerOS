@@ -127,6 +127,14 @@ class RenderValidationReport(MaterialModel):
     issues: tuple[ValidationIssue, ...] = ()
 
 
+class AnswerReviewIdentity(MaterialModel):
+    answer_id: UUID
+    question_key: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    sha256: Sha256
+    candidate_snapshot_id: UUID
+
+
 class MaterialReview(MaterialModel):
     decision: ReviewDecision
     semantic_review_passed: bool
@@ -134,6 +142,7 @@ class MaterialReview(MaterialModel):
     answers_supported: bool
     issues: tuple[ValidationIssue, ...] = ()
     render_reports: tuple[RenderValidationReport, ...] = ()
+    answer_reports: tuple[AnswerReviewIdentity, ...] = ()
 
 
 class DraftArtifactManifest(MaterialModel):
