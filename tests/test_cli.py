@@ -89,3 +89,48 @@ Fictional Labs | Research Engineer | Remote | 2020-01 | 2022-12 | Python
     result = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
     assert result["status"] == "applied_unapproved"
     assert result["profile_version"] == "1.0.1"
+
+
+def test_configuration_export_and_import_cli(
+    copied_candidates_root: Path,
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    monkeypatch.setenv("CANDIDATES_ROOT", str(copied_candidates_root))  # type: ignore[attr-defined]
+    bundle = tmp_path / "candidate.yaml"
+
+    assert (
+        main(
+            [
+                "export-configuration",
+                "--candidate",
+                "example_candidate",
+                "--format",
+                "yaml",
+                "--file",
+                str(bundle),
+            ]
+        )
+        == 0
+    )
+    assert bundle.read_text(encoding="utf-8").startswith("candidate_id: example_candidate")
+    assert (
+        main(
+            [
+                "import-configuration",
+                "--candidate",
+                "example_candidate",
+                "--file",
+                str(bundle),
+                "--expected-profile-version",
+                "1.0.0",
+                "--idempotency-key",
+                "configuration-cli-import",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert result["changed"] is False
+    assert result["profile_version"] == "1.0.0"

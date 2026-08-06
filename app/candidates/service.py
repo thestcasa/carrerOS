@@ -17,7 +17,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.candidates.cv_import import CVImportDraft, CVImportError, CVImportRequest, extract_cv_draft
 from app.candidates.loader import CandidateConfigError, CandidateLoader
@@ -42,6 +42,11 @@ from app.candidates.models import (
     RoleRules,
     ScoringRules,
     Skills,
+)
+from app.candidates.portability import (
+    build_configuration_bundle,
+    dump_configuration_bundle,
+    parse_configuration_bundle,
 )
 from app.candidates.readiness import ReadinessReport, assess_readiness
 from app.candidates.snapshot import CandidateSnapshot, build_candidate_snapshot
@@ -161,6 +166,27 @@ class CandidateImportRequest(BaseModel):
 
     section: CandidateSection
     data: dict[str, Any]
+
+
+class CandidateConfigurationImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    format: Literal["json", "yaml"]
+    content: str
+    expected_profile_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+
+
+class CandidateConfigurationImportResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str
+    previous_version: str
+    profile_version: str
+    source_profile_version: str
+    source_sha256: str
+    changed: bool
+    imported_sections: tuple[CandidateSection, ...]
+    readiness: ReadinessReport
 
 
 class CandidateCommandReceipt(BaseModel):
@@ -359,6 +385,143 @@ class CandidateService:
 
     def export(self, candidate_id: str) -> dict[str, Any]:
         return self.get_config(candidate_id).model_dump(mode="json")
+
+    def export_configuration(self, candidate_id: str, format: Literal["json", "yaml"]) -> str:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            bundle = build_configuration_bundle(self.get_config(candidate_id))
+            return dump_configuration_bundle(bundle, format)
+
+    def import_configuration(
+        self,
+        candidate_id: str,
+        request: CandidateConfigurationImportRequest,
+        idempotency_key: str,
+    ) -> CandidateConfigurationImportResult:
+        bundle = parse_configuration_bundle(
+            request.content,
+            request.format,
+            expected_candidate_id=candidate_id,
+        )
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            current = self.get_config(candidate_id)
+            normalized_current_version = self._normalize_imported_configuration(
+                current,
+                bundle.configuration,
+                profile_version=current.manifest.profile_version,
+            )
+            imported_sections = tuple(
+                section
+                for section in _SECTION_MODELS
+                if getattr(current, section) != getattr(normalized_current_version, section)
+            )
+            manifest_changed = current.manifest.model_dump(
+                exclude={"profile_version"}
+            ) != normalized_current_version.manifest.model_dump(exclude={"profile_version"})
+            changed = bool(imported_sections or manifest_changed)
+            target_version = (
+                _next_patch_version(current.manifest.profile_version)
+                if changed
+                else current.manifest.profile_version
+            )
+            receipt_path, receipt = self._begin_command(
+                candidate_id,
+                "import_candidate_configuration",
+                {
+                    "bundle_sha256": bundle.configuration_sha256,
+                    "expected_profile_version": request.expected_profile_version,
+                },
+                idempotency_key,
+                base_profile_version=current.manifest.profile_version,
+                target_profile_version=target_version,
+            )
+            if receipt.status == "completed":
+                return CandidateConfigurationImportResult.model_validate(receipt.result)
+            if request.expected_profile_version != receipt.base_profile_version:
+                raise CandidateIdempotencyError("candidate profile version does not match import")
+            if receipt.base_profile_version is None or receipt.target_profile_version is None:
+                raise CandidateIdempotencyError("candidate configuration import receipt is invalid")
+
+            if current.manifest.profile_version == receipt.target_profile_version:
+                expected = self._normalize_imported_configuration(
+                    current,
+                    bundle.configuration,
+                    profile_version=current.manifest.profile_version,
+                )
+                if current != expected:
+                    raise CandidateIdempotencyError(
+                        "candidate changed after an interrupted configuration import"
+                    )
+                result = CandidateConfigurationImportResult(
+                    candidate_id=candidate_id,
+                    previous_version=receipt.base_profile_version,
+                    profile_version=current.manifest.profile_version,
+                    source_profile_version=bundle.source_profile_version,
+                    source_sha256=bundle.configuration_sha256,
+                    changed=receipt.target_profile_version != receipt.base_profile_version,
+                    imported_sections=imported_sections,
+                    readiness=assess_readiness(current),
+                )
+            elif current.manifest.profile_version == receipt.base_profile_version:
+                self._recover_interrupted_update(candidate_id, receipt.base_profile_version)
+                current = self.get_config(candidate_id)
+                updated = self._normalize_imported_configuration(
+                    current,
+                    bundle.configuration,
+                    profile_version=receipt.target_profile_version,
+                )
+                sections = tuple(_SECTION_MODELS)
+                self._persist_updates(current, updated, sections)
+                result = CandidateConfigurationImportResult(
+                    candidate_id=candidate_id,
+                    previous_version=current.manifest.profile_version,
+                    profile_version=updated.manifest.profile_version,
+                    source_profile_version=bundle.source_profile_version,
+                    source_sha256=bundle.configuration_sha256,
+                    changed=True,
+                    imported_sections=imported_sections,
+                    readiness=assess_readiness(updated),
+                )
+            else:
+                raise CandidateIdempotencyError(
+                    "candidate changed after an interrupted configuration import"
+                )
+            self._complete_command(receipt_path, receipt, result.model_dump(mode="json"))
+            return result
+
+    @staticmethod
+    def _normalize_imported_configuration(
+        current: CandidateConfig,
+        imported: CandidateConfig,
+        *,
+        profile_version: str,
+    ) -> CandidateConfig:
+        data_files = current.manifest.data_files
+        missing_files: dict[str, Any] = {
+            section: f"{section}.json"
+            for section in _SECTION_MODELS
+            if getattr(data_files, section) is None
+        }
+        if missing_files:
+            data_files = data_files.model_copy(update=missing_files)
+        manifest = imported.manifest.model_copy(
+            update={
+                "candidate_id": current.manifest.candidate_id,
+                "profile_version": profile_version,
+                "data_files": data_files,
+                "active": current.manifest.active,
+                "workflow": current.manifest.workflow,
+            },
+            deep=True,
+        )
+        identity = imported.identity.model_copy(
+            update={"candidate_id": current.manifest.candidate_id}
+        )
+        payload = imported.model_dump()
+        payload.update({"manifest": manifest, "identity": identity})
+        try:
+            return CandidateConfig.model_validate(payload)
+        except ValidationError as exc:
+            raise CandidateUpdateError("imported candidate configuration is invalid") from exc
 
     @contextmanager
     def lifecycle_read(self, candidate_id: str) -> Iterator[CandidateConfig]:

@@ -4,7 +4,7 @@ import json
 import secrets
 from collections.abc import Iterator
 from datetime import timedelta
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import quote
 from uuid import UUID
 
@@ -47,8 +47,11 @@ from app.auth.lifecycle import (
 from app.auth.tokens import LocalTokenService, TokenValidationError
 from app.candidates.cv_import import CVImportDraft, CVImportRequest
 from app.candidates.loader import CandidateConfigError
+from app.candidates.portability import CandidatePortabilityError
 from app.candidates.readiness import ReadinessReport
 from app.candidates.service import (
+    CandidateConfigurationImportRequest,
+    CandidateConfigurationImportResult,
     CandidateCreateRequest,
     CandidateDetail,
     CandidateIdempotencyError,
@@ -85,30 +88,35 @@ from app.job_service import (
 )
 
 _CV_IMPORT_MAX_REQUEST_BYTES = 3_010_000
+# A 1 MiB UTF-8 document can expand to six bytes per character when embedded in JSON.
+_CONFIGURATION_IMPORT_MAX_REQUEST_BYTES = 6_300_000
 IdempotencyKey = Annotated[
     str,
     Header(alias="Idempotency-Key", min_length=8, max_length=128),
 ]
 
 
-class _CVImportBodyLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+class _CandidateImportBodyLimitMiddleware:
+    def __init__(self, app: ASGIApp, cv_max_bytes: int, configuration_max_bytes: int) -> None:
         self._app = app
-        self._max_bytes = max_bytes
+        self._cv_max_bytes = cv_max_bytes
+        self._configuration_max_bytes = configuration_max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not self._is_cv_import(scope):
+        limit = self._limit(scope)
+        if limit is None:
             await self._app(scope, receive, send)
             return
+        max_bytes, error_code, message = limit
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         declared = headers.get(b"content-length")
         if declared is not None:
             try:
-                if int(declared) > self._max_bytes:
-                    await self._reject(scope, receive, send)
+                if int(declared) > max_bytes:
+                    await self._reject(scope, receive, send, error_code, message)
                     return
             except ValueError:
-                await self._reject(scope, receive, send)
+                await self._reject(scope, receive, send, error_code, message)
                 return
         received = 0
 
@@ -117,37 +125,56 @@ class _CVImportBodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self._max_bytes:
-                    raise _CVImportRequestTooLarge
+                if received > max_bytes:
+                    raise _CandidateImportRequestTooLarge
             return message
 
         try:
             await self._app(scope, limited_receive, send)
-        except _CVImportRequestTooLarge:
-            await self._reject(scope, receive, send)
+        except _CandidateImportRequestTooLarge:
+            await self._reject(scope, receive, send, error_code, message)
 
-    @staticmethod
-    def _is_cv_import(scope: Scope) -> bool:
+    def _limit(self, scope: Scope) -> tuple[int, str, str] | None:
         if scope["type"] != "http" or scope.get("method") != "POST":
-            return False
+            return None
         parts = str(scope.get("path", "")).strip("/").split("/")
-        return len(parts) == 4 and parts[:2] == ["api", "candidates"] and parts[3] == "cv-imports"
+        if len(parts) != 4 or parts[:2] != ["api", "candidates"]:
+            return None
+        if parts[3] == "cv-imports":
+            return (
+                self._cv_max_bytes,
+                "cv_import_too_large",
+                "CV import request exceeds the transport limit.",
+            )
+        if parts[3] == "configuration-import":
+            return (
+                self._configuration_max_bytes,
+                "candidate_import_too_large",
+                "Candidate configuration import exceeds the transport limit.",
+            )
+        return None
 
     @staticmethod
-    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+    async def _reject(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        error_code: str,
+        message: str,
+    ) -> None:
         response = JSONResponse(
             status_code=413,
             content={
                 "error": {
-                    "code": "cv_import_too_large",
-                    "message": "CV import request exceeds the transport limit.",
+                    "code": error_code,
+                    "message": message,
                 }
             },
         )
         await response(scope, receive, send)
 
 
-class _CVImportRequestTooLarge(Exception):
+class _CandidateImportRequestTooLarge(Exception):
     pass
 
 
@@ -279,6 +306,38 @@ def _candidate_router() -> APIRouter:
             f"attachment; filename*=UTF-8''{quote(candidate_id)}-portable-export.json"
         )
         return exported
+
+    @router.get("/{candidate_id}/configuration-export", response_class=Response)
+    def export_candidate_configuration(
+        candidate_id: str,
+        service: CandidateServiceDependency,
+        format: Annotated[Literal["json", "yaml"], Query()] = "json",
+    ) -> Response:
+        content = service.export_configuration(candidate_id, format)
+        extension = "json" if format == "json" else "yaml"
+        media_type = "application/json" if format == "json" else "application/yaml"
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    f"attachment; filename*=UTF-8''{quote(candidate_id)}-configuration.{extension}"
+                ),
+            },
+        )
+
+    @router.post(
+        "/{candidate_id}/configuration-import",
+        response_model=CandidateConfigurationImportResult,
+    )
+    def import_candidate_configuration(
+        candidate_id: str,
+        imported: CandidateConfigurationImportRequest,
+        service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
+    ) -> CandidateConfigurationImportResult:
+        return service.import_configuration(candidate_id, imported, idempotency_key)
 
     @router.delete("/{candidate_id}", response_model=CandidateDeletionView)
     def delete_candidate(
@@ -806,8 +865,9 @@ def create_app(
     # Decorator middleware is inserted at the front of Starlette's stack. Register the streaming
     # limiter afterwards so it is outermost and caps bytes before authorization calls body().
     application.add_middleware(
-        _CVImportBodyLimitMiddleware,
-        max_bytes=_CV_IMPORT_MAX_REQUEST_BYTES,
+        _CandidateImportBodyLimitMiddleware,
+        cv_max_bytes=_CV_IMPORT_MAX_REQUEST_BYTES,
+        configuration_max_bytes=_CONFIGURATION_IMPORT_MAX_REQUEST_BYTES,
     )
 
     @application.post(
@@ -899,6 +959,13 @@ def create_app(
     @application.exception_handler(CandidateUpdateError)
     async def candidate_update_failed(_request: Request, exc: CandidateUpdateError) -> JSONResponse:
         return _error("candidate_update_invalid", str(exc), 422)
+
+    @application.exception_handler(CandidatePortabilityError)
+    async def candidate_portability_failed(
+        _request: Request, exc: CandidatePortabilityError
+    ) -> JSONResponse:
+        status_code = 413 if exc.code == "candidate_import_too_large" else 422
+        return _error(exc.code, str(exc), status_code)
 
     @application.exception_handler(CandidateConfigError)
     async def candidate_config_invalid(

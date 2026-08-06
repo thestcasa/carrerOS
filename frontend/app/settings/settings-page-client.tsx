@@ -17,6 +17,7 @@ export function SettingsPageClient({ candidateId }: { candidateId: string }) {
 
 function CandidateSettings({ candidateId }: { candidateId: string }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [profileVersion, setProfileVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
@@ -46,6 +47,26 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
             reason instanceof Error
               ? reason.message
               : "Settings are unavailable.",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [candidateId]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .candidate(candidateId)
+      .then((candidate) => {
+        if (!cancelled) setProfileVersion(candidate.profile_version);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "The current profile version is unavailable.",
           );
         }
       });
@@ -308,7 +329,10 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
           </section>
         </div>
       )}
-      <CandidateDataControls candidateId={candidateId} />
+      <CandidateDataControls
+        candidateId={candidateId}
+        profileVersion={profileVersion}
+      />
     </div>
   );
 }

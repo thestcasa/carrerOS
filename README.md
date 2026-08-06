@@ -41,9 +41,10 @@ npm run build
 
 The web interface covers candidate onboarding/CV import/readiness, discovery and analysis, application
 materials and synthetic dry runs, human actions, security events, settings, analytics, and exact
-immutable artifact downloads. The CLI also provides `onboard`, local `import-cv`, fixture-safe
-`discover`, bounded `export-candidate`, and recoverable `delete-candidate`/`deletion-status`
-commands. Candidate export and irreversible deletion are also available from settings; the
+immutable artifact downloads. The CLI also provides `onboard`, local `import-cv`, deterministic
+JSON/YAML `export-configuration`/`import-configuration`, fixture-safe `discover`, bounded
+`export-candidate`, and recoverable `delete-candidate`/`deletion-status` commands. Configuration
+transfer, lifecycle export, and irreversible deletion are distinct controls in settings; the
 fictional onboarding template is protected.
 
 See `docs/ARCHITECTURE.md`, `docs/CANDIDATE_ONBOARDING.md`, `docs/SECURITY.md`, and

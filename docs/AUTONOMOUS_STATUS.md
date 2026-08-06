@@ -3,8 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: repository-wide definition-of-done audit after executable candidate lifecycle
-- Branch baseline: `autonomous-build`; latest completed milestone is executable candidate lifecycle
+- Active phase: isolated browser-worker execution and immutable evidence
+- Branch baseline: `autonomous-build`; latest completed slice is safe configuration portability
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -108,13 +108,19 @@
   derives provenance and actor identity server-side, verifies the base report and unchanged peer
   renders, then re-renders and re-reviews the complete package. Stale, cross-candidate, tampered,
   unsupported, no-op, and post-approval revisions deny without creating a new version.
+- Candidate source configuration now has a dedicated strict JSON/YAML portability envelope with a
+  canonical hash and bounded parser. Whole-configuration imports are candidate-bound, optimistic,
+  payload-idempotent, rollback-safe, and publish at most one profile version. They preserve local
+  active/workflow switches and cannot restore database workflow, archives, browser profiles,
+  secrets, command receipts, or deletion state. API, CLI, and settings controls remain explicitly
+  separate from the full lifecycle export.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **224 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **243 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **46 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **51 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `e2b4c7d8f901`; the candidate-deletion application triggers are verified present after
@@ -134,9 +140,10 @@
   A safe synthetic execution adapter must still model timeout inspection, restart recovery,
   categorized adapter failures, bounded retries, and repeated-failure human escalation without
   introducing any live submission capability.
-- Implement portable-export round-trip import. Establish hosted authentication/encryption,
-  tenant-bound deletion recovery, and a legal retention/pseudonymization policy for the minimal
-  deletion tombstone before multi-user deployment.
+- Establish hosted authentication/encryption, tenant-bound deletion recovery, and a legal
+  retention/pseudonymization policy for the minimal deletion tombstone before multi-user
+  deployment. Configuration portability is complete; full lifecycle exports intentionally remain
+  non-restorable because replaying operational/database state is outside the safe import boundary.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
 - Complete role-specific template/content selection, richer cover-letter policy, and versioned
   free-text-answer revision; DOCX remains optional. Manual rendered-document revision,
@@ -148,6 +155,6 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with portable import, material revision, and
-   remaining browser/hosted productionization gaps.
+3. Continue the full specification audit with the isolated browser worker/evidence slice,
+   role-aware material policy, and remaining hosted productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

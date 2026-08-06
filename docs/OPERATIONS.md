@@ -14,6 +14,11 @@ python -m app onboard --candidate fictional_friend --display-name "Fictional Fri
 python -m app validate-candidate --candidate fictional_friend
 python -m app readiness --candidate fictional_friend
 python -m app export-candidate --candidate fictional_friend
+python -m app export-configuration --candidate fictional_friend --format yaml \
+  --file /private/path/fictional_friend.yaml
+python -m app import-configuration --candidate fictional_friend \
+  --file /private/path/fictional_friend.yaml --expected-profile-version 0.1.0 \
+  --idempotency-key keep-this-key-until-success
 python -m app deletion-status --candidate fictional_friend
 python -m app delete-candidate --candidate fictional_friend \
   --confirmation fictional_friend --idempotency-key operator-chosen-command-key
@@ -47,6 +52,13 @@ authorizations immediately.
 Export reads a repeatable candidate snapshot, includes exact archives and safe browser evidence,
 and excludes browser profiles, credentials, idempotency secrets, capability tokens, and local
 storage paths. The API returns it with `no-store` and an attachment filename.
+
+Configuration export/import is a separate source-configuration transfer path. JSON and YAML files
+are capped at 1 MiB and must retain their envelope hash and candidate identity. Import validates the
+entire bundle and expected destination profile version before publishing one new version; a no-op
+does not create history. Keep the same command key while retrying an uncertain response. Local
+active/automation switches are preserved, and this operation never restores database workflow,
+archives, profiles, secrets, or deletion state.
 
 Deletion is irreversible. Back up and inspect the portable export first, type the exact candidate
 ID, and keep the command key until a completed receipt is returned. The marker is installed inside

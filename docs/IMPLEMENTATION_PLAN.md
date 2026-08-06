@@ -65,8 +65,9 @@ not add browser automation or live submission.
   leased discovery tasks with freshness/error status.
 - [x] Execute bounded candidate export, durable deletion/recovery, writer fencing, and configurable
   browser-profile retention.
-- [ ] Complete isolated Playwright application integration, portable-export import, and hosted
-  security.
+- [x] Add bounded deterministic whole-candidate configuration import/export with atomic versioning
+  and distinct API, CLI, and settings controls.
+- [ ] Complete isolated Playwright application integration and hosted security.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
   external runtimes are available.
 

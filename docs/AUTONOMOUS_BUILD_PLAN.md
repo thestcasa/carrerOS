@@ -260,6 +260,26 @@ unreachable sources deny progress. Legacy application identities are collision-c
 non-transactional SQLite DDL, and the migration restores deletion-fence triggers after every batch
 rebuild.
 
+### Phase 5H — safe candidate configuration portability
+
+1. Define a bounded, strict, deterministic JSON/YAML envelope for the complete candidate source
+   configuration, with schema identity, source version, candidate identity, and a canonical hash.
+2. Reject duplicate keys, YAML aliases/tags, excessive depth/size, unknown fields, hash drift, and
+   cross-candidate bundles before creating any mutation receipt or history.
+3. Import all candidate sections under one lifecycle lock and one profile-version publication,
+   with optimistic versioning, payload-bound replay, rollback history, and no-op detection.
+4. Preserve local file layout and operational workflow/active switches so a portable bundle cannot
+   silently enable automation. Never import SQL workflow rows, archives, browser profiles,
+   credentials, receipts, or deletion state through this configuration path.
+5. Expose distinct API, CLI, and settings controls for configuration JSON/YAML portability while
+   retaining the existing bounded lifecycle export as a separate backup/audit artifact.
+
+Status: complete. Both formats round-trip deterministically, the codec and transport are bounded,
+and the backend publishes a changed whole configuration as exactly one new version. Exact command
+replays return the original result; stale versions and changed payloads fail closed. The settings
+surface labels configuration transfer separately from the full lifecycle export and retains an
+import command key across uncertain failures.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

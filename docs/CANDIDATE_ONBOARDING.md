@@ -47,6 +47,21 @@ python -m app readiness --candidate fictional_friend
 python -m app export-candidate --candidate fictional_friend
 ```
 
+To transfer only the versioned source configuration between trusted local installations, use the
+dedicated strict bundle instead of the lifecycle export:
+
+```bash
+python -m app export-configuration --candidate fictional_friend --format json \
+  --file /private/path/fictional_friend.json
+python -m app import-configuration --candidate fictional_friend \
+  --file /private/path/fictional_friend.json --expected-profile-version 0.1.0 \
+  --idempotency-key keep-this-key-until-success
+```
+
+The destination candidate ID must already match. Import publishes all changes as one version and
+preserves the destination's active and workflow switches; it does not restore application history,
+archives, browser profiles, secrets, or deletion state.
+
 Discovery and automatic submission remain separate controls. Enabling either in a file does not
 bypass backend readiness, the deterministic submission gate, archive creation, rate limits,
 emergency stop, or one-time authorization consumption.

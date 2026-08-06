@@ -6,6 +6,9 @@ import type {
   ArtifactView,
   AuthorizationView,
   CandidateDetail,
+  CandidateConfigurationFormat,
+  CandidateConfigurationImportInput,
+  CandidateConfigurationImportResult,
   CandidateDeletionView,
   CandidateExportView,
   CandidateSummary,
@@ -111,6 +114,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestText(path: string): Promise<string> {
+  const session = await localSession();
+  const response = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${session.session_token}` },
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
+    throw new ApiError(
+      body.error?.message ?? `Request failed with status ${response.status}.`,
+      body.error?.code ?? "request_failed",
+      response.status,
+    );
+  }
+  return response.text();
+}
+
 function commandHeaders(idempotencyKey: string): HeadersInit {
   return { "Idempotency-Key": idempotencyKey };
 }
@@ -156,6 +176,26 @@ export const api = {
   },
   exportCandidate: (candidateId: string) =>
     request<CandidateExportView>(`/api/candidates/${encodeURIComponent(candidateId)}/export`),
+  exportCandidateConfiguration: (
+    candidateId: string,
+    format: CandidateConfigurationFormat,
+  ) =>
+    requestText(
+      `/api/candidates/${encodeURIComponent(candidateId)}/configuration-export?format=${format}`,
+    ),
+  importCandidateConfiguration: (
+    candidateId: string,
+    input: CandidateConfigurationImportInput,
+    idempotencyKey: string,
+  ) =>
+    request<CandidateConfigurationImportResult>(
+      `/api/candidates/${encodeURIComponent(candidateId)}/configuration-import`,
+      {
+        method: "POST",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify(input),
+      },
+    ),
   deletionStatus: async (candidateId: string) =>
     verifiedDeletionReceipt(
       candidateId,

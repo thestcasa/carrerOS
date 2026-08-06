@@ -8,8 +8,11 @@ vi.mock("@/lib/api", () => ({
     settings: vi.fn(),
     updateSettings: vi.fn(),
     emergencyStop: vi.fn(),
+    candidate: vi.fn(),
     deletionStatus: vi.fn(),
     exportCandidate: vi.fn(),
+    exportCandidateConfiguration: vi.fn(),
+    importCandidateConfiguration: vi.fn(),
     deleteCandidate: vi.fn(),
   },
 }));
@@ -19,6 +22,18 @@ describe("SettingsPageClient", () => {
     vi.clearAllMocks();
     vi.mocked(api.deletionStatus).mockRejectedValue({
       code: "deletion_not_found",
+    });
+    vi.mocked(api.candidate).mockResolvedValue({
+      candidate_id: "example_candidate",
+      profile_version: "profile-v1",
+      config: {},
+      readiness: {
+        candidate_id: "example_candidate",
+        status: "ready",
+        issues: [],
+        domains: [],
+        capabilities: [],
+      },
     });
     vi.mocked(api.settings).mockResolvedValue({
       candidate_id: "example_candidate",

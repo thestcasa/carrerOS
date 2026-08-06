@@ -285,6 +285,22 @@ Thus the handshake cannot itself clear a challenge or reach `READY_TO_SUBMIT`. A
 acknowledgement helper changes local fixture state for deterministic testing, accepts only an exact
 allowlisted loopback URL, and cannot solve or bypass a live challenge.
 
+## Candidate configuration portability
+
+Configuration transfer is deliberately separate from the lifecycle export. The portable JSON/YAML
+envelope contains only the strict candidate manifest and section models, identifies its schema,
+candidate, and source profile version, and binds the canonical configuration bytes with SHA-256.
+Parsing rejects duplicate keys, aliases, custom YAML tags, unbounded structures, unknown fields,
+hash drift, and candidate mismatch before mutation begins.
+
+Import holds the same cross-process candidate lifecycle lock used by editing and deletion. It
+normalizes the source onto the destination's candidate identity and file layout, preserves local
+`active` and workflow switches, validates the complete model, and publishes all changed sections
+with one patch-version increment and one rollback history snapshot. An expected profile version and
+payload-bound command receipt provide optimistic concurrency and exact replay. SQL application
+state, archives, browser profiles, secrets, operational receipts, and deletion records are never
+accepted by this path; the broader lifecycle export remains a non-restorable audit/backup artifact.
+
 Synthetic confirmation is produced by a backend-owned executor dependency; clients provide only
 the one-time authorization and acknowledge the synthetic fixture. Authorization consumption uses
 a conditional database update so concurrent workers cannot both claim the same record, while a

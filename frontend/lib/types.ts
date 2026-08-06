@@ -97,6 +97,25 @@ export interface CandidateUpdateResult {
   readiness: ReadinessReport;
 }
 
+export type CandidateConfigurationFormat = "json" | "yaml";
+
+export interface CandidateConfigurationImportInput {
+  format: CandidateConfigurationFormat;
+  content: string;
+  expected_profile_version: string;
+}
+
+export interface CandidateConfigurationImportResult {
+  candidate_id: string;
+  previous_version: string;
+  profile_version: string;
+  source_profile_version: string;
+  source_sha256: string;
+  changed: boolean;
+  imported_sections: EditableSection[];
+  readiness: ReadinessReport;
+}
+
 export interface CandidateDeletionView {
   candidate_id: string;
   status: "deleting" | "failed" | "completed";

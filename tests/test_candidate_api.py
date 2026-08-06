@@ -279,6 +279,68 @@ def test_authenticated_cv_import_stream_cap_precedes_authorization_body_bufferin
     assert response.json()["error"]["code"] == "cv_import_too_large"
 
 
+@pytest.mark.parametrize("format", ("json", "yaml"))
+def test_configuration_export_and_noop_import_api(
+    copied_candidates_root: Path,
+    format: str,
+) -> None:
+    with _client(copied_candidates_root) as client:
+        exported = client.get(
+            "/api/candidates/example_candidate/configuration-export",
+            params={"format": format},
+        )
+        imported = client.post(
+            "/api/candidates/example_candidate/configuration-import",
+            headers={"Idempotency-Key": f"configuration-{format}-import"},
+            json={
+                "format": format,
+                "content": exported.text,
+                "expected_profile_version": "1.0.0",
+            },
+        )
+
+    assert exported.status_code == 200
+    assert exported.headers["cache-control"] == "no-store"
+    assert exported.headers["content-disposition"].endswith(
+        f"example_candidate-configuration.{format}"
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["changed"] is False
+    assert imported.json()["profile_version"] == "1.0.0"
+
+
+def test_configuration_import_transport_cap_precedes_body_buffering(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root, auth_required=True) as client:
+        response = client.post(
+            "/api/candidates/example_candidate/configuration-import",
+            headers={"Content-Length": "7000000"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "candidate_import_too_large"
+
+
+def test_configuration_import_invalid_bundle_has_stable_error(
+    copied_candidates_root: Path,
+) -> None:
+    with _client(copied_candidates_root) as client:
+        response = client.post(
+            "/api/candidates/example_candidate/configuration-import",
+            headers={"Idempotency-Key": "configuration-invalid"},
+            json={
+                "format": "json",
+                "content": "{}",
+                "expected_profile_version": "1.0.0",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "candidate_import_invalid"
+
+
 @pytest.mark.parametrize(
     ("method", "path", "payload"),
     [
@@ -302,6 +364,11 @@ def test_authenticated_cv_import_stream_cap_precedes_authorization_body_bufferin
             "post",
             "/api/candidates/example_candidate/cv-imports",
             {"filename": "fictional.txt", "content_base64": "RklDVElPTkFM"},
+        ),
+        (
+            "post",
+            "/api/candidates/example_candidate/configuration-import",
+            {"format": "json", "content": "{}", "expected_profile_version": "1.0.0"},
         ),
         (
             "post",

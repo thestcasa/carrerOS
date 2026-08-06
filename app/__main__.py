@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -11,7 +12,11 @@ from app.auth.lifecycle import CandidateDeletionRequest, CandidateLifecycleServi
 from app.candidates.cv_import import CVImportRequest
 from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.readiness import assess_readiness
-from app.candidates.service import CandidateCreateRequest, CandidateService
+from app.candidates.service import (
+    CandidateConfigurationImportRequest,
+    CandidateCreateRequest,
+    CandidateService,
+)
 from app.core.settings import Settings
 from app.db import build_engine, build_session_factory
 from app.job_service import DiscoveryRequest, JobService
@@ -41,6 +46,15 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     export = subparsers.add_parser("export-candidate")
     export.add_argument("--candidate", required=True)
+    export_configuration = subparsers.add_parser("export-configuration")
+    export_configuration.add_argument("--candidate", required=True)
+    export_configuration.add_argument("--format", choices=("json", "yaml"), default="json")
+    export_configuration.add_argument("--file", type=Path)
+    import_configuration = subparsers.add_parser("import-configuration")
+    import_configuration.add_argument("--candidate", required=True)
+    import_configuration.add_argument("--file", type=Path, required=True)
+    import_configuration.add_argument("--expected-profile-version", required=True)
+    import_configuration.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     delete_candidate = subparsers.add_parser("delete-candidate")
     delete_candidate.add_argument("--candidate", required=True)
     delete_candidate.add_argument("--confirmation", required=True)
@@ -99,6 +113,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings.runtime_root,
         )
         print(lifecycle.export_candidate(args.candidate).model_dump_json())
+        return 0
+    if args.command == "export-configuration":
+        content = candidate_service.export_configuration(args.candidate, args.format)
+        if args.file is None:
+            sys.stdout.write(content)
+        else:
+            args.file.write_text(content, encoding="utf-8")
+        return 0
+    if args.command == "import-configuration":
+        suffix = args.file.suffix.casefold()
+        format = "yaml" if suffix in {".yaml", ".yml"} else "json" if suffix == ".json" else None
+        if format is None or not args.file.is_file() or args.file.stat().st_size > 1024 * 1024:
+            print(
+                json.dumps(
+                    {
+                        "candidate_id": args.candidate,
+                        "status": "invalid",
+                        "error": "Configuration file must be JSON or YAML and no larger than 1 MiB",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        try:
+            content = args.file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            print(
+                json.dumps(
+                    {
+                        "candidate_id": args.candidate,
+                        "status": "invalid",
+                        "error": "Configuration file must be UTF-8 text",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        configuration_result = candidate_service.import_configuration(
+            args.candidate,
+            CandidateConfigurationImportRequest(
+                format=format,
+                content=content,
+                expected_profile_version=args.expected_profile_version,
+            ),
+            args.idempotency_key,
+        )
+        print(configuration_result.model_dump_json())
         return 0
     if args.command in {"delete-candidate", "deletion-status"}:
         settings = Settings.from_environment()
