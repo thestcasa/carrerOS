@@ -375,6 +375,9 @@ class ApplicationArchiveBuilder:
         confirmation_reference: str,
         submitted_at: datetime,
         event_log: Any | None = None,
+        synthetic_only: bool = True,
+        confirmation_screenshot: bytes | None = None,
+        final_page_snapshot: bytes | None = None,
     ) -> Path:
         """Create a complete confirmed archive version without mutating the pre-submit archive."""
         raw_source = archive_path.absolute()
@@ -389,6 +392,8 @@ class ApplicationArchiveBuilder:
             raise ValueError("pre-submit archive is missing, unsafe, or failed verification")
         if not confirmation_reference.strip():
             raise ValueError("confirmation_reference must not be empty")
+        if not synthetic_only and (confirmation_screenshot is None or final_page_snapshot is None):
+            raise ValueError("controlled confirmation requires screenshot and page evidence")
         original = ArchiveManifest.model_validate_json(
             (source / "manifest.json").read_text(encoding="utf-8")
         )
@@ -428,15 +433,28 @@ class ApplicationArchiveBuilder:
                 "confirmation_detected": True,
                 "confirmation_reference": confirmation_reference,
                 "submitted_at": submitted_at,
-                "synthetic_only": True,
-                "confirmation_screenshot_available": False,
+                "synthetic_only": synthetic_only,
+                "confirmation_screenshot_available": confirmation_screenshot is not None,
             }
             (temp_path / "submission" / "receipt.json").write_bytes(canonical_json_bytes(receipt))
             (temp_path / "submission" / "confirmation.html").write_text(
-                "<!doctype html><html><body><p>Synthetic backend confirmation: "
-                f"{html.escape(confirmation_reference)}</p></body></html>\n",
+                "<!doctype html><html><body><p>"
+                + (
+                    "Synthetic backend confirmation: "
+                    if synthetic_only
+                    else "Backend confirmation: "
+                )
+                + f"{html.escape(confirmation_reference)}</p></body></html>\n",
                 encoding="utf-8",
             )
+            if confirmation_screenshot is not None:
+                (temp_path / "submission" / "confirmation_screenshot.png").write_bytes(
+                    confirmation_screenshot
+                )
+            if final_page_snapshot is not None:
+                (temp_path / "submission" / "final_page_snapshot.html").write_bytes(
+                    final_page_snapshot
+                )
             if event_log is not None:
                 (temp_path / "audit" / "events.jsonl").write_bytes(_jsonl_bytes(event_log))
 

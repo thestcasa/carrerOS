@@ -117,7 +117,7 @@ def _queue_browser_task(
     )
     assert queued_detail.state is ApplicationState.FORM_FILLING
     assert queued_detail.next_action == "Waiting for isolated browser worker"
-    with sessions() as session:
+    with sessions.begin() as session:
         task_record = session.scalar(
             select(WorkflowTask).where(
                 WorkflowTask.candidate_id == _CANDIDATE_ID,
@@ -125,7 +125,9 @@ def _queue_browser_task(
             )
         )
         assert task_record is not None
-        task = queue.get(task_record.id)
+        task_record.scheduled_for = datetime(2026, 8, 6, 8, tzinfo=UTC)
+        task_id = task_record.id
+    task = queue.get(task_id)
     assert task is not None
     return applications, queue, sessions, generated.application_id, task
 

@@ -13,7 +13,9 @@ does not hard-code a pilot's AI/ML taxonomy.
 
 Tests and CLI discovery use fixtures. Adding a provider requires strict contracts, URL allowlists,
 append-only version tests, prompt-injection cases, and a candidate-independent parser. Provider
-credentials and live application submission do not belong in adapters.
+credentials do not belong in discovery adapters. Final submission uses a distinct, versioned,
+default-disabled Greenhouse controlled adapter behind `SubmissionGate`; discovery adapters remain
+read-only and cannot obtain a click permit.
 
 Scheduled discovery uses only these public read endpoints:
 

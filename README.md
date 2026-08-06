@@ -1,8 +1,8 @@
 # Career OS
 
 A local, candidate-configurable, safety-gated job application control plane. The repository
-contains fictional example data only; submission execution is restricted to the bundled synthetic
-fixture.
+contains fictional example data only. Synthetic submission is available for routine development;
+the separately isolated Greenhouse final-click capability is implemented but disabled by default.
 
 ## One-command stack
 
@@ -14,7 +14,8 @@ Open the web control plane at `http://localhost:3000`; the API and OpenAPI docs 
 `http://localhost:8000` and `http://localhost:8000/docs`. Compose starts the frontend, FastAPI,
 PostgreSQL, Redis, general workflow worker, isolated browser dry-run worker, and scheduler, then
 applies Alembic migrations. Candidate edits and runtime artifacts use separate persistent volumes.
-Services bind to localhost by default.
+Services bind to localhost by default. The default stack intentionally does not start the
+controlled-submission worker.
 
 ## Local setup
 
@@ -42,8 +43,9 @@ npx playwright install --with-deps chromium
 npm run test:e2e
 ```
 
-The web interface covers candidate onboarding/CV import/readiness, discovery and analysis, application
-materials and synthetic dry runs, human actions, security events, settings, analytics, and a
+The web interface covers candidate onboarding/CV import/readiness, discovery and analysis,
+application materials, synthetic dry runs, controlled-approval queuing, human actions, security
+events, settings, analytics, and a
 labelled viewer for each exact immutable submitted artifact. The deterministic Playwright suite
 intercepts every API request and never contacts or mutates a real provider. The CLI also provides
 `onboard`, local `import-cv`, deterministic
@@ -53,5 +55,5 @@ transfer, lifecycle export, and irreversible deletion are distinct controls in s
 fictional onboarding template is protected.
 
 See `docs/ARCHITECTURE.md`, `docs/CANDIDATE_ONBOARDING.md`, `docs/SECURITY.md`, and
-`docs/OPERATIONS.md`. Career OS never bypasses CAPTCHA or anti-bot controls, and this build
-contains no live final-click capability.
+`docs/OPERATIONS.md`. Career OS never bypasses CAPTCHA or anti-bot controls. No live application
+was executed while building or testing this repository.

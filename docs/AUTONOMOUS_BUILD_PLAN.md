@@ -5,7 +5,9 @@
 Implement and verify the complete definition of done in `CareerOS_PROJECT_SPEC(1).md` from
 the current repository state. Preserve the deterministic `SubmissionGate` boundary, candidate
 isolation, immutable history, truthful provenance, and the prohibition on live applications,
-CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate data.
+CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate data during this
+build. A production-shaped final-click path may exist only behind the specification's explicit,
+default-deny controls and must be verified without sending a live application.
 
 ## Repository baseline
 
@@ -113,16 +115,22 @@ on the 15-minute scheduler cadence independently of long-term browser-profile re
 ### Phase 4 — Milestones 5 and 6: controlled submission and operations
 
 1. Complete the required pre-submit archive and one-time, short-lived authorization consumption.
-2. Implement only synthetic/test submission execution in this build unless a separately
-   authorized safe environment exists; never submit a live application.
+2. Implement a default-disabled controlled executor with an isolated worker, exact adapter policy,
+   a durable pre-click boundary, and no automatic retry after an ambiguous click. Verify it only
+   with deterministic fakes; never submit a live application during the build.
 3. Add confirmation-aware application detail/pipeline, exact artifact viewers, notifications,
    rate limits, approval/autonomous modes, emergency stop, settings, dashboard, and analytics.
 4. Prove the UI cannot claim success without backend confirmation and cannot enable autonomy
    while readiness is blocked.
 
-Status: synthetic-only submission, archives, one-time authorization, primary operational routes,
-both frontend safety regression tests, notifications, transactional rate limits, durable task
-scheduling, and administrative audit are complete.
+Status: complete in local deterministic coverage. Synthetic submission remains available for the
+fictional workflow. The distinct Greenhouse controlled path is default-disabled, absent from
+default Compose, and claimable only by its dedicated worker. It binds an exact target, package,
+authorization, browser session, form fingerprint, evidence hashes, and one-use in-memory permit;
+it repopulates and rechecks the exact snapshot-derived identity/CV payload, rejects unsupported
+visible controls, permits one same-origin POST, and makes every post-boundary ambiguity terminal
+`UNKNOWN_AFTER_CLICK`. Approval/autonomous UI, notifications, transactional rate limits, durable
+task scheduling, stale-boundary reconciliation, and administrative evidence are complete.
 
 Hardening update: confirmation evidence is backend-owned, authorization claiming is an atomic
 conditional update with durable replay, denied gate preflights do not seal orphan archives, exact
@@ -306,6 +314,11 @@ import command key across uncertain failures.
 5. Commit only coherent passing milestones with Conventional Commit subjects and finish with a
    clean working tree apart from preserved pre-existing user changes.
 
+Status: all host-runnable backend, migration, frontend, security, and deterministic controlled
+submission gates pass. Browser execution and PostgreSQL/Redis/Compose verification require a
+glibc/Docker-capable host. A deployment-specific secure interactive takeover broker is also
+required before the corresponding acceptance criterion can be claimed complete.
+
 ### Current execution checkpoint
 
 1. [Complete in `b1824cc`] Validate and integrate the inherited browser-worker attempt-evidence
@@ -327,8 +340,13 @@ import command key across uncertain failures.
 6. [Complete for local evidence; transport external] Expand the human-action evidence and expiry
    contract without exposing browser profile paths, CDP/WebSocket secrets, or claiming that a
    database handshake is an interactive takeover capability.
-7. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
-   product/API/UI/documentation gaps, and run the full fictional workflow before final commits.
+7. [Complete in deterministic local coverage] Add the default-disabled controlled-submission
+   adapter, one-use gate permit, durable irreversible-click evidence, no-retry unknown outcome,
+   approval/autonomous queueing, exact confirmation archive, API/UI, migration, and regression
+   tests without making a live submission.
+8. [Blocked only on external verification] Execute the committed browser suite and Compose stack
+   on a capable host and supply the deployment-specific secure interactive takeover transport.
+   No further safe local implementation can truthfully satisfy those environmental criteria.
 
 Runtime agent routing and the normalized job expansion are complete. The deterministic provider
 receives a minimal scoring-only candidate context, all identities are lifecycle/content/version

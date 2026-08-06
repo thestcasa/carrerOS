@@ -16,6 +16,7 @@ class Settings:
     runtime_root: Path = Path.cwd() / "runtime"
     auth_required: bool = False
     local_token_secret: str | None = None
+    controlled_submission_enabled: bool = False
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -28,4 +29,7 @@ class Settings:
             runtime_root=Path(os.getenv("RUNTIME_ROOT", Path.cwd() / "runtime")),
             auth_required=os.getenv("AUTH_REQUIRED", "true").casefold() == "true",
             local_token_secret=os.getenv("LOCAL_TOKEN_SECRET"),
+            controlled_submission_enabled=(
+                os.getenv("CONTROLLED_SUBMISSION_ENABLED", "false").casefold() == "true"
+            ),
         )

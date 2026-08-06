@@ -169,6 +169,41 @@ Submission authorization persists a digest over those exact document versions, t
 snapshot, the browser-observed upload hash, and the verified archive manifest. Submission rebuilds
 that digest transactionally and fails closed before consuming a stale or mutated authorization.
 
+### Controlled final-click boundary
+
+The production-shaped Greenhouse click path is separate from synthetic submission and from the
+restricted dry-run worker. `controlled_submission_attempts` binds one application, one
+authorization, one browser session, one task, the exact target and package, and immutable pre-click
+evidence. The task has one claim and only the `controlled-submission-worker` role can claim its
+kind. That role is absent from default Compose and refuses to start unless the process switch is
+explicitly enabled.
+
+Preparation may inspect, screenshot, and snapshot the exact allowlisted Greenhouse form but cannot
+send a POST. Because ordinary DOM form values do not survive a closed browser context, the executor
+repopulates first name, last name, email, and the exact hash-verified reviewed CV from the immutable
+candidate snapshot/package. It rejects every other non-hidden input, select, or textarea, hashes the
+exact form payload, and verifies the populated values again at click time. Immediately before click,
+the service rechecks the task lease, candidate policy,
+emergency stop, rate limits, fresh source, duplicate identity, current package, browser session,
+form fingerprint, and authorization binding. One transaction conditionally consumes the
+authorization, records the evidence hashes and nonce hash, and transitions to `SUBMITTING`. Only
+then can `SubmissionGate` turn that committed proof plus the in-memory nonce into a short-lived,
+single-use `FinalClickPermit`.
+
+The executor keeps the network POST allowance closed until the adapter has consumed that permit.
+CAPTCHA, OTP, and unsupported controls stop before authorization consumption, pause the browser
+session, and create a human action. A denied pre-click attempt stays in history; a later explicit
+approval may create a new attempt, while the scheduler never retries one automatically. A partial
+database uniqueness constraint permits only one non-denied attempt for an application.
+
+The adapter consumes that permit and dispatches one same-origin form POST. Confirmation creates a
+copy-on-write archive containing the exact final screenshot and HTML. Any ambiguity after the
+committed boundary transitions to `UNKNOWN_AFTER_CLICK`; this state cannot return to a retryable or
+submitting state. A stale-boundary reconciler waits beyond permit expiry, records an immutable
+unknown-outcome receipt, opens a human action, and terminates the task without clicking. Autonomous
+mode uses the same gate and queue path and only scans candidates with every readiness blocker
+cleared.
+
 ## Deployment foundation
 
 The backend targets Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, and

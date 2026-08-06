@@ -291,6 +291,7 @@ export function ApplicationPageClient({
 }) {
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([]);
+  const [controlledSubmissionEnabled, setControlledSubmissionEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const commandKeys = useRef(new Map<string, string>());
@@ -306,12 +307,14 @@ export function ApplicationPageClient({
     commandKeys.current.delete(`${candidateId}:${applicationId}:${operation}`);
   }
   const load = useCallback(async () => {
-    const [detail, stored] = await Promise.all([
+    const [detail, stored, settings] = await Promise.all([
       api.application(candidateId, applicationId),
       api.artifacts(candidateId, applicationId),
+      api.settings(candidateId),
     ]);
     setApplication(detail);
     setArtifacts(stored);
+    setControlledSubmissionEnabled(settings.controlled_submission_enabled === true);
   }, [candidateId, applicationId]);
 
   useEffect(() => {
@@ -319,11 +322,13 @@ export function ApplicationPageClient({
     void Promise.all([
       api.application(candidateId, applicationId),
       api.artifacts(candidateId, applicationId),
+      api.settings(candidateId),
     ])
-      .then(([detail, stored]) => {
+      .then(([detail, stored, settings]) => {
         if (!active) return;
         setApplication(detail);
         setArtifacts(stored);
+        setControlledSubmissionEnabled(settings.controlled_submission_enabled === true);
       })
       .catch((reason: unknown) => {
         if (active) {
@@ -341,16 +346,19 @@ export function ApplicationPageClient({
     application?.state === "form_filling" &&
     (application.last_event === "BROWSER_DRY_RUN_QUEUED" ||
       application.last_event === "BROWSER_DRY_RUN_FAILED");
+  const controlledTaskPending =
+    application?.state === "ready_to_submit" &&
+    application.last_event === "CONTROLLED_SUBMISSION_QUEUED";
 
   useEffect(() => {
-    if (!browserTaskPending) return;
+    if (!browserTaskPending && !controlledTaskPending) return;
     const timer = window.setInterval(() => {
       void load().catch((reason: unknown) => {
         setError(reason instanceof Error ? reason.message : "Browser task status is unavailable.");
       });
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [browserTaskPending, load]);
+  }, [browserTaskPending, controlledTaskPending, load]);
 
   async function action(
     kind: "approve-materials" | "start" | "dry-run" | "authorize-submit",
@@ -361,19 +369,35 @@ export function ApplicationPageClient({
       if (kind === "dry-run") {
         await api.dryRun(candidateId, applicationId, null, commandKey("dry-run"));
       } else if (kind === "authorize-submit") {
-        const authorization = await api.authorize(
-          candidateId,
-          applicationId,
-          commandKey("authorize"),
-        );
-        await api.submitSynthetic(
-          candidateId,
-          applicationId,
-          authorization.authorization_id,
-          commandKey("submit"),
-        );
-        clearCommand("authorize");
-        clearCommand("submit");
+        if (controlledSubmissionEnabled) {
+          const authorization = await api.authorizeControlled(
+            candidateId,
+            applicationId,
+            commandKey("controlled-authorize"),
+          );
+          await api.queueControlledSubmission(
+            candidateId,
+            applicationId,
+            authorization.authorization_id,
+            commandKey("controlled-submit"),
+          );
+          clearCommand("controlled-authorize");
+          clearCommand("controlled-submit");
+        } else {
+          const authorization = await api.authorize(
+            candidateId,
+            applicationId,
+            commandKey("authorize"),
+          );
+          await api.submitSynthetic(
+            candidateId,
+            applicationId,
+            authorization.authorization_id,
+            commandKey("submit"),
+          );
+          clearCommand("authorize");
+          clearCommand("submit");
+        }
       } else {
         await api.applicationCommand(
           candidateId,
@@ -501,7 +525,9 @@ export function ApplicationPageClient({
         : application.state === "form_filling" && !browserTaskPending
           ? "dry-run"
           : application.state === "ready_to_submit"
-            ? "authorize-submit"
+            ? controlledTaskPending
+              ? null
+              : "authorize-submit"
             : null;
 
   return (
@@ -521,6 +547,16 @@ export function ApplicationPageClient({
         </div>
       </header>
       {error ? <ErrorState message={error} /> : null}
+      {application.state === "unknown_after_click" ? (
+        <section className="panel" role="alert">
+          <p className="eyebrow">Manual investigation required</p>
+          <h2>Submission outcome is unknown</h2>
+          <p>
+            Do not retry this application. Career OS has stopped automation and recorded the
+            ambiguous click outcome for review.
+          </p>
+        </section>
+      ) : null}
       <section className="panel action-panel">
         <div>
           <p className="eyebrow">Authoritative backend state</p>
@@ -528,6 +564,8 @@ export function ApplicationPageClient({
           <p className="muted">
             {browserTaskPending
               ? "The isolated browser worker owns this attempt. This page refreshes from durable state; no submit control is available to the worker."
+              : controlledTaskPending
+                ? "The isolated controlled-submission worker owns this one-attempt task. The interface cannot issue another click."
               : "The interface updates only from the persisted API response."}
           </p>
         </div>
@@ -537,7 +575,11 @@ export function ApplicationPageClient({
             disabled={busy}
             onClick={() => void action(nextAction)}
           >
-            {busy ? "Working…" : nextAction.replaceAll("-", " ")}
+            {busy
+              ? "Working…"
+              : nextAction === "authorize-submit" && controlledSubmissionEnabled
+                ? "approve controlled submission"
+                : nextAction.replaceAll("-", " ")}
           </button>
         ) : null}
         {application.state === "interview" ? (

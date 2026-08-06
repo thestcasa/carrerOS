@@ -21,6 +21,7 @@ from app.discovery.providers import ProviderFeedClient
 from app.discovery.scheduled import ScheduledDiscoveryService
 from app.discovery.verification import ProviderJobSourceVerifier
 from app.job_service import JobService
+from app.submission import ControlledSubmissionExecutor, GreenhousePlaywrightExecutor
 from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 
 
@@ -31,6 +32,7 @@ def run_scheduler_once(
     now: datetime | None = None,
     discovery: ScheduledDiscoveryService | None = None,
     lifecycle: CandidateLifecycleService | None = None,
+    applications: ApplicationService | None = None,
 ) -> tuple[TaskView, ...]:
     current = now or datetime.now(UTC)
     bucket = current.strftime("%Y%m%dT%H") + f"{(current.minute // 15) * 15:02d}"
@@ -57,6 +59,8 @@ def run_scheduler_once(
                         scheduled_for=current,
                     )
                 )
+            if applications is not None:
+                applications.enqueue_autonomous_controlled_submissions(candidate.candidate_id)
         except TaskLeaseLostError:
             continue
     return (
@@ -130,6 +134,30 @@ def run_browser_worker_once(
     )
 
 
+def run_controlled_submission_worker_once(
+    queue: TaskQueue,
+    applications: ApplicationService,
+    executor: ControlledSubmissionExecutor,
+    *,
+    worker_id: str,
+    now: datetime | None = None,
+) -> TaskView | None:
+    task = queue.claim(
+        worker_id=worker_id,
+        now=now,
+        allowed_kinds=frozenset({"controlled_submission"}),
+    )
+    if task is None:
+        return None
+    return applications.execute_controlled_submission_task(
+        queue,
+        task,
+        worker_id=worker_id,
+        executor=executor,
+        now=now,
+    )
+
+
 def run_process(role: str) -> NoReturn:
     """Run a durable local scheduler or worker with Redis health publication."""
     settings = Settings.from_environment()
@@ -149,6 +177,7 @@ def run_process(role: str) -> NoReturn:
         candidates,
         settings.runtime_root,
         source_verifier=source_verifier,
+        controlled_submission_enabled=settings.controlled_submission_enabled,
     )
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     worker_id = f"{role}-{secrets.token_hex(6)}"
@@ -157,6 +186,7 @@ def run_process(role: str) -> NoReturn:
     fixture_thread: threading.Thread | None = None
     fixture_base_url = "http://127.0.0.1:8090/application"
     browser_executor: RestrictedPlaywrightWorker | None = None
+    controlled_executor: GreenhousePlaywrightExecutor | None = None
     if role == "browser-worker":
         fixture_server = ThreadingHTTPServer(("127.0.0.1", 8090), SyntheticATSHandler)
         fixture_thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
@@ -168,11 +198,24 @@ def run_process(role: str) -> NoReturn:
                 for challenge in ("none", "captcha", "otp")
             ),
         )
+    elif role == "controlled-submission-worker":
+        if not settings.controlled_submission_enabled:
+            raise ValueError("controlled submission worker requires explicit runtime enablement")
+        controlled_executor = GreenhousePlaywrightExecutor(
+            settings.runtime_root,
+            enabled=True,
+        )
     try:
         while True:
             if role == "scheduler":
                 processed = len(
-                    run_scheduler_once(queue, candidates, discovery=discovery, lifecycle=lifecycle)
+                    run_scheduler_once(
+                        queue,
+                        candidates,
+                        discovery=discovery,
+                        lifecycle=lifecycle,
+                        applications=applications,
+                    )
                 )
             elif role == "worker":
                 processed = int(
@@ -196,6 +239,18 @@ def run_process(role: str) -> NoReturn:
                     )
                     is not None
                 )
+            elif role == "controlled-submission-worker" and controlled_executor is not None:
+                for candidate in candidates.list_candidates():
+                    applications.reconcile_stale_controlled_submissions(candidate.candidate_id)
+                processed = int(
+                    run_controlled_submission_worker_once(
+                        queue,
+                        applications,
+                        controlled_executor,
+                        worker_id=worker_id,
+                    )
+                    is not None
+                )
             else:
                 raise ValueError(f"unsupported runtime role: {role}")
             redis.set(
@@ -210,10 +265,14 @@ def run_process(role: str) -> NoReturn:
                 ),
                 ex=90,
             )
-            time.sleep(15 if role in {"worker", "browser-worker"} else 30)
+            time.sleep(
+                15 if role in {"worker", "browser-worker", "controlled-submission-worker"} else 30
+            )
     finally:
         if fixture_server is not None:
             fixture_server.shutdown()
             fixture_server.server_close()
         if fixture_thread is not None:
             fixture_thread.join(timeout=5)
+        if controlled_executor is not None:
+            controlled_executor.abort()

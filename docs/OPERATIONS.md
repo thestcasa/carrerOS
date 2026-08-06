@@ -29,6 +29,25 @@ python -m app.browser.fixture_server --port 8090
 python -m app run-browser-worker
 ```
 
+Controlled submission is deliberately outside the default stack. Enabling it requires the exact
+same `CONTROLLED_SUBMISSION_ENABLED=true` process setting on the API and scheduler plus a separately
+started isolated worker:
+
+```bash
+CONTROLLED_SUBMISSION_ENABLED=true python -m app run-controlled-submission-worker
+```
+
+That switch is necessary but insufficient. Candidate source configuration must explicitly enable
+automatic submission; settings must use `approval_required` or a blocker-free `autonomous` mode;
+Greenhouse must be both allowed and tested; and every fresh gate, package, duplicate,
+browser-session, emergency-stop, and rate-limit check must pass. Do not start this worker merely to
+run tests. Unit and integration tests use fictional in-process executors and never contact an ATS.
+CAPTCHA, OTP, or an unsupported visible control stops before authorization consumption and creates
+a human action. A denied pre-click attempt may be tried again only through a new explicit
+authorization after the cause is resolved; autonomous scheduling never retries it. Once the click
+boundary is armed, every missing/ambiguous result is terminal `UNKNOWN_AFTER_CLICK` and must not be
+retried.
+
 CV import retains only a structured unapproved draft and the raw document hash. The raw TXT is
 not copied into candidate storage. Use `--apply` only after inspecting the extraction; applied facts
 remain readiness blockers until explicitly approved in the versioned profile.
@@ -69,7 +88,8 @@ worker owns or retries the task.
 New candidates are unapproved, blocked drafts with an `.invalid` address. Complete and approve
 legal/profile/answer configuration before enabling discovery; autonomous mode has additional
 tested-adapter, dry-run, and explicit-confirmation blockers. The emergency stop denies new
-authorizations immediately.
+authorizations and pre-click arming immediately. An already armed click is recorded durably and is
+never retried; ambiguous outcomes require human investigation.
 
 Export reads a repeatable candidate snapshot, includes exact archives and safe browser evidence,
 and excludes browser profiles, credentials, idempotency secrets, capability tokens, and local
@@ -103,6 +123,10 @@ attempt evidence are immutable and hash verified. A failed hash check is a secur
 automation, preserve the files, and inspect event/security ledgers. Synthetic confirmation does
 not fabricate a screenshot; its receipt explicitly reports that no confirmation screenshot is
 available.
+
+Controlled confirmation stores exact pre-click and confirmation PNG/HTML evidence, a
+copy-on-write v2 archive, and a backend-confirmed receipt. If confirmation is absent, the
+application is visibly `UNKNOWN_AFTER_CLICK` and the UI says “do not retry.”
 
 The autonomous development environment has no Docker binary, so Compose startup and configuration
 parsing must be verified on a Docker-capable host. Its minimal musl runtime downloads Chromium but

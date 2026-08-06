@@ -208,6 +208,17 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
                 </button>
               ))}
             </div>
+            <p
+              className={
+                settings.controlled_submission_enabled
+                  ? "form-message warning"
+                  : "form-message"
+              }
+            >
+              {settings.controlled_submission_enabled
+                ? "Live controlled submission is available only to the isolated submission worker and remains gate-authorized."
+                : "Live controlled submission is disabled at the process boundary."}
+            </p>
             {settings.autonomy_blockers.length ? (
               <>
                 <h3>Autonomy blockers</h3>

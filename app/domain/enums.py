@@ -22,6 +22,7 @@ class ApplicationState(StrEnum):
     SUBMITTING = "submitting"
     SUBMITTED = "submitted"
     CONFIRMED = "confirmed"
+    UNKNOWN_AFTER_CLICK = "unknown_after_click"
     FAILED_RETRYABLE = "failed_retryable"
     FAILED_FINAL = "failed_final"
     CLOSED = "closed"

@@ -14,6 +14,7 @@ import type {
   CandidateExportView,
   CandidateSummary,
   CandidateUpdateResult,
+  ControlledSubmissionExecutionView,
   CVImportDraft,
   DiscoveryRequest,
   DiscoveryResult,
@@ -331,6 +332,10 @@ export const api = {
     request<AuthorizationView>(`/api/applications/${encodeURIComponent(applicationId)}/authorize?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   submitSynthetic: (candidateId: string, applicationId: string, authorizationId: string, idempotencyKey: string) =>
     request<SubmissionResultView>(`/api/applications/${encodeURIComponent(applicationId)}/submit?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId, synthetic_fixture_acknowledged: true }) }),
+  authorizeControlled: (candidateId: string, applicationId: string, idempotencyKey: string) =>
+    request<AuthorizationView>(`/api/applications/${encodeURIComponent(applicationId)}/controlled-authorize?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ approval_acknowledged: true }) }),
+  queueControlledSubmission: (candidateId: string, applicationId: string, authorizationId: string, idempotencyKey: string) =>
+    request<ControlledSubmissionExecutionView>(`/api/applications/${encodeURIComponent(applicationId)}/controlled-submissions?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId }) }),
   artifacts: (candidateId: string, applicationId: string) =>
     request<ArtifactView[]>(`/api/applications/${encodeURIComponent(applicationId)}/artifacts?candidate_id=${encodeURIComponent(candidateId)}`),
   downloadArtifact: async (

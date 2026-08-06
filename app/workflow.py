@@ -116,11 +116,17 @@ VALID_TRANSITIONS: dict[ApplicationState, frozenset[ApplicationState]] = {
         }
     ),
     ApplicationState.READY_TO_SUBMIT: frozenset(
-        {ApplicationState.SUBMITTING, ApplicationState.WITHDRAWN, ApplicationState.FAILED_FINAL}
+        {
+            ApplicationState.SUBMITTING,
+            ApplicationState.HUMAN_ACTION_REQUIRED,
+            ApplicationState.WITHDRAWN,
+            ApplicationState.FAILED_FINAL,
+        }
     ),
     ApplicationState.SUBMITTING: frozenset(
         {
             ApplicationState.SUBMITTED,
+            ApplicationState.UNKNOWN_AFTER_CLICK,
             ApplicationState.FAILED_RETRYABLE,
             ApplicationState.FAILED_FINAL,
         }
@@ -139,6 +145,9 @@ VALID_TRANSITIONS: dict[ApplicationState, frozenset[ApplicationState]] = {
             ApplicationState.INTERVIEW,
             ApplicationState.OFFER,
         }
+    ),
+    ApplicationState.UNKNOWN_AFTER_CLICK: frozenset(
+        {ApplicationState.CONFIRMED, ApplicationState.FAILED_FINAL}
     ),
     ApplicationState.FAILED_RETRYABLE: frozenset(
         {

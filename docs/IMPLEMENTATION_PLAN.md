@@ -82,6 +82,9 @@ not add browser automation or live submission.
   and distinct API, CLI, and settings controls.
 - [x] Integrate Playwright dry runs through a task-kind-isolated worker with immutable attempt
   evidence, lease-fenced finalization, bounded categorized retries, and human escalation.
+- [x] Add a distinct default-disabled controlled Greenhouse worker with exact target/form policy,
+  fresh gate rechecks, a durable irreversible-click boundary, one-use permit, exact confirmation
+  evidence, and terminal no-retry handling for every ambiguous post-boundary outcome.
 - [ ] Complete hosted identity, encrypted secret storage, and deployment-specific interactive
   human-takeover transport.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those

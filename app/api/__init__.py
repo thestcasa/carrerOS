@@ -26,6 +26,9 @@ from app.applications import (
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
+    ControlledAuthorizationRequest,
+    ControlledSubmissionCommand,
+    ControlledSubmissionExecutionView,
     CorrespondenceIngestRequest,
     CorrespondenceView,
     DryRunCommand,
@@ -539,6 +542,49 @@ def _application_router() -> APIRouter:
     ) -> AuthorizationView:
         return service.authorize(candidate_id, application_id, idempotency_key)
 
+    @router.post("/{application_id}/controlled-authorize", response_model=AuthorizationView)
+    def authorize_controlled_application(
+        application_id: UUID,
+        command: ControlledAuthorizationRequest,
+        service: ApplicationServiceDependency,
+        response: Response,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> AuthorizationView:
+        response.headers["Cache-Control"] = "no-store"
+        return service.authorize_controlled(candidate_id, application_id, command, idempotency_key)
+
+    @router.post(
+        "/{application_id}/controlled-submissions",
+        response_model=ControlledSubmissionExecutionView,
+        status_code=202,
+    )
+    def queue_controlled_application_submission(
+        application_id: UUID,
+        command: ControlledSubmissionCommand,
+        service: ApplicationServiceDependency,
+        response: Response,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> ControlledSubmissionExecutionView:
+        response.headers["Cache-Control"] = "no-store"
+        return service.queue_controlled_submission(
+            candidate_id, application_id, command, idempotency_key
+        )
+
+    @router.get(
+        "/{application_id}/controlled-submission",
+        response_model=ControlledSubmissionExecutionView,
+    )
+    def get_controlled_application_submission(
+        application_id: UUID,
+        service: ApplicationServiceDependency,
+        response: Response,
+        candidate_id: Annotated[str, Query(min_length=1)],
+    ) -> ControlledSubmissionExecutionView:
+        response.headers["Cache-Control"] = "no-store"
+        return service.get_controlled_submission(candidate_id, application_id)
+
     @router.post("/{application_id}/submit", response_model=SubmissionResultView)
     def submit_application(
         application_id: UUID,
@@ -793,6 +839,7 @@ def create_app(
         resolved_candidate_service,
         resolved_settings.runtime_root,
         source_verifier=source_verifier,
+        controlled_submission_enabled=resolved_settings.controlled_submission_enabled,
     )
     application.state.health_checker = health_checker or HealthProbe(
         engine, resolved_settings.redis_url

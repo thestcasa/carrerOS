@@ -340,6 +340,14 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
             fixture_base_url="http://127.0.0.1:8090/application",
         )
         assert completed.status == "completed"
+        controlled_denied = client.post(
+            f"/api/applications/{application_id}/controlled-authorize"
+            "?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-controlled-authorize-0001"},
+            json={"approval_acknowledged": True},
+        )
+        assert controlled_denied.status_code == 409
+        assert controlled_denied.json()["error"]["message"] == ("controlled submission is disabled")
         authorization = client.post(
             f"/api/applications/{application_id}/authorize?candidate_id=example_candidate",
             headers={**mutation, "Idempotency-Key": "api-authorize-0001"},

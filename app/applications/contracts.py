@@ -298,6 +298,7 @@ class SettingsView(ApplicationContract):
     maximum_applications_per_company_30_days: int
     browser_session_retention_days: int
     autonomy_blockers: tuple[str, ...]
+    controlled_submission_enabled: bool = False
 
 
 class SettingsUpdate(ApplicationContract):

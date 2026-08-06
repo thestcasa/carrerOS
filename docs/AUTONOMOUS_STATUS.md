@@ -2,10 +2,11 @@
 
 ## Current state
 
-- Build status: **IN PROGRESS**
-- Active phase: controlled-submission architecture and final acceptance audit
+- Build status: **BLOCKED ON EXTERNAL VERIFICATION**
+- Active phase: final acceptance audit complete; all remaining work requires a capable deployment
+  environment or deployment-specific secure takeover transport
 - Branch baseline: `autonomous-build`; append-only answer revision is complete in `eda81f3`, and
-  this checkpoint contains exact-package/accessibility/browser-route coverage
+  this checkpoint completes the default-disabled controlled-submission architecture
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -51,6 +52,17 @@
   applications create a verified copy-on-write v2 archive with confirmation HTML, screenshot,
   receipt, final manifest, and refreshed audit while preserving the pre-submit v1 archive. Gate
   denials occur before archive sealing and missing exact submitted documents fail closed.
+- Controlled Greenhouse execution is implemented as a separate, default-disabled trust zone. Its
+  dedicated worker is absent from default Compose and refuses startup without a process switch.
+  Candidate policy, emergency stop, rates, task lease, source freshness, duplicate identity,
+  browser session, current package, target, and form fingerprint are rechecked immediately before
+  a transaction consumes authorization and records immutable boundary evidence. `SubmissionGate`
+  then issues a short-lived one-use in-memory permit for exactly one same-origin POST. Confirmation
+  archives the exact final page; any post-boundary ambiguity becomes terminal
+  `UNKNOWN_AFTER_CLICK`, opens a human action, and is never retried. Approval and autonomous modes
+  use the same durable queue/gate path. The executor repopulates and rechecks exact snapshot-derived
+  identity values and the hash-verified reviewed CV after reopening the profile, while rejecting
+  every unsupported visible form control. All tests use deterministic fakes without live contact.
 - A restricted Playwright fixture harness now targets an exact allowlisted loopback URL, uses
   isolated persistent browser profiles, validates uploads by candidate path and SHA-256 allowlist,
   captures screenshots and HTML, and never exposes a final-submit click. It permits only the first
@@ -179,51 +191,65 @@
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **280 pytest tests pass** on Python
-  3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
-  installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **71 Vitest tests**, the Next.js production build, and
-  discovery of all **11 Playwright tests** pass for this checkpoint. Browser execution reaches
-  launch and then fails solely because the host lacks `libnspr4.so`.
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **303 pytest tests pass**, with one
+  explicit Chromium skip and five non-failing warnings, on Python 3.14.4. Controlled-path tests
+  prove disabled-by-default behavior, exact-once autonomous confirmation, pre-click policy drift,
+  CAPTCHA/OTP/form/URL denial, human-action escalation, permit-before-POST ordering, explicit safe
+  retry after pre-click denial, ambiguous-click no-retry behavior, and crash-after-boundary stale
+  reconciliation.
+- Frontend: ESLint, strict TypeScript, **72 Vitest tests**, the Next.js production build, and
+  discovery of all **11 Playwright tests** pass for this checkpoint. The component suite covers
+  controlled approval/queue state and the terminal unknown-outcome warning.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `7f2c9d1e4a60`; answer and workflow-task deletion fences survive SQLite table rebuilds,
-  legacy answers backfill conservatively, and models and Alembic report no missing operations.
+  pass through `2a4d7e9f1b30`. The new controlled-attempt table and authorization bindings are
+  present, and models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
   dependencies with `playwright install --with-deps chromium`.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
-The resumed 2026-08-06 session independently reran the recorded host gates after reconciling two
-stale test expectations with the new durable flow: CAPTCHA completion queues a same-session browser
-verification before readiness, and an artifact's revision count remains distinct from the durable
-task-attempt number stored in its metadata. Backend format/lint/type/tests, frontend
-lint/type/tests/build, fresh SQLite migration/check, and newest downgrade/re-upgrade all pass with
-the counts above. Chromium, Docker Compose, PostgreSQL, and Redis remain externally unverified for
-the environment reasons recorded below.
+The 2026-08-06 final host audit reran every available backend and frontend gate, the complete
+fictional deterministic workflow suite, fresh migration/check, and newest downgrade/re-upgrade.
+The controlled adapter was exercised only against fakes. Chromium downloaded under `/tmp`, but the
+minimal host cannot launch it because `libnspr4.so` is unavailable; its default Playwright cache is
+also empty. Docker Compose is unavailable.
 
 ## Remaining definition-of-done gaps
 
-- Verify the real Playwright synthetic fixture test in the Docker image; no real final clicks are
-  authorized in this repository. Add a deployment-specific interactive transport before claiming
-  production same-context human takeover. Timeout mapping, restart/lease recovery, categorized
-  bounded retries, and repeated-failure human escalation are complete in the synthetic worker.
-- Establish hosted authentication/encryption, tenant-bound deletion recovery, and a legal
-  retention/pseudonymization policy for the minimal deletion tombstone before multi-user
-  deployment. Configuration portability is complete; full lifecycle exports intentionally remain
-  non-restorable because replaying operational/database state is outside the safe import boundary.
-- Execute the committed browser E2E/accessibility suite and PostgreSQL/Compose checks on a capable
-  glibc/Docker host; suite discovery and host-runnable axe checks are complete here.
-- DOCX remains optional. Role-specific template/content selection, cover-letter policy, manual
-  rendered-document and free-text-answer revision, cross-source identity, and fresh-source proof
-  are complete.
-- Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
-  worktree clean apart from the preserved user-owned paths.
+- Acceptance criteria 2 and 3 and the pilot checks (20 generated CV comparisons, 10 real job
+  posts, fact validation, and open-decision resolution) require Alessandro's private candidate
+  package and human review. Repository policy forbids copying those real facts into fixtures. The
+  same behavior is covered with the fully configuration-driven fictional candidate, but the named
+  pilot itself must be onboarded privately outside version control.
+- Acceptance criterion 22 cannot be claimed complete until a deployment supplies a secure
+  interactive browser-session takeover broker. The current handshake, immutable evidence,
+  same-session verifier, expiry, cancellation, and fail-closed UI are complete and truthfully label
+  interactive transport unavailable; inventing or exposing a local profile/CDP secret would weaken
+  the boundary.
+- Acceptance criterion 23 still requires execution of the committed Playwright browser suite and
+  PostgreSQL/Redis/Compose stack on a glibc/Docker-capable host. This host lacks Docker and the
+  shared libraries needed to launch downloaded Chromium. Deterministic browser-adapter tests,
+  Playwright suite discovery, host axe coverage, SQLite migrations, and all other gates pass.
+- The real controlled adapter must receive a security review in its deployment environment before
+  its process flag and per-candidate policy are enabled. This build deliberately made no live ATS
+  request or final click; doing so would violate the repository safety boundary rather than close
+  an automated test gap.
+- Milestone 7's provider-neutral classification, status updates, correspondence UI, and interview
+  package are complete with deterministic messages. Live Gmail ingestion still requires an OAuth
+  client, OS-keychain/managed-secret integration, and account authorization not present in this
+  workspace. No automatic reply capability exists.
+
+These external conditions block the named pilot and final mandatory verification claims. All independent,
+safe repository implementation and host-runnable verification work is complete.
 
 ## Resume instructions
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with the default-disabled controlled-submission adapter
-   architecture and remaining hosted productionization gaps.
-4. Run backend, migration, and frontend gates after each coherent phase.
+3. On a capable host, execute the Playwright suite and Docker Compose/PostgreSQL/Redis checks and
+   record exact results without enabling a live final click.
+4. Supply and security-review a deployment-specific interactive takeover broker, then run the
+   same-session takeover acceptance flow with fictional infrastructure.
+5. Privately onboard the pilot candidate, authorize a Gmail OAuth client through an approved secret
+   store, and execute the human-reviewed pilot acceptance set without committing personal data.

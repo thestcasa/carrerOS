@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -658,6 +659,16 @@ class SubmissionAuthorizationRecord(Base, CandidateScopedMixin):
 
     __tablename__ = "submission_authorizations"
     __table_args__ = (
+        CheckConstraint(
+            "execution_mode IN ('synthetic', 'controlled')",
+            name="ck_submission_authorization_execution_mode",
+        ),
+        UniqueConstraint(
+            "candidate_id",
+            "application_id",
+            "authorization_id",
+            name="uq_submission_authorization_scope",
+        ),
         ForeignKeyConstraint(
             ["candidate_id", "application_id"],
             ["applications.candidate_id", "applications.id"],
@@ -675,7 +686,81 @@ class SubmissionAuthorizationRecord(Base, CandidateScopedMixin):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     package_sha256: Mapped[str | None] = mapped_column(String(64))
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="synthetic")
+    adapter: Mapped[str | None] = mapped_column(String(32))
+    target_url_sha256: Mapped[str | None] = mapped_column(String(64))
+    authorized_state_version: Mapped[int | None] = mapped_column(Integer)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ControlledSubmissionAttempt(Base, TimestampMixin, CandidateScopedMixin):
+    """Durable click-boundary state; ambiguous outcomes are terminal for automation."""
+
+    __tablename__ = "controlled_submission_attempts"
+    __table_args__ = (
+        UniqueConstraint("authorization_id", name="uq_controlled_submission_authorization"),
+        UniqueConstraint(
+            "candidate_id", "application_id", "id", name="uq_controlled_submission_scope"
+        ),
+        Index(
+            "uq_controlled_submission_active_application",
+            "candidate_id",
+            "application_id",
+            unique=True,
+            sqlite_where=text("status <> 'denied'"),
+            postgresql_where=text("status <> 'denied'"),
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_controlled_submission_application_scope",
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id", "authorization_id"],
+            [
+                "submission_authorizations.candidate_id",
+                "submission_authorizations.application_id",
+                "submission_authorizations.authorization_id",
+            ],
+            name="fk_controlled_submission_authorization_scope",
+        ),
+        CheckConstraint(
+            "status IN ('prepared', 'click_authorized', 'confirmed', "
+            "'confirmation_missing', 'unknown_after_click', 'denied')",
+            name="ck_controlled_submission_status",
+        ),
+        CheckConstraint(
+            "status IN ('prepared', 'denied') OR "
+            "(form_fingerprint IS NOT NULL AND form_payload_sha256 IS NOT NULL "
+            "AND pre_click_screenshot_sha256 IS NOT NULL "
+            "AND pre_click_page_sha256 IS NOT NULL AND click_nonce_sha256 IS NOT NULL "
+            "AND click_boundary_entered_at IS NOT NULL)",
+            name="ck_controlled_submission_click_evidence",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    authorization_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
+    browser_session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("browser_sessions.id"), nullable=False, index=True
+    )
+    adapter: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    target_origin: Mapped[str] = mapped_column(String(255), nullable=False)
+    form_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    form_payload_sha256: Mapped[str | None] = mapped_column(String(64))
+    package_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="prepared")
+    pre_click_screenshot_sha256: Mapped[str | None] = mapped_column(String(64))
+    pre_click_page_sha256: Mapped[str | None] = mapped_column(String(64))
+    click_nonce_sha256: Mapped[str | None] = mapped_column(String(64))
+    click_boundary_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmation_reference: Mapped[str | None] = mapped_column(String(255))
+    final_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
+    failure_category: Mapped[str | None] = mapped_column(String(64))
 
 
 class CandidateSnapshotRecord(Base, CandidateScopedMixin):

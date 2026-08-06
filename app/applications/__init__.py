@@ -22,6 +22,11 @@ from app.applications.service import (
     ApplicationService,
     ApplicationServiceError,
 )
+from app.submission import (
+    ControlledAuthorizationRequest,
+    ControlledSubmissionCommand,
+    ControlledSubmissionExecutionView,
+)
 
 __all__ = [
     "AnalyticsOverview",
@@ -34,6 +39,9 @@ __all__ = [
     "ApplicationSummary",
     "ArtifactView",
     "AuthorizationView",
+    "ControlledAuthorizationRequest",
+    "ControlledSubmissionCommand",
+    "ControlledSubmissionExecutionView",
     "CorrespondenceIngestRequest",
     "CorrespondenceView",
     "DryRunCommand",

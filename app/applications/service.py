@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -12,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications.contracts import (
@@ -98,12 +99,14 @@ from app.domain.models import (
     CandidateJobScore,
     CandidateSettingsRecord,
     CandidateSnapshotRecord,
+    ControlledSubmissionAttempt,
     GlobalJob,
     HumanAction,
     JobVersion,
     NotificationRecord,
     SecurityEvent,
     SubmissionAuthorizationRecord,
+    WorkflowTask,
 )
 from app.domain.models import CorrespondenceRecord as StoredCorrespondence
 from app.materials import (
@@ -127,7 +130,26 @@ from app.materials.contracts import (
     RenderValidationReport,
 )
 from app.operations import AuthorizationConsumer
-from app.submission_gate import SubmissionGate, SubmissionGateInput
+from app.submission import (
+    ControlledAuthorizationRequest,
+    ControlledGreenhouseFormPayload,
+    ControlledSubmissionCommand,
+    ControlledSubmissionError,
+    ControlledSubmissionExecutionView,
+    ControlledSubmissionExecutor,
+    ControlledSubmissionPreparationRequest,
+    ControlledSubmissionRequest,
+    ControlledSubmissionResult,
+    ControlledSubmissionUncertainError,
+    GreenhouseControlledAdapter,
+    PreparedControlledSubmission,
+)
+from app.submission_gate import (
+    FinalClickPermit,
+    FinalClickProof,
+    SubmissionGate,
+    SubmissionGateInput,
+)
 from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 from app.workflow import VALID_TRANSITIONS
 
@@ -182,6 +204,7 @@ class ApplicationService:
         synthetic_confirmation: Callable[[str, UUID], str | None] | None = None,
         human_action_session_verifier: Callable[[str, UUID, UUID, Path], bool] | None = None,
         source_verifier: JobSourceVerifier | None = None,
+        controlled_submission_enabled: bool = False,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
@@ -195,6 +218,7 @@ class ApplicationService:
         self._consumer = AuthorizationConsumer(session_factory)
         self._correspondence = CorrespondenceService()
         self._source_verifier = source_verifier or ProviderJobSourceVerifier()
+        self._controlled_submission_enabled = controlled_submission_enabled
         self._synthetic_confirmation = synthetic_confirmation or (
             lambda _candidate_id, application_id: f"synthetic-confirmation-{application_id}"
         )
@@ -685,6 +709,680 @@ class ApplicationService:
                 view.model_dump(mode="json"),
             )
             return view
+
+    def authorize_controlled(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        request: ControlledAuthorizationRequest,
+        idempotency_key: str,
+    ) -> AuthorizationView:
+        """Bind a gate authorization to one exact controlled adapter and destination."""
+
+        return self._authorize_controlled(
+            candidate_id,
+            application_id,
+            approval_acknowledged=request.approval_acknowledged,
+            idempotency_key=idempotency_key,
+        )
+
+    def _authorize_controlled(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        *,
+        approval_acknowledged: bool,
+        idempotency_key: str,
+    ) -> AuthorizationView:
+
+        with self._candidates.lifecycle_write(candidate_id):
+            if not self._controlled_submission_enabled:
+                raise ApplicationConflictError("controlled submission is disabled")
+            config = self._candidates.get_config(candidate_id)
+            with self._sessions() as lookup:
+                application = self._application(lookup, candidate_id, application_id)
+                job = lookup.get(GlobalJob, application.job_id)
+                settings = self._settings_record(lookup, candidate_id)
+                target_url = self._validate_controlled_policy(
+                    config,
+                    settings,
+                    job,
+                    approval_acknowledged=approval_acknowledged,
+                )
+            view = self._authorize(candidate_id, application_id, idempotency_key)
+            target_sha256 = hashlib.sha256(target_url.encode()).hexdigest()
+            with self._sessions.begin() as session:
+                application = self._application(session, candidate_id, application_id)
+                record = session.get(SubmissionAuthorizationRecord, view.authorization_id)
+                if (
+                    record is None
+                    or record.candidate_id != candidate_id
+                    or record.application_id != application_id
+                    or record.consumed_at is not None
+                ):
+                    raise ApplicationConflictError("submission authorization was not found")
+                if record.execution_mode not in {"synthetic", "controlled"}:
+                    raise ApplicationConflictError("submission authorization mode is invalid")
+                if record.execution_mode == "controlled" and (
+                    record.adapter != "greenhouse_controlled_v1"
+                    or record.target_url_sha256 != target_sha256
+                    or record.authorized_state_version != application.state_version
+                ):
+                    raise ApplicationConflictError(
+                        "controlled authorization does not match the current application"
+                    )
+                record.execution_mode = "controlled"
+                record.adapter = "greenhouse_controlled_v1"
+                record.target_url_sha256 = target_sha256
+                record.authorized_state_version = application.state_version
+                browser_session = session.scalar(
+                    select(BrowserSession).where(
+                        BrowserSession.candidate_id == candidate_id,
+                        BrowserSession.application_id == application_id,
+                    )
+                )
+                if browser_session is not None:
+                    browser_session.authorization_id = record.authorization_id
+                self._append_same_state_event(
+                    session,
+                    application,
+                    f"{idempotency_key}:controlled",
+                    "CONTROLLED_SUBMISSION_AUTHORIZED",
+                    payload={
+                        "authorization_id": str(record.authorization_id),
+                        "adapter": record.adapter,
+                        "target_url_sha256": target_sha256,
+                    },
+                )
+            return view
+
+    def enqueue_autonomous_controlled_submissions(
+        self, candidate_id: str
+    ) -> tuple[ControlledSubmissionExecutionView, ...]:
+        """Queue ready tested patterns only when autonomous policy is fully enabled."""
+
+        if not self._controlled_submission_enabled:
+            return ()
+        config = self._candidates.get_config(candidate_id)
+        with self._sessions() as session:
+            settings = session.scalar(
+                select(CandidateSettingsRecord).where(
+                    CandidateSettingsRecord.candidate_id == candidate_id
+                )
+            )
+            if (
+                settings is None
+                or settings.automation_mode != "autonomous"
+                or self._settings_view(config, settings).autonomy_blockers
+            ):
+                return ()
+            ready = tuple(
+                session.execute(
+                    select(Application.id, Application.state_version)
+                    .where(
+                        Application.candidate_id == candidate_id,
+                        Application.state == ApplicationState.READY_TO_SUBMIT,
+                        ~exists(
+                            select(ControlledSubmissionAttempt.id).where(
+                                ControlledSubmissionAttempt.candidate_id == candidate_id,
+                                ControlledSubmissionAttempt.application_id == Application.id,
+                            )
+                        ),
+                    )
+                    .order_by(Application.updated_at, Application.id)
+                ).all()
+            )
+        queued: list[ControlledSubmissionExecutionView] = []
+        for application_id, state_version in ready:
+            key_suffix = f"{application_id}:{state_version}"
+            try:
+                authorization = self._authorize_controlled(
+                    candidate_id,
+                    application_id,
+                    approval_acknowledged=False,
+                    idempotency_key=f"autonomous-controlled-authorize:{key_suffix}",
+                )
+                queued.append(
+                    self.queue_controlled_submission(
+                        candidate_id,
+                        application_id,
+                        ControlledSubmissionCommand(
+                            authorization_id=authorization.authorization_id
+                        ),
+                        f"autonomous-controlled-queue:{key_suffix}",
+                    )
+                )
+            except ApplicationConflictError:
+                continue
+        return tuple(queued)
+
+    def queue_controlled_submission(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        command: ControlledSubmissionCommand,
+        idempotency_key: str,
+    ) -> ControlledSubmissionExecutionView:
+        """Queue a one-attempt isolated final-click task without performing browser I/O."""
+
+        if not self._controlled_submission_enabled:
+            raise ApplicationConflictError("controlled submission is disabled")
+        with self._candidates.lifecycle_write(candidate_id), self._sessions.begin() as session:
+            payload = {
+                "application_id": str(application_id),
+                "authorization_id": str(command.authorization_id),
+            }
+            replay, request_sha256, key_sha256 = self._administrative_command_replay(
+                session,
+                candidate_id,
+                "queue_controlled_submission",
+                payload,
+                idempotency_key,
+            )
+            if replay is not None:
+                return ControlledSubmissionExecutionView.model_validate(replay)
+            config = self._candidates.get_config(candidate_id)
+            application = self._application(session, candidate_id, application_id)
+            record = session.get(SubmissionAuthorizationRecord, command.authorization_id)
+            now = datetime.now(UTC)
+            if (
+                record is None
+                or record.candidate_id != candidate_id
+                or record.application_id != application_id
+                or record.execution_mode != "controlled"
+                or record.adapter != "greenhouse_controlled_v1"
+                or record.consumed_at is not None
+                or now < _utc(record.issued_at)
+                or now >= _utc(record.expires_at)
+                or record.authorized_state_version != application.state_version
+            ):
+                raise ApplicationConflictError("controlled authorization is invalid or expired")
+            job = session.get(GlobalJob, application.job_id)
+            settings = self._settings_record(session, candidate_id)
+            target_url = self._validate_controlled_policy(
+                config, settings, job, approval_acknowledged=True
+            )
+            assert job is not None
+            if record.target_url_sha256 is None or not hmac.compare_digest(
+                record.target_url_sha256, hashlib.sha256(target_url.encode()).hexdigest()
+            ):
+                raise ApplicationConflictError("controlled submission target changed")
+            browser_session = session.scalar(
+                select(BrowserSession).where(
+                    BrowserSession.candidate_id == candidate_id,
+                    BrowserSession.application_id == application_id,
+                )
+            )
+            if browser_session is None or browser_session.status != "ready":
+                raise ApplicationConflictError("controlled browser session is not ready")
+            existing = session.scalar(
+                select(ControlledSubmissionAttempt)
+                .where(
+                    ControlledSubmissionAttempt.candidate_id == candidate_id,
+                    ControlledSubmissionAttempt.application_id == application_id,
+                    ControlledSubmissionAttempt.status != "denied",
+                )
+                .order_by(
+                    ControlledSubmissionAttempt.created_at.desc(),
+                    ControlledSubmissionAttempt.id.desc(),
+                )
+                .limit(1)
+            )
+            if existing is not None:
+                if existing.authorization_id != record.authorization_id:
+                    raise ApplicationConflictError(
+                        "application already has a controlled submission execution"
+                    )
+                return self._controlled_submission_view(application, existing)
+            attempt = ControlledSubmissionAttempt(
+                candidate_id=candidate_id,
+                application_id=application_id,
+                authorization_id=record.authorization_id,
+                browser_session_id=browser_session.id,
+                adapter="greenhouse_controlled_v1",
+                target_url=target_url,
+                target_origin=self._safe_origin(target_url),
+                package_sha256=record.package_sha256 or "",
+                status="prepared",
+            )
+            session.add(attempt)
+            session.flush()
+            task = self._tasks.enqueue_in_session(
+                session,
+                candidate_id=candidate_id,
+                kind="controlled_submission",
+                idempotency_key=(
+                    f"controlled:{application_id}:"
+                    f"{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+                ),
+                payload={
+                    "application_id": str(application_id),
+                    "attempt_id": str(attempt.id),
+                },
+                max_attempts=1,
+            )
+            attempt.task_id = task.task_id
+            self._append_same_state_event(
+                session,
+                application,
+                f"controlled-task:{task.task_id}:queued",
+                "CONTROLLED_SUBMISSION_QUEUED",
+                payload={"attempt_id": str(attempt.id), "task_id": str(task.task_id)},
+            )
+            session.flush()
+            view = self._controlled_submission_view(application, attempt)
+            self._append_administrative_command_receipt(
+                session,
+                candidate_id,
+                "queue_controlled_submission",
+                key_sha256,
+                request_sha256,
+                view.model_dump(mode="json"),
+            )
+            return view
+
+    def execute_controlled_submission_task(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        executor: ControlledSubmissionExecutor,
+        now: datetime | None = None,
+    ) -> TaskView:
+        """Prepare, durably arm, and dispatch exactly one controlled final click."""
+
+        if task.kind != "controlled_submission" or task.attempts != 1:
+            raise ApplicationConflictError("controlled submission task lease is invalid")
+        with self._candidates.lifecycle_write(task.candidate_id):
+            return self._execute_controlled_submission_task_locked(
+                queue,
+                task,
+                worker_id=worker_id,
+                executor=executor,
+                now=now,
+            )
+
+    def _execute_controlled_submission_task_locked(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        executor: ControlledSubmissionExecutor,
+        now: datetime | None,
+    ) -> TaskView:
+        started_at = now or datetime.now(UTC)
+        armed = False
+        try:
+            preparation_request, job_id = self._controlled_preparation_request(task)
+            prepared = executor.prepare(preparation_request)
+            self._validate_controlled_preparation(preparation_request, prepared)
+            pre_click_paths = self._store_controlled_pre_click_evidence(
+                preparation_request, prepared
+            )
+            self._revalidate_job(job_id)
+            click_nonce = secrets.token_bytes(32)
+            click_request = self._arm_controlled_submission(
+                queue,
+                task,
+                worker_id=worker_id,
+                preparation_request=preparation_request,
+                prepared=prepared,
+                pre_click_paths=pre_click_paths,
+                click_nonce=click_nonce,
+                now=datetime.now(UTC),
+            )
+            armed = True
+            permit = self._controlled_click_permit(click_request, click_nonce)
+            result = executor.execute(click_request, permit)
+            if result.attempt_id != click_request.attempt_id or not result.confirmation_detected:
+                return self._mark_controlled_unknown(
+                    queue,
+                    task,
+                    worker_id=worker_id,
+                    category="confirmation_missing",
+                    now=datetime.now(UTC),
+                )
+            return self._confirm_controlled_submission(
+                queue,
+                task,
+                worker_id=worker_id,
+                result=result,
+                now=datetime.now(UTC),
+            )
+        except Exception as exc:
+            executor.abort()
+            if isinstance(exc, ControlledSubmissionUncertainError):
+                category = "uncertain_after_click"
+            elif isinstance(exc, ControlledSubmissionError):
+                category = exc.category
+            else:
+                category = type(exc).__name__
+            if armed:
+                return self._mark_controlled_unknown(
+                    queue,
+                    task,
+                    worker_id=worker_id,
+                    category=category,
+                    now=datetime.now(UTC),
+                )
+            return self._deny_controlled_before_click(
+                queue,
+                task,
+                worker_id=worker_id,
+                category=category,
+                human_action_kind=(
+                    exc.human_action_kind if isinstance(exc, ControlledSubmissionError) else None
+                ),
+                now=started_at,
+            )
+
+    def _controlled_preparation_request(
+        self, task: TaskView
+    ) -> tuple[ControlledSubmissionPreparationRequest, UUID]:
+        try:
+            attempt_id = UUID(str(task.payload["attempt_id"]))
+            application_id = UUID(str(task.payload["application_id"]))
+        except (KeyError, ValueError) as exc:
+            raise ApplicationConflictError("controlled submission task payload is invalid") from exc
+        with self._sessions() as session:
+            application = self._application(session, task.candidate_id, application_id)
+            attempt = session.get(ControlledSubmissionAttempt, attempt_id)
+            if (
+                attempt is None
+                or attempt.candidate_id != task.candidate_id
+                or attempt.application_id != application_id
+                or attempt.task_id != task.task_id
+                or attempt.status != "prepared"
+            ):
+                raise ApplicationConflictError("controlled submission attempt is not preparable")
+            review = session.scalar(
+                select(AgentReview)
+                .where(
+                    AgentReview.candidate_id == task.candidate_id,
+                    AgentReview.application_id == application_id,
+                )
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
+                .limit(1)
+            )
+            if review is None:
+                raise ApplicationConflictError("reviewed controlled form package is missing")
+            reviewed_materials = self._reviewed_materials(session, application, review)
+            snapshot_record = self._reviewed_snapshot(session, application, reviewed_materials)
+            snapshot = self._load_candidate_snapshot(application, snapshot_record)
+            try:
+                snapshot_config = CandidateConfig.model_validate_json(snapshot.config_json)
+            except ValueError as exc:
+                raise ApplicationConflictError(
+                    "controlled form candidate snapshot is invalid"
+                ) from exc
+            name_parts = snapshot_config.identity.full_name.split(maxsplit=1)
+            if len(name_parts) != 2 or not all(name_parts):
+                raise ApplicationConflictError(
+                    "controlled Greenhouse submission requires a reviewed first and last name"
+                )
+            rendered_cv = next(
+                artifact
+                for document, artifact in reviewed_materials
+                if document.kind is DocumentKind.CV
+            )
+            return (
+                ControlledSubmissionPreparationRequest(
+                    attempt_id=attempt.id,
+                    candidate_id=task.candidate_id,
+                    application_id=application_id,
+                    authorization_id=attempt.authorization_id,
+                    browser_session_id=attempt.browser_session_id,
+                    target_url=attempt.target_url,
+                    form=ControlledGreenhouseFormPayload(
+                        first_name=name_parts[0],
+                        last_name=name_parts[1],
+                        email=snapshot_config.identity.email,
+                        resume_path=Path(rendered_cv.storage_uri),
+                        resume_sha256=rendered_cv.sha256,
+                    ),
+                ),
+                application.job_id,
+            )
+
+    @staticmethod
+    def _validate_controlled_preparation(
+        request: ControlledSubmissionPreparationRequest,
+        prepared: PreparedControlledSubmission,
+    ) -> None:
+        if (
+            prepared.attempt_id != request.attempt_id
+            or prepared.inspection.target_url != request.target_url
+            or prepared.inspection.human_verification_present
+            or prepared.form_payload_sha256 != request.form.sha256()
+        ):
+            raise ControlledSubmissionError("controlled page preparation changed scope")
+
+    def _arm_controlled_submission(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        preparation_request: ControlledSubmissionPreparationRequest,
+        prepared: PreparedControlledSubmission,
+        pre_click_paths: tuple[Path, Path],
+        click_nonce: bytes,
+        now: datetime,
+    ) -> ControlledSubmissionRequest:
+        with self._sessions.begin() as session:
+            queue.assert_lease_in_session(
+                session,
+                task.task_id,
+                worker_id=worker_id,
+                expected_attempt=task.attempts,
+            )
+            attempt = session.scalar(
+                select(ControlledSubmissionAttempt)
+                .where(ControlledSubmissionAttempt.id == prepared.attempt_id)
+                .with_for_update()
+            )
+            if (
+                attempt is None
+                or attempt.candidate_id != task.candidate_id
+                or attempt.task_id != task.task_id
+                or attempt.status != "prepared"
+            ):
+                raise ApplicationConflictError("controlled submission attempt cannot be armed")
+            application = self._application(session, task.candidate_id, attempt.application_id)
+            record = session.get(SubmissionAuthorizationRecord, attempt.authorization_id)
+            if (
+                record is None
+                or record.candidate_id != task.candidate_id
+                or record.application_id != application.id
+                or record.execution_mode != "controlled"
+                or record.adapter != attempt.adapter
+                or record.consumed_at is not None
+                or now < _utc(record.issued_at)
+                or now >= _utc(record.expires_at)
+                or application.state is not ApplicationState.READY_TO_SUBMIT
+                or record.authorized_state_version != application.state_version
+            ):
+                raise ApplicationConflictError(
+                    "controlled authorization cannot cross click boundary"
+                )
+            config = self._candidates.get_config(task.candidate_id)
+            job = session.get(GlobalJob, application.job_id)
+            settings = self._settings_record(session, task.candidate_id)
+            target_url = self._validate_controlled_policy(
+                config, settings, job, approval_acknowledged=True
+            )
+            assert job is not None
+            target_sha256 = hashlib.sha256(target_url.encode()).hexdigest()
+            if (
+                target_url != attempt.target_url
+                or record.target_url_sha256 is None
+                or not hmac.compare_digest(record.target_url_sha256, target_sha256)
+                or not self._job_is_fresh(job, now, self._SUBMISSION_FRESHNESS)
+            ):
+                raise ApplicationConflictError("controlled submission source changed before click")
+            if application.submission_identity_hash is None:
+                raise ApplicationConflictError("application duplicate identity is missing")
+            duplicate = session.scalar(
+                select(func.count(Application.id)).where(
+                    Application.candidate_id == task.candidate_id,
+                    Application.submission_identity_hash == application.submission_identity_hash,
+                    Application.id != application.id,
+                )
+            )
+            if duplicate:
+                raise ApplicationConflictError("candidate has an equivalent application")
+            review = session.scalar(
+                select(AgentReview)
+                .where(
+                    AgentReview.candidate_id == task.candidate_id,
+                    AgentReview.application_id == application.id,
+                )
+                .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
+                .limit(1)
+            )
+            if review is None:
+                raise ApplicationConflictError("material review is missing")
+            reviewed_materials = self._reviewed_materials(session, application, review)
+            snapshot = self._reviewed_snapshot(session, application, reviewed_materials)
+            upload_hashes = self._browser_upload_hashes(session, application)
+            rendered_cv = next(
+                artifact
+                for _document, artifact in reviewed_materials
+                if artifact.kind == "rendered_cv"
+            )
+            if upload_hashes != (rendered_cv.sha256,):
+                raise ApplicationConflictError("browser upload changed before click")
+            package_sha256 = self._submission_package_sha256(
+                application, reviewed_materials, snapshot, upload_hashes
+            )
+            if (
+                record.package_sha256 is None
+                or not hmac.compare_digest(record.package_sha256, package_sha256)
+                or not hmac.compare_digest(attempt.package_sha256, package_sha256)
+            ):
+                raise ApplicationConflictError("controlled submission package changed")
+            browser_session = session.get(BrowserSession, attempt.browser_session_id)
+            if (
+                browser_session is None
+                or browser_session.candidate_id != task.candidate_id
+                or browser_session.application_id != application.id
+                or browser_session.status != "ready"
+                or browser_session.authorization_id != record.authorization_id
+            ):
+                raise ApplicationConflictError("controlled browser session changed")
+            if settings.emergency_stopped or not self._rate_limits_allow(
+                session, task.candidate_id, job.company, settings, now
+            ):
+                raise ApplicationConflictError("controlled submission policy stopped the click")
+            claimed = session.execute(
+                update(SubmissionAuthorizationRecord)
+                .where(
+                    SubmissionAuthorizationRecord.authorization_id == record.authorization_id,
+                    SubmissionAuthorizationRecord.candidate_id == task.candidate_id,
+                    SubmissionAuthorizationRecord.application_id == application.id,
+                    SubmissionAuthorizationRecord.consumed_at.is_(None),
+                )
+                .values(consumed_at=now)
+                .returning(SubmissionAuthorizationRecord.authorization_id)
+            ).scalar_one_or_none()
+            if claimed is None:
+                raise ApplicationConflictError("controlled authorization was already consumed")
+            screenshot_sha256 = hashlib.sha256(prepared.pre_click_screenshot_png).hexdigest()
+            page_sha256 = hashlib.sha256(prepared.pre_click_page_html).hexdigest()
+            attempt.form_fingerprint = prepared.inspection.form_fingerprint
+            attempt.form_payload_sha256 = prepared.form_payload_sha256
+            attempt.pre_click_screenshot_sha256 = screenshot_sha256
+            attempt.pre_click_page_sha256 = page_sha256
+            attempt.click_nonce_sha256 = hashlib.sha256(click_nonce).hexdigest()
+            attempt.click_boundary_entered_at = now
+            attempt.status = "click_authorized"
+            for kind, path, digest, content_type in (
+                (
+                    "controlled_pre_submit_screenshot",
+                    pre_click_paths[0],
+                    screenshot_sha256,
+                    "image/png",
+                ),
+                (
+                    "controlled_pre_submit_page",
+                    pre_click_paths[1],
+                    page_sha256,
+                    "text/html",
+                ),
+            ):
+                session.add(
+                    ApplicationArtifact(
+                        candidate_id=task.candidate_id,
+                        application_id=application.id,
+                        kind=kind,
+                        version=1,
+                        storage_uri=str(path),
+                        sha256=digest,
+                        content_type=content_type,
+                        immutable=True,
+                        artifact_metadata={
+                            "attempt_id": str(attempt.id),
+                            "click_boundary": "pre_click",
+                        },
+                    )
+                )
+            self._transition(
+                session,
+                application,
+                ApplicationState.SUBMITTING,
+                f"controlled-task:{task.task_id}:armed",
+                "CONTROLLED_SUBMISSION_CLICK_ARMED",
+                payload={
+                    "attempt_id": str(attempt.id),
+                    "authorization_id": str(record.authorization_id),
+                    "form_fingerprint": attempt.form_fingerprint,
+                    "form_payload_sha256": attempt.form_payload_sha256,
+                    "pre_click_screenshot_sha256": screenshot_sha256,
+                    "pre_click_page_sha256": page_sha256,
+                },
+            )
+            session.flush()
+            return ControlledSubmissionRequest(
+                attempt_id=attempt.id,
+                candidate_id=task.candidate_id,
+                application_id=application.id,
+                authorization_id=record.authorization_id,
+                target_url=target_url,
+                package_sha256=package_sha256,
+                form=ControlledGreenhouseFormPayload(
+                    first_name=preparation_request.form.first_name,
+                    last_name=preparation_request.form.last_name,
+                    email=preparation_request.form.email,
+                    resume_path=preparation_request.form.resume_path,
+                    resume_sha256=preparation_request.form.resume_sha256,
+                ),
+                expected_form_payload_sha256=prepared.form_payload_sha256,
+                expected_form_fingerprint=prepared.inspection.form_fingerprint,
+            )
+
+    def _controlled_click_permit(
+        self, request: ControlledSubmissionRequest, click_nonce: bytes
+    ) -> FinalClickPermit:
+        with self._sessions() as session:
+            attempt = session.get(ControlledSubmissionAttempt, request.attempt_id)
+            application = self._application(session, request.candidate_id, request.application_id)
+            record = session.get(SubmissionAuthorizationRecord, request.authorization_id)
+            if attempt is None or record is None:
+                raise ApplicationConflictError("committed click proof is missing")
+            proof = FinalClickProof(
+                candidate_id=request.candidate_id,
+                application_id=request.application_id,
+                authorization_id=request.authorization_id,
+                attempt_id=request.attempt_id,
+                application_state=application.state,
+                attempt_status=attempt.status,
+                authorization_consumed_at=record.consumed_at,
+                click_boundary_entered_at=attempt.click_boundary_entered_at,
+                click_nonce_sha256=attempt.click_nonce_sha256,
+            )
+        return SubmissionGate().issue_final_click_permit(proof, click_nonce)
 
     def revise_material(
         self,
@@ -2032,6 +2730,7 @@ class ApplicationService:
                     SubmissionAuthorizationRecord.candidate_id == candidate_id,
                     SubmissionAuthorizationRecord.application_id == application_id,
                     SubmissionAuthorizationRecord.consumed_at.is_(None),
+                    SubmissionAuthorizationRecord.execution_mode == "synthetic",
                 )
                 .order_by(SubmissionAuthorizationRecord.issued_at.desc())
                 .limit(1)
@@ -2213,6 +2912,8 @@ class ApplicationService:
                 issued_at=authorization.issued_at,
                 expires_at=authorization.expires_at,
                 package_sha256=package_sha256,
+                execution_mode="synthetic",
+                authorized_state_version=application.state_version,
             )
             session.add(record)
             session.add(
@@ -2288,6 +2989,7 @@ class ApplicationService:
                 record is None
                 or record.candidate_id != candidate_id
                 or record.application_id != application_id
+                or record.execution_mode != "synthetic"
             ):
                 raise ApplicationConflictError("submission authorization was not found")
             issued_at = _utc(record.issued_at)
@@ -2307,6 +3009,7 @@ class ApplicationService:
                 record is None
                 or record.candidate_id != candidate_id
                 or record.application_id != application_id
+                or record.execution_mode != "synthetic"
             ):
                 raise ApplicationConflictError("submission authorization was not found")
             if record.consumed_at is not None:
@@ -4946,6 +5649,7 @@ class ApplicationService:
             ApplicationState.HUMAN_ACTION_REQUIRED: "Complete human action",
             ApplicationState.READY_TO_SUBMIT: "Authorize synthetic submission",
             ApplicationState.FAILED_RETRYABLE: "Inspect and retry",
+            ApplicationState.UNKNOWN_AFTER_CLICK: "Do not retry; inspect submission outcome",
         }.get(state, "Inspect details")
 
     @staticmethod
@@ -5217,6 +5921,671 @@ class ApplicationService:
             created_at=record.created_at,
         )
 
+    def get_controlled_submission(
+        self, candidate_id: str, application_id: UUID
+    ) -> ControlledSubmissionExecutionView:
+        self._candidates.get_config(candidate_id)
+        with self._sessions() as session:
+            application = self._application(session, candidate_id, application_id)
+            attempt = session.scalar(
+                select(ControlledSubmissionAttempt)
+                .where(
+                    ControlledSubmissionAttempt.candidate_id == candidate_id,
+                    ControlledSubmissionAttempt.application_id == application_id,
+                )
+                .order_by(
+                    ControlledSubmissionAttempt.created_at.desc(),
+                    ControlledSubmissionAttempt.id.desc(),
+                )
+                .limit(1)
+            )
+            if attempt is None:
+                raise ApplicationNotFoundError("controlled submission was not found")
+            return self._controlled_submission_view(application, attempt)
+
+    def reconcile_stale_controlled_submissions(
+        self,
+        candidate_id: str,
+        *,
+        now: datetime | None = None,
+        grace: timedelta = timedelta(minutes=2),
+    ) -> int:
+        """Turn abandoned click barriers into non-retryable unknown outcomes without clicking."""
+
+        current = now or datetime.now(UTC)
+        cutoff = current - grace
+        with self._candidates.lifecycle_write(candidate_id):
+            with self._sessions() as lookup:
+                attempt_ids = tuple(
+                    lookup.scalars(
+                        select(ControlledSubmissionAttempt.id).where(
+                            ControlledSubmissionAttempt.candidate_id == candidate_id,
+                            ControlledSubmissionAttempt.status == "click_authorized",
+                            ControlledSubmissionAttempt.click_boundary_entered_at <= cutoff,
+                        )
+                    ).all()
+                )
+            reconciled = 0
+            for attempt_id in attempt_ids:
+                receipt_path = (
+                    self._controlled_evidence_directory(candidate_id, attempt_id)
+                    / "unknown_outcome.json"
+                )
+                if not receipt_path.exists():
+                    self._write_controlled_evidence(
+                        receipt_path,
+                        canonical_json_bytes(
+                            {
+                                "attempt_id": str(attempt_id),
+                                "status": "unknown_after_click",
+                                "retryable": False,
+                                "category": "click_worker_abandoned",
+                                "recorded_at": current,
+                            }
+                        ),
+                    )
+                receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+                with self._sessions.begin() as session:
+                    attempt = session.scalar(
+                        select(ControlledSubmissionAttempt)
+                        .where(ControlledSubmissionAttempt.id == attempt_id)
+                        .with_for_update()
+                    )
+                    if (
+                        attempt is None
+                        or attempt.candidate_id != candidate_id
+                        or attempt.status != "click_authorized"
+                        or attempt.click_boundary_entered_at is None
+                        or _utc(attempt.click_boundary_entered_at) > cutoff
+                    ):
+                        continue
+                    application = self._application(session, candidate_id, attempt.application_id)
+                    attempt.status = "unknown_after_click"
+                    attempt.failure_category = "click_worker_abandoned"
+                    attempt.finalized_at = current
+                    attempt.final_evidence_sha256 = receipt_sha256
+                    self._transition(
+                        session,
+                        application,
+                        ApplicationState.UNKNOWN_AFTER_CLICK,
+                        f"controlled-task:{attempt.task_id}:abandoned",
+                        "CONTROLLED_SUBMISSION_OUTCOME_UNKNOWN",
+                        payload={
+                            "attempt_id": str(attempt.id),
+                            "category": "click_worker_abandoned",
+                            "retryable": False,
+                            "receipt_sha256": receipt_sha256,
+                        },
+                    )
+                    session.add(
+                        ApplicationArtifact(
+                            candidate_id=candidate_id,
+                            application_id=application.id,
+                            kind="controlled_submission_unknown_receipt",
+                            version=1,
+                            storage_uri=str(receipt_path),
+                            sha256=receipt_sha256,
+                            content_type="application/json",
+                            immutable=True,
+                            artifact_metadata={
+                                "attempt_id": str(attempt.id),
+                                "backend_confirmed": False,
+                                "retryable": False,
+                            },
+                        )
+                    )
+                    session.add(
+                        HumanAction(
+                            candidate_id=candidate_id,
+                            application_id=application.id,
+                            actor_id="controlled-submission-reconciler",
+                            action=HumanActionKind.PAUSE,
+                            kind="submission_outcome_unknown",
+                            status="pending",
+                            reason="Submission outcome is unknown; do not retry.",
+                            browser_session_id=attempt.browser_session_id,
+                            payload={"attempt_id": str(attempt.id), "retryable": False},
+                        )
+                    )
+                    session.add(
+                        NotificationRecord(
+                            candidate_id=candidate_id,
+                            application_id=application.id,
+                            event_type="submission_outcome_unknown",
+                            channel="dashboard",
+                            message="Submission outcome is unknown; do not retry.",
+                            immediate=True,
+                        )
+                    )
+                    if attempt.task_id is not None:
+                        workflow_task = session.get(WorkflowTask, attempt.task_id)
+                        if workflow_task is not None:
+                            workflow_task.status = "failed"
+                            workflow_task.last_error = "click_worker_abandoned"
+                            workflow_task.last_error_category = "click_worker_abandoned"
+                            workflow_task.last_error_retryable = False
+                            workflow_task.locked_by = None
+                            workflow_task.locked_at = None
+                    reconciled += 1
+            return reconciled
+
+    def _validate_controlled_policy(
+        self,
+        config: CandidateConfig,
+        settings: CandidateSettingsRecord,
+        job: GlobalJob | None,
+        *,
+        approval_acknowledged: bool,
+    ) -> str:
+        if not self._controlled_submission_enabled:
+            raise ApplicationConflictError("controlled submission is disabled")
+        if not config.manifest.workflow.automatic_submission_enabled:
+            raise ApplicationConflictError("candidate automatic submission is disabled")
+        if settings.emergency_stopped:
+            raise ApplicationConflictError("emergency stop is active")
+        if settings.automation_mode not in {"approval_required", "autonomous"}:
+            raise ApplicationConflictError("candidate automation mode denies controlled submission")
+        if settings.automation_mode == "approval_required" and not approval_acknowledged:
+            raise ApplicationConflictError("controlled submission approval is required")
+        if "greenhouse" not in settings.allowed_ats_adapters:
+            raise ApplicationConflictError("Greenhouse is not an allowed ATS adapter")
+        if "greenhouse" not in settings.tested_ats_adapters:
+            raise ApplicationConflictError("Greenhouse has not passed candidate acceptance")
+        if (
+            settings.automation_mode == "autonomous"
+            and self._settings_view(config, settings).autonomy_blockers
+        ):
+            raise ApplicationConflictError("candidate autonomous readiness is blocked")
+        if (
+            job is None
+            or (job.ats_platform or "").casefold() != "greenhouse"
+            or job.application_url is None
+        ):
+            raise ApplicationConflictError("job is not an exact Greenhouse application target")
+        try:
+            return GreenhouseControlledAdapter().validate_target(job.application_url)
+        except ControlledSubmissionError as exc:
+            raise ApplicationConflictError(str(exc)) from exc
+
+    @staticmethod
+    def _safe_origin(target_url: str) -> str:
+        parsed = urlsplit(target_url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in {None, 443}
+        ):
+            raise ApplicationConflictError("controlled submission target origin is unsafe")
+        return f"https://{parsed.hostname}"
+
+    @staticmethod
+    def _controlled_submission_view(
+        application: Application, attempt: ControlledSubmissionAttempt
+    ) -> ControlledSubmissionExecutionView:
+        return ControlledSubmissionExecutionView(
+            attempt_id=attempt.id,
+            application_id=application.id,
+            candidate_id=application.candidate_id,
+            authorization_id=attempt.authorization_id,
+            task_id=attempt.task_id,
+            adapter="greenhouse_controlled_v1",
+            status=attempt.status,
+            application_state=application.state,
+            successful=attempt.status == "confirmed"
+            and application.state is ApplicationState.CONFIRMED,
+            retryable=False,
+            confirmation_reference=attempt.confirmation_reference,
+            click_boundary_entered_at=attempt.click_boundary_entered_at,
+            finalized_at=attempt.finalized_at,
+        )
+
+    def _store_controlled_pre_click_evidence(
+        self,
+        request: ControlledSubmissionPreparationRequest,
+        prepared: PreparedControlledSubmission,
+    ) -> tuple[Path, Path]:
+        directory = self._controlled_evidence_directory(request.candidate_id, request.attempt_id)
+        screenshot_path = directory / "pre_click.png"
+        page_path = directory / "pre_click.html"
+        self._write_controlled_evidence(screenshot_path, prepared.pre_click_screenshot_png)
+        self._write_controlled_evidence(page_path, prepared.pre_click_page_html)
+        return screenshot_path, page_path
+
+    def _controlled_evidence_directory(self, candidate_id: str, attempt_id: UUID) -> Path:
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", candidate_id) is None:
+            raise ApplicationConflictError("controlled evidence candidate scope is invalid")
+        root = self._runtime_root / "candidates" / candidate_id / "controlled-submissions"
+        directory = root / str(attempt_id)
+        for path in (root.parent.parent, root.parent, root, directory):
+            if path.is_symlink():
+                raise ApplicationConflictError("controlled evidence path contains a symlink")
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+        if not directory.resolve().is_relative_to(self._runtime_root):
+            raise ApplicationConflictError("controlled evidence path escaped runtime storage")
+        return directory
+
+    @staticmethod
+    def _write_controlled_evidence(path: Path, content: bytes) -> None:
+        if path.is_symlink() or path.exists():
+            raise ApplicationConflictError("controlled evidence is immutable")
+        path.write_bytes(content)
+        path.chmod(0o600)
+
+    def _deny_controlled_before_click(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        category: str,
+        human_action_kind: str | None,
+        now: datetime,
+    ) -> TaskView:
+        try:
+            attempt_id = UUID(str(task.payload["attempt_id"]))
+        except (KeyError, ValueError):
+            return queue.fail(
+                task.task_id,
+                worker_id=worker_id,
+                category="invalid_controlled_task",
+                retryable=False,
+                now=now,
+            )
+        try:
+            with self._sessions.begin() as session:
+                queue.assert_lease_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    expected_attempt=task.attempts,
+                )
+                attempt = session.get(ControlledSubmissionAttempt, attempt_id)
+                if (
+                    attempt is None
+                    or attempt.candidate_id != task.candidate_id
+                    or attempt.task_id != task.task_id
+                    or attempt.status != "prepared"
+                ):
+                    raise ApplicationConflictError("controlled submission denial scope is invalid")
+                application = self._application(session, task.candidate_id, attempt.application_id)
+                attempt.status = "denied"
+                attempt.failure_category = category[:64]
+                attempt.finalized_at = now
+                event_payload = {
+                    "attempt_id": str(attempt.id),
+                    "category": category[:64],
+                    "human_action_kind": human_action_kind,
+                }
+                if human_action_kind is None:
+                    self._append_same_state_event(
+                        session,
+                        application,
+                        f"controlled-task:{task.task_id}:denied",
+                        "CONTROLLED_SUBMISSION_DENIED_BEFORE_CLICK",
+                        payload=event_payload,
+                    )
+                else:
+                    browser_session = session.get(BrowserSession, attempt.browser_session_id)
+                    if (
+                        browser_session is None
+                        or browser_session.candidate_id != task.candidate_id
+                        or browser_session.application_id != application.id
+                    ):
+                        raise ApplicationConflictError(
+                            "controlled human-action browser session is missing"
+                        )
+                    browser_session.status = "human_action_required"
+                    browser_session.stopped_reason = human_action_kind
+                    self._transition(
+                        session,
+                        application,
+                        ApplicationState.HUMAN_ACTION_REQUIRED,
+                        f"controlled-task:{task.task_id}:human-action",
+                        "CONTROLLED_SUBMISSION_HUMAN_ACTION_REQUIRED",
+                        payload=event_payload,
+                    )
+                    session.add(
+                        HumanAction(
+                            candidate_id=task.candidate_id,
+                            application_id=application.id,
+                            actor_id="controlled-submission-worker",
+                            action=HumanActionKind.PAUSE,
+                            kind=f"controlled_{human_action_kind}",
+                            status="pending",
+                            reason=(
+                                "Controlled submission stopped before click for explicit human "
+                                "review. No final POST was sent."
+                            ),
+                            browser_session_id=browser_session.id,
+                            expires_at=now + timedelta(minutes=15),
+                            payload={**event_payload, "retryable": False},
+                        )
+                    )
+                    session.add(
+                        NotificationRecord(
+                            candidate_id=task.candidate_id,
+                            application_id=application.id,
+                            event_type="controlled_submission_human_action",
+                            channel="dashboard",
+                            message=(
+                                "Controlled submission stopped before click and requires human "
+                                "review."
+                            ),
+                            immediate=True,
+                        )
+                    )
+                return queue.fail_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    category=category[:64],
+                    retryable=False,
+                    now=now,
+                    expected_attempt=task.attempts,
+                )
+        except TaskLeaseLostError:
+            current = queue.get(task.task_id)
+            if current is None:
+                raise
+            return current
+
+    def _mark_controlled_unknown(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        category: str,
+        now: datetime,
+    ) -> TaskView:
+        attempt_id = UUID(str(task.payload["attempt_id"]))
+        receipt_path = (
+            self._controlled_evidence_directory(task.candidate_id, attempt_id)
+            / "unknown_outcome.json"
+        )
+        if not receipt_path.exists():
+            self._write_controlled_evidence(
+                receipt_path,
+                canonical_json_bytes(
+                    {
+                        "attempt_id": str(attempt_id),
+                        "status": "unknown_after_click",
+                        "retryable": False,
+                        "category": category[:64],
+                        "recorded_at": now,
+                    }
+                ),
+            )
+        receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+        try:
+            with self._sessions.begin() as session:
+                queue.assert_lease_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    expected_attempt=task.attempts,
+                )
+                attempt = session.get(ControlledSubmissionAttempt, attempt_id)
+                if (
+                    attempt is None
+                    or attempt.candidate_id != task.candidate_id
+                    or attempt.task_id != task.task_id
+                    or attempt.status != "click_authorized"
+                ):
+                    raise ApplicationConflictError("unknown click outcome scope is invalid")
+                application = self._application(session, task.candidate_id, attempt.application_id)
+                attempt.status = "unknown_after_click"
+                attempt.failure_category = category[:64]
+                attempt.finalized_at = now
+                attempt.final_evidence_sha256 = receipt_sha256
+                self._transition(
+                    session,
+                    application,
+                    ApplicationState.UNKNOWN_AFTER_CLICK,
+                    f"controlled-task:{task.task_id}:unknown",
+                    "CONTROLLED_SUBMISSION_OUTCOME_UNKNOWN",
+                    payload={
+                        "attempt_id": str(attempt.id),
+                        "category": category[:64],
+                        "retryable": False,
+                        "receipt_sha256": receipt_sha256,
+                    },
+                )
+                session.add(
+                    ApplicationArtifact(
+                        candidate_id=task.candidate_id,
+                        application_id=application.id,
+                        kind="controlled_submission_unknown_receipt",
+                        version=1,
+                        storage_uri=str(receipt_path),
+                        sha256=receipt_sha256,
+                        content_type="application/json",
+                        immutable=True,
+                        artifact_metadata={
+                            "attempt_id": str(attempt.id),
+                            "backend_confirmed": False,
+                            "retryable": False,
+                        },
+                    )
+                )
+                session.add(
+                    HumanAction(
+                        candidate_id=task.candidate_id,
+                        application_id=application.id,
+                        actor_id="controlled-submission-worker",
+                        action=HumanActionKind.PAUSE,
+                        kind="submission_outcome_unknown",
+                        status="pending",
+                        reason="Submission outcome is unknown; do not retry.",
+                        browser_session_id=attempt.browser_session_id,
+                        payload={"attempt_id": str(attempt.id), "retryable": False},
+                    )
+                )
+                session.add(
+                    NotificationRecord(
+                        candidate_id=task.candidate_id,
+                        application_id=application.id,
+                        event_type="submission_outcome_unknown",
+                        channel="dashboard",
+                        message="Submission outcome is unknown; do not retry.",
+                        immediate=True,
+                    )
+                )
+                return queue.fail_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    category=category[:64],
+                    retryable=False,
+                    now=now,
+                    expected_attempt=task.attempts,
+                )
+        except TaskLeaseLostError:
+            current = queue.get(task.task_id)
+            if current is None:
+                raise
+            return current
+
+    def _confirm_controlled_submission(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        result: ControlledSubmissionResult,
+        now: datetime,
+    ) -> TaskView:
+        if result.confirmation_reference is None:
+            raise ApplicationConflictError("controlled confirmation reference is missing")
+        attempt_id = UUID(str(task.payload["attempt_id"]))
+        evidence_directory = self._controlled_evidence_directory(task.candidate_id, attempt_id)
+        screenshot_path = evidence_directory / "confirmation.png"
+        page_path = evidence_directory / "confirmation.html"
+        self._write_controlled_evidence(screenshot_path, result.screenshot_png)
+        self._write_controlled_evidence(page_path, result.final_page_html)
+        screenshot_sha256 = hashlib.sha256(result.screenshot_png).hexdigest()
+        page_sha256 = hashlib.sha256(result.final_page_html).hexdigest()
+        final_evidence_sha256 = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "confirmation_reference": result.confirmation_reference,
+                    "screenshot_sha256": screenshot_sha256,
+                    "page_sha256": page_sha256,
+                }
+            )
+        ).hexdigest()
+        with self._sessions.begin() as session:
+            queue.assert_lease_in_session(
+                session,
+                task.task_id,
+                worker_id=worker_id,
+                expected_attempt=task.attempts,
+            )
+            attempt = session.get(ControlledSubmissionAttempt, attempt_id)
+            if (
+                attempt is None
+                or attempt.candidate_id != task.candidate_id
+                or attempt.task_id != task.task_id
+                or attempt.status != "click_authorized"
+                or result.attempt_id != attempt.id
+                or self._safe_origin(result.final_url) != attempt.target_origin
+            ):
+                raise ApplicationConflictError("controlled confirmation scope is invalid")
+            application = self._application(session, task.candidate_id, attempt.application_id)
+            if application.state is not ApplicationState.SUBMITTING:
+                raise ApplicationConflictError("controlled application is not submitting")
+            self._transition(
+                session,
+                application,
+                ApplicationState.SUBMITTED,
+                f"controlled-task:{task.task_id}:submitted",
+                "CONTROLLED_APPLICATION_SUBMITTED",
+                payload={
+                    "attempt_id": str(attempt.id),
+                    "authorization_id": str(attempt.authorization_id),
+                },
+            )
+            application.confirmation_reference = result.confirmation_reference
+            application.submitted_at = now
+            application.outcome = ApplicationOutcome.SUBMITTED
+            self._transition(
+                session,
+                application,
+                ApplicationState.CONFIRMED,
+                f"controlled-task:{task.task_id}:confirmed",
+                "SUBMISSION_CONFIRMED",
+                payload={
+                    "attempt_id": str(attempt.id),
+                    "authorization_id": str(attempt.authorization_id),
+                    "confirmation_reference": result.confirmation_reference,
+                    "backend_confirmed": True,
+                    "screenshot_sha256": screenshot_sha256,
+                    "page_sha256": page_sha256,
+                },
+            )
+            attempt.status = "confirmed"
+            attempt.confirmation_reference = result.confirmation_reference
+            attempt.final_evidence_sha256 = final_evidence_sha256
+            attempt.finalized_at = now
+            browser_session = session.get(BrowserSession, attempt.browser_session_id)
+            if browser_session is not None:
+                browser_session.status = "confirmed"
+            if application.archive_uri is None:
+                raise ApplicationConflictError("pre-submit archive is missing")
+            events = session.scalars(
+                select(ApplicationEvent)
+                .where(
+                    ApplicationEvent.candidate_id == task.candidate_id,
+                    ApplicationEvent.application_id == application.id,
+                )
+                .order_by(ApplicationEvent.occurred_at, ApplicationEvent.id)
+            ).all()
+            pre_submit_archive = Path(application.archive_uri)
+            confirmed_archive = self._archives.finalize_confirmed(
+                pre_submit_archive,
+                confirmation_reference=result.confirmation_reference,
+                submitted_at=now,
+                event_log=[
+                    {
+                        "event_type": item.event_type,
+                        "occurred_at": item.occurred_at,
+                        "payload": item.payload,
+                    }
+                    for item in events
+                ],
+                synthetic_only=False,
+                confirmation_screenshot=result.screenshot_png,
+                final_page_snapshot=result.final_page_html,
+            )
+            application.archive_uri = str(confirmed_archive)
+            confirmed_files = {
+                "manifest.json": ("archive_manifest", 2, "application/json"),
+                "submission/receipt.json": (
+                    "submission_receipt",
+                    2,
+                    "application/json",
+                ),
+                "submission/confirmation.html": (
+                    "submission_confirmation",
+                    1,
+                    "text/html",
+                ),
+                "submission/confirmation_screenshot.png": (
+                    "submission_confirmation_screenshot",
+                    1,
+                    "image/png",
+                ),
+                "submission/final_page_snapshot.html": (
+                    "submission_final_page_snapshot",
+                    2,
+                    "text/html",
+                ),
+            }
+            for relative_path, (kind, version, content_type) in confirmed_files.items():
+                path = confirmed_archive / relative_path
+                session.add(
+                    ApplicationArtifact(
+                        candidate_id=task.candidate_id,
+                        application_id=application.id,
+                        kind=kind,
+                        version=version,
+                        storage_uri=str(path),
+                        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                        content_type=content_type,
+                        immutable=True,
+                        artifact_metadata={
+                            "attempt_id": str(attempt.id),
+                            "archive_uri": str(confirmed_archive),
+                            "pre_submit_archive_uri": str(pre_submit_archive),
+                            "relative_path": relative_path,
+                            "backend_confirmed": True,
+                            "synthetic_only": False,
+                        },
+                    )
+                )
+            session.add(
+                NotificationRecord(
+                    candidate_id=task.candidate_id,
+                    application_id=application.id,
+                    event_type="submission_confirmed",
+                    channel="dashboard",
+                    message="Controlled Greenhouse submission was backend-confirmed.",
+                    immediate=True,
+                )
+            )
+            return queue.complete_in_session(
+                session,
+                task.task_id,
+                worker_id=worker_id,
+                now=now,
+                expected_attempt=task.attempts,
+            )
+
     @staticmethod
     def _default_settings_record(candidate_id: str) -> CandidateSettingsRecord:
         return CandidateSettingsRecord(
@@ -5258,29 +6627,57 @@ class ApplicationService:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         submitted_today = (
             session.scalar(
-                select(func.count(Application.id)).where(
+                select(func.count(func.distinct(Application.id)))
+                .outerjoin(
+                    ControlledSubmissionAttempt,
+                    (ControlledSubmissionAttempt.candidate_id == Application.candidate_id)
+                    & (ControlledSubmissionAttempt.application_id == Application.id),
+                )
+                .where(
                     Application.candidate_id == candidate_id,
-                    Application.submitted_at >= day_start,
+                    or_(
+                        Application.submitted_at >= day_start,
+                        ControlledSubmissionAttempt.click_boundary_entered_at >= day_start,
+                    ),
                 )
             )
             or 0
         )
         submitted_week = (
             session.scalar(
-                select(func.count(Application.id)).where(
+                select(func.count(func.distinct(Application.id)))
+                .outerjoin(
+                    ControlledSubmissionAttempt,
+                    (ControlledSubmissionAttempt.candidate_id == Application.candidate_id)
+                    & (ControlledSubmissionAttempt.application_id == Application.id),
+                )
+                .where(
                     Application.candidate_id == candidate_id,
-                    Application.submitted_at >= now - timedelta(days=7),
+                    or_(
+                        Application.submitted_at >= now - timedelta(days=7),
+                        ControlledSubmissionAttempt.click_boundary_entered_at
+                        >= now - timedelta(days=7),
+                    ),
                 )
             )
             or 0
         )
         submitted_company = (
             session.scalar(
-                select(func.count(Application.id))
+                select(func.count(func.distinct(Application.id)))
                 .join(GlobalJob, GlobalJob.id == Application.job_id)
+                .outerjoin(
+                    ControlledSubmissionAttempt,
+                    (ControlledSubmissionAttempt.candidate_id == Application.candidate_id)
+                    & (ControlledSubmissionAttempt.application_id == Application.id),
+                )
                 .where(
                     Application.candidate_id == candidate_id,
-                    Application.submitted_at >= now - timedelta(days=30),
+                    or_(
+                        Application.submitted_at >= now - timedelta(days=30),
+                        ControlledSubmissionAttempt.click_boundary_entered_at
+                        >= now - timedelta(days=30),
+                    ),
                     func.lower(GlobalJob.company) == company.casefold(),
                 )
             )
@@ -5417,8 +6814,9 @@ class ApplicationService:
             )
         )
 
-    @staticmethod
-    def _settings_view(config: CandidateConfig, record: CandidateSettingsRecord) -> SettingsView:
+    def _settings_view(
+        self, config: CandidateConfig, record: CandidateSettingsRecord
+    ) -> SettingsView:
         blockers: list[str] = []
         if not config.manifest.validation.profile_approved:
             blockers.append("profile_not_approved")
@@ -5450,4 +6848,5 @@ class ApplicationService:
             ),
             browser_session_retention_days=record.browser_session_retention_days,
             autonomy_blockers=tuple(blockers),
+            controlled_submission_enabled=self._controlled_submission_enabled,
         )

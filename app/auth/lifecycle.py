@@ -164,6 +164,10 @@ class CandidateLifecycleService:
                 self._runtime_root / "candidates" / candidate_id / "browser_evidence",
                 "browser_attempt_evidence",
             ),
+            (
+                self._runtime_root / "candidates" / candidate_id / "controlled-submissions",
+                "controlled_submission_evidence",
+            ),
         )
         entries: list[CandidateExportEntry] = []
         total_size = 0

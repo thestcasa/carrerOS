@@ -62,7 +62,14 @@ export default function OverviewPage() {
           <p className="eyebrow">Hard safety boundary</p>
           <strong>SubmissionGate defaults to deny</strong>
           <p>Only the deterministic gate may issue submission authorization. LLM workers and browser automation cannot override it.</p>
-          <div className="control-row"><span>Live submission</span><StatusPill status="BLOCKED" /></div>
+          <div className="control-row">
+            <span>Live submission</span>
+            <StatusPill
+              status={
+                settings?.controlled_submission_enabled ? "READY_WITH_WARNINGS" : "BLOCKED"
+              }
+            />
+          </div>
         </div>
       </section>
 

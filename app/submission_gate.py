@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -58,6 +60,7 @@ class _AuthorizationIssuer:
 
 
 _GATE_ISSUER = _AuthorizationIssuer()
+_CLICK_ISSUER = _AuthorizationIssuer()
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -94,6 +97,72 @@ class GateDecision:
     permitted: bool
     reasons: tuple[str, ...]
     authorization: SubmissionAuthorization | None
+
+
+class FinalClickPermit:
+    """Ephemeral, one-use capability that is never persisted or serialized."""
+
+    __slots__ = (
+        "_consumed",
+        "application_id",
+        "attempt_id",
+        "authorization_id",
+        "candidate_id",
+        "expires_at",
+    )
+
+    def __init__(
+        self,
+        *,
+        issuer: Any,
+        candidate_id: str,
+        application_id: UUID,
+        authorization_id: UUID,
+        attempt_id: UUID,
+        expires_at: datetime,
+    ) -> None:
+        if issuer is not _CLICK_ISSUER:
+            raise PermissionError("only SubmissionGate may issue a final click permit")
+        self.candidate_id = candidate_id
+        self.application_id = application_id
+        self.authorization_id = authorization_id
+        self.attempt_id = attempt_id
+        self.expires_at = expires_at
+        self._consumed = False
+
+    def consume(
+        self,
+        *,
+        candidate_id: str,
+        application_id: UUID,
+        authorization_id: UUID,
+        attempt_id: UUID,
+    ) -> None:
+        if self._consumed:
+            raise PermissionError("final click permit was already consumed")
+        if datetime.now(UTC) >= self.expires_at:
+            raise PermissionError("final click permit expired")
+        if (
+            self.candidate_id != candidate_id
+            or self.application_id != application_id
+            or self.authorization_id != authorization_id
+            or self.attempt_id != attempt_id
+        ):
+            raise PermissionError("final click permit scope does not match the request")
+        self._consumed = True
+
+
+@dataclass(frozen=True, slots=True)
+class FinalClickProof:
+    candidate_id: str
+    application_id: UUID
+    authorization_id: UUID
+    attempt_id: UUID
+    application_state: ApplicationState
+    attempt_status: str
+    authorization_consumed_at: datetime | None
+    click_boundary_entered_at: datetime | None
+    click_nonce_sha256: str | None
 
 
 class SubmissionGate:
@@ -178,3 +247,35 @@ class SubmissionGate:
             expires_at=now + self._authorization_ttl,
         )
         return GateDecision(permitted=True, reasons=(), authorization=authorization)
+
+    def issue_final_click_permit(
+        self,
+        proof: FinalClickProof,
+        click_nonce: bytes,
+        *,
+        permit_ttl: timedelta = timedelta(seconds=30),
+    ) -> FinalClickPermit:
+        """Issue only from a committed, consumed, click-armed durable proof."""
+
+        if permit_ttl <= timedelta(0) or permit_ttl > timedelta(minutes=1):
+            raise ValueError("final click permit TTL must be positive and at most one minute")
+        if len(click_nonce) != 32:
+            raise PermissionError("final click nonce is invalid")
+        nonce_sha256 = hashlib.sha256(click_nonce).hexdigest()
+        if (
+            proof.application_state is not ApplicationState.SUBMITTING
+            or proof.attempt_status != "click_authorized"
+            or proof.authorization_consumed_at is None
+            or proof.click_boundary_entered_at is None
+            or proof.click_nonce_sha256 is None
+            or not hmac.compare_digest(proof.click_nonce_sha256, nonce_sha256)
+        ):
+            raise PermissionError("durable click authorization proof is invalid")
+        return FinalClickPermit(
+            issuer=_CLICK_ISSUER,
+            candidate_id=proof.candidate_id,
+            application_id=proof.application_id,
+            authorization_id=proof.authorization_id,
+            attempt_id=proof.attempt_id,
+            expires_at=datetime.now(UTC) + permit_ttl,
+        )

@@ -9,7 +9,10 @@ vi.mock("@/lib/api", () => ({
     application: vi.fn(),
     artifacts: vi.fn(),
     authorize: vi.fn(),
+    authorizeControlled: vi.fn(),
+    queueControlledSubmission: vi.fn(),
     submitSynthetic: vi.fn(),
+    settings: vi.fn(),
     dryRun: vi.fn(),
     applicationCommand: vi.fn(),
     reviseMaterial: vi.fn(),
@@ -151,6 +154,22 @@ describe("ApplicationPageClient", () => {
     vi.mocked(api.application).mockReset();
     vi.mocked(api.reviseMaterial).mockReset();
     vi.mocked(api.reviseAnswer).mockReset();
+    vi.mocked(api.settings).mockResolvedValue({
+      candidate_id: "example_candidate",
+      automation_mode: "approval_required",
+      discovery_enabled: true,
+      emergency_stopped: false,
+      allowed_ats_adapters: ["greenhouse"],
+      tested_ats_adapters: ["greenhouse"],
+      dry_run_acceptance_passed: true,
+      explicit_autonomy_confirmation: false,
+      maximum_applications_per_day: 5,
+      maximum_applications_per_week: 20,
+      maximum_applications_per_company_30_days: 3,
+      browser_session_retention_days: 30,
+      autonomy_blockers: ["explicit_confirmation_missing"],
+      controlled_submission_enabled: false,
+    });
     vi.mocked(api.artifacts).mockResolvedValue([]);
     vi.mocked(api.application)
       .mockResolvedValueOnce(ready)
@@ -220,6 +239,56 @@ describe("ApplicationPageClient", () => {
     expect(vi.mocked(api.submitSynthetic).mock.calls[1][3]).toBe(
       vi.mocked(api.submitSynthetic).mock.calls[0][3],
     );
+  });
+
+  it("queues the isolated controlled worker when live submission is explicitly enabled", async () => {
+    vi.mocked(api.settings).mockResolvedValue({
+      ...(await api.settings("example_candidate")),
+      controlled_submission_enabled: true,
+    });
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application)
+      .mockResolvedValueOnce(ready)
+      .mockResolvedValueOnce({
+        ...ready,
+        last_event: "CONTROLLED_SUBMISSION_QUEUED",
+      });
+    vi.mocked(api.authorizeControlled).mockResolvedValue({
+      authorization_id: "00000000-0000-0000-0000-000000000334",
+      application_id: ready.application_id,
+      candidate_id: ready.candidate_id,
+      workflow_state: "ready_to_submit",
+      issued_at: "2026-08-05T10:00:00Z",
+      expires_at: "2026-08-05T10:05:00Z",
+    });
+    vi.mocked(api.queueControlledSubmission).mockResolvedValue({
+      attempt_id: "00000000-0000-0000-0000-000000000335",
+      application_id: ready.application_id,
+      candidate_id: ready.candidate_id,
+      authorization_id: "00000000-0000-0000-0000-000000000334",
+      task_id: "00000000-0000-0000-0000-000000000336",
+      adapter: "greenhouse_controlled_v1",
+      status: "prepared",
+      application_state: "ready_to_submit",
+      successful: false,
+      retryable: false,
+      confirmation_reference: null,
+      click_boundary_entered_at: null,
+      finalized_at: null,
+    });
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "approve controlled submission" }),
+    );
+
+    await waitFor(() => expect(api.queueControlledSubmission).toHaveBeenCalledOnce());
+    expect(api.submitSynthetic).not.toHaveBeenCalled();
   });
 
   it("shows the exact rendered draft and its structural validation metadata", async () => {

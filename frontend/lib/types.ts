@@ -356,6 +356,7 @@ export type ApplicationState =
   | "submitting"
   | "submitted"
   | "confirmed"
+  | "unknown_after_click"
   | "failed_retryable"
   | "failed_final"
   | "closed"
@@ -474,6 +475,28 @@ export interface ApplicationDetail extends ApplicationSummary {
   material_policy: MaterialPolicy | null;
 }
 
+export interface ControlledSubmissionExecutionView {
+  attempt_id: string;
+  application_id: string;
+  candidate_id: string;
+  authorization_id: string;
+  task_id: string | null;
+  adapter: "greenhouse_controlled_v1";
+  status:
+    | "prepared"
+    | "click_authorized"
+    | "confirmed"
+    | "confirmation_missing"
+    | "unknown_after_click"
+    | "denied";
+  application_state: ApplicationState;
+  successful: boolean;
+  retryable: false;
+  confirmation_reference: string | null;
+  click_boundary_entered_at: string | null;
+  finalized_at: string | null;
+}
+
 export interface CorrespondenceView {
   correspondence_id: string;
   candidate_id: string;
@@ -573,6 +596,7 @@ export interface SettingsView {
   maximum_applications_per_company_30_days: number;
   browser_session_retention_days: number;
   autonomy_blockers: string[];
+  controlled_submission_enabled?: boolean;
 }
 
 export interface SettingsUpdate {
