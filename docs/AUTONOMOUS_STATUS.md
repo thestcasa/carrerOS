@@ -3,9 +3,10 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: validate and commit isolated browser-worker evidence, then implement remaining
-  role-aware material policy and answer revision
-- Branch baseline: `autonomous-build`; latest completed slice is safe configuration portability
+- Active phase: complete Milestone 2 runtime agent/schema gaps, then remaining role-aware material
+  policy and answer revision
+- Branch baseline: `autonomous-build`; latest completed slice is durable isolated browser evidence
+  (`b1824cc`)
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
@@ -129,13 +130,20 @@
   outputs must use exact session-relative screenshot/HTML paths opened with `O_NOFOLLOW`, stale
   attempt evidence is discarded after lease loss, and immutable attempt evidence is included in
   bounded candidate lifecycle exports.
+- Runtime job analysis now invokes a provider-neutral `JobAnalysisAgent` implementation with a
+  redacted candidate scoring context. Candidate/job/policy/version hashes and strict correlation
+  are persisted with provider/model/prompt metadata, while deterministic recomputation remains
+  authoritative for classification, blockers, score, threshold, and proposed action. Injection-
+  blocked jobs never invoke the agent, and failures or mismatches persist no partial analysis.
+- Discovery UI mutations retain their idempotency key across uncertain manual-discovery,
+  source-create, and source-toggle responses and rotate it only after backend confirmation.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **259 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **263 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **52 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **54 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `f3c5d8e9012a`; workflow-task deletion fences are present after the table rebuild and

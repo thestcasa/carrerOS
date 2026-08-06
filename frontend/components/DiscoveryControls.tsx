@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ApiError, api } from "@/lib/api";
 import type { AtsPlatform, DiscoveryResult, DiscoverySourceView, JsonObject } from "@/lib/types";
@@ -26,6 +26,16 @@ export function DiscoveryControls({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<DiscoverySourceView[] | null>(null);
+  const commandKeys = useRef(new Map<string, string>());
+
+  function replayKey(operation: string, payload: object): [string, string] {
+    const identity = `${candidateId}:${operation}:${JSON.stringify(payload)}`;
+    const existing = commandKeys.current.get(identity);
+    if (existing) return [identity, existing];
+    const created = idempotencyKey();
+    commandKeys.current.set(identity, created);
+    return [identity, created];
+  }
 
   useEffect(() => {
     let active = true;
@@ -53,11 +63,17 @@ export function DiscoveryControls({
       return;
     }
     setBusy(true);
+    const input = {
+      candidate_id: candidateId,
+      platform,
+      company,
+      company_domain: companyDomain,
+      payloads,
+    };
+    const [identity, key] = replayKey("manual-discovery", input);
     try {
-      const result = await api.discoverJobs(
-        { candidate_id: candidateId, platform, company, company_domain: companyDomain, payloads },
-        idempotencyKey(),
-      );
+      const result = await api.discoverJobs(input, key);
+      commandKeys.current.delete(identity);
       setMessage(`${result.discovered} new or changed; ${result.unchanged} unchanged.`);
       onComplete(result);
     } catch (reason) {
@@ -69,15 +85,24 @@ export function DiscoveryControls({
 
   async function schedule() {
     setBusy(true); setError(null);
+    const input = { provider: platform, company, company_domain: companyDomain, board_token: boardToken, cadence_minutes: cadenceMinutes, enabled: true };
+    const [identity, key] = replayKey("create-source", input);
     try {
-      await api.createDiscoverySource(candidateId, { provider: platform, company, company_domain: companyDomain, board_token: boardToken, cadence_minutes: cadenceMinutes, enabled: true }, idempotencyKey());
-      setSources(await api.discoverySources(candidateId));
+      const created = await api.createDiscoverySource(candidateId, input, key);
+      commandKeys.current.delete(identity);
+      setSources((current) => [...(current ?? []).filter((source) => source.source_id !== created.source_id), created]);
     } catch (reason) { setError(reason instanceof ApiError ? `${reason.code}: ${reason.message}` : "Source configuration failed safely."); } finally { setBusy(false); }
   }
 
   async function toggleSource(source: DiscoverySourceView) {
     setBusy(true); setError(null);
-    try { await api.updateDiscoverySource(candidateId, source.source_id, { enabled: !source.enabled }, idempotencyKey()); setSources(await api.discoverySources(candidateId)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Source update failed safely."); } finally { setBusy(false); }
+    const input = { enabled: !source.enabled };
+    const [identity, key] = replayKey(`update-source:${source.source_id}`, input);
+    try {
+      const updated = await api.updateDiscoverySource(candidateId, source.source_id, input, key);
+      commandKeys.current.delete(identity);
+      setSources((current) => (current ?? []).map((item) => item.source_id === updated.source_id ? updated : item));
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Source update failed safely."); } finally { setBusy(false); }
   }
 
   return (

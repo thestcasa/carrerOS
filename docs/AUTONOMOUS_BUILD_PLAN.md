@@ -298,15 +298,23 @@ import command key across uncertain failures.
 
 ### Current execution checkpoint
 
-1. Validate and integrate the inherited browser-worker attempt-evidence slice; commit it only when
-   backend, frontend, and migration gates pass.
-2. Implement the remaining Milestone 3 policy surface as small end-to-end slices: role-specific
+1. [Complete in `b1824cc`] Validate and integrate the inherited browser-worker attempt-evidence
+   slice after backend, frontend, migration, and security gates pass.
+2. Complete the earliest local Milestone 2 gaps: broaden the normalized job contract to the
+   specification fields and route runtime job analysis through a provider-neutral, strictly typed
+   `JobAnalysisAgent` boundary with a deterministic local provider.
+3. Implement the remaining Milestone 3 policy surface as small end-to-end slices: role-specific
    template/content selection, configuration-driven cover-letter inclusion, then append-only
    free-text answer revision with backend-derived provenance and review.
-3. Add the missing browser route/accessibility-critical test layer using deterministic local
+4. Add the missing browser route/accessibility-critical test layer using deterministic local
    fixtures where the host permits it; document only genuinely external Chromium/Compose limits.
-4. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
+5. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
    product/API/UI/documentation gaps, and run the full fictional workflow before final commits.
+
+Runtime agent routing is complete: the deterministic provider receives a minimal scoring-only
+candidate context, all identities are content/version bound, and final scoring/blockers remain an
+independent deterministic service decision. The remaining work in checkpoint 2 is the normalized
+job schema/persistence/API expansion.
 
 ## Conservative decisions
 

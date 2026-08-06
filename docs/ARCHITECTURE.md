@@ -198,6 +198,14 @@ global job to receive different classifications, scores, evidence, blockers, and
 for different candidate configurations. Candidate thresholds and weights remain configuration,
 not engine constants.
 
+Runtime analysis crosses the `JobAnalysisAgent` protocol through a stateless
+`DeterministicJobAnalysisAgent`. The request contains a strict least-privilege scoring context—not
+identity, contact, legal, approved-answer, document, or secret data—and is bound to candidate
+profile, job version, job payload, scoring policy, and canonical snapshot hashes. Response
+correlation, dimensions, weights, totals, and threshold consistency fail closed. The service
+independently recomputes authoritative classification, hard blockers, score, and proposed action;
+agent output is bounded explanatory metadata and cannot relax policy or authorize submission.
+
 Candidate inbox state is isolated in `candidate_job_decisions`. Every analyze, verify, shortlist,
 or skip mutation records a durable `candidate_job_commands` receipt keyed by candidate and caller
 idempotency key; discovery has its own durable receipt. Reuse with different input fails with a

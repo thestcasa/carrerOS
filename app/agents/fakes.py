@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.agents.contracts import (
     DocumentGenerationRequest,
@@ -28,7 +29,8 @@ class FakeJobAnalysisAgent:
             ScoringDimension(
                 name=name,
                 score=self.score,
-                weight=weight,
+                weight=Decimal(str(weight)),
+                contribution=Decimal(self.score) * Decimal(str(weight)),
                 rationale=f"Deterministic fake score for {name}.",
                 evidence_ids=self.evidence_ids,
             )
@@ -40,6 +42,13 @@ class FakeJobAnalysisAgent:
             total_score=self.score,
             meets_threshold=self.score >= request.application_threshold,
             dimensions=dimensions,
+            job_id=request.job_id,
+            scoring_version=request.scoring_version,
+            candidate_snapshot_sha256=request.candidate_snapshot_sha256,
+            job_payload_sha256=request.job_payload_sha256,
+            job_snapshot_sha256=request.job_snapshot_sha256,
+            policy_sha256=request.policy_sha256,
+            application_threshold=request.application_threshold,
         )
 
 

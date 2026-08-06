@@ -6,12 +6,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents import DeterministicJobAnalysisAgent, JobAnalysisAgent
+from app.agents.contracts import JobAnalysisRequest, JobAnalysisResponse
+from app.agents.job_analysis import analysis_policy_sha256, canonical_json, content_sha256
 from app.candidates.service import CandidateService
 from app.discovery.adapters import AshbyAdapter, GreenhouseAdapter, LeverAdapter
 from app.discovery.contracts import JobPayloadAdapter, NormalizedJob
@@ -32,8 +35,8 @@ from app.domain.models import (
     JobVersion,
     SecurityEvent,
 )
+from app.jobs.scoring import CandidateScoringContext, evaluate_job_with_context
 from app.jobs.scoring import NormalizedJob as ScoringJob
-from app.jobs.scoring import evaluate_job
 
 
 class JobServiceError(ValueError):
@@ -45,6 +48,10 @@ class JobNotFoundError(JobServiceError):
 
 
 class JobCommandConflictError(JobServiceError):
+    pass
+
+
+class JobAnalysisError(JobServiceError):
     pass
 
 
@@ -113,10 +120,12 @@ class JobService:
         session_factory: sessionmaker[Session],
         candidate_service: CandidateService,
         source_verifier: JobSourceVerifier | None = None,
+        analysis_agent: JobAnalysisAgent | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
         self._source_verifier = source_verifier or ProviderJobSourceVerifier()
+        self._analysis_agent = analysis_agent or DeterministicJobAnalysisAgent()
         self._adapters: dict[str, JobPayloadAdapter] = {
             "greenhouse": GreenhouseAdapter(),
             "lever": LeverAdapter(),
@@ -234,22 +243,14 @@ class JobService:
             replay = self._command_replay(session, candidate_id, job_id, "analyze", idempotency_key)
             if replay:
                 return self._view(session, job, candidate_id)
-            evaluation = evaluate_job(
-                ScoringJob(
-                    job_id=str(job.id),
-                    company=job.company,
-                    title=job.title,
-                    description=job.description_normalized or job.description,
-                    location=job.location,
-                    work_mode=job.remote_policy,
-                    employment_type=job.employment_type,
-                    required_skills=tuple(job.required_skills),
-                    preferred_skills=tuple(job.preferred_skills),
-                    salary_min=int(job.salary_min) if job.salary_min is not None else None,
-                    salary_max=int(job.salary_max) if job.salary_max is not None else None,
-                    salary_currency=job.salary_currency,
-                ),
-                config,
+            scoring_job = self._scoring_job(job)
+            scoring_context = CandidateScoringContext.from_config(config)
+            evaluation = evaluate_job_with_context(scoring_job, scoring_context)
+            latest_job_version = session.scalar(
+                select(JobVersion)
+                .where(JobVersion.job_id == job_id)
+                .order_by(JobVersion.version.desc())
+                .limit(1)
             )
             latest = session.scalar(
                 select(func.max(CandidateJobScore.scoring_version)).where(
@@ -257,11 +258,43 @@ class JobService:
                     CandidateJobScore.job_id == job_id,
                 )
             )
+            if latest_job_version is None:
+                raise JobAnalysisError("job analysis requires a versioned source snapshot")
+            scoring_version = (latest or 0) + 1
+            context_json = canonical_json(scoring_context)
+            job_json = canonical_json(scoring_job)
+            analysis_request = JobAnalysisRequest(
+                request_id=uuid4(),
+                candidate_id=candidate_id,
+                candidate_snapshot_json=context_json,
+                job_snapshot_json=job_json,
+                scoring_version=scoring_version,
+                application_threshold=config.scoring_rules.application_threshold,
+                scoring_weights=tuple(
+                    (name, float(weight))
+                    for name, weight in scoring_context.scoring_rules.weights.items()
+                ),
+                job_id=str(job.id),
+                candidate_profile_version=config.manifest.profile_version,
+                candidate_snapshot_sha256=content_sha256(context_json),
+                job_version=latest_job_version.version,
+                job_payload_sha256=latest_job_version.payload_sha256,
+                job_snapshot_sha256=content_sha256(job_json),
+                policy_sha256=analysis_policy_sha256(scoring_context),
+            )
+            try:
+                analysis = JobAnalysisResponse.model_validate(
+                    self._analysis_agent.analyze(analysis_request)
+                )
+            except Exception as exc:
+                raise JobAnalysisError("job analysis agent failed closed") from exc
+            self._validate_analysis_response(analysis_request, analysis, scoring_context)
+            analysis_payload = analysis.model_dump(mode="json")
             session.add(
                 CandidateJobScore(
                     candidate_id=candidate_id,
                     job_id=job_id,
-                    scoring_version=(latest or 0) + 1,
+                    scoring_version=scoring_version,
                     total_score=Decimal(evaluation.total_score),
                     dimensions={
                         "items": [item.model_dump(mode="json") for item in evaluation.dimensions]
@@ -271,6 +304,11 @@ class JobService:
                         "proposed_action": evaluation.proposed_action,
                         "hard_blockers": list(evaluation.hard_blockers),
                         "evidence": list(evaluation.evidence),
+                        "agent_analysis": analysis_payload,
+                        "analysis_request_sha256": content_sha256(canonical_json(analysis_request)),
+                        "analysis_response_sha256": content_sha256(
+                            canonical_json(analysis_payload)
+                        ),
                     },
                     meets_threshold=evaluation.proposed_action == "prepare",
                 )
@@ -300,6 +338,48 @@ class JobService:
                 )
             )
         return self.get_job(candidate_id, job_id)
+
+    @staticmethod
+    def _scoring_job(job: GlobalJob) -> ScoringJob:
+        return ScoringJob(
+            job_id=str(job.id),
+            company=job.company,
+            title=job.title,
+            description=job.description_normalized or job.description,
+            location=job.location,
+            work_mode=job.remote_policy,
+            employment_type=job.employment_type,
+            required_skills=tuple(job.required_skills),
+            preferred_skills=tuple(job.preferred_skills),
+            salary_min=int(job.salary_min) if job.salary_min is not None else None,
+            salary_max=int(job.salary_max) if job.salary_max is not None else None,
+            salary_currency=job.salary_currency,
+        )
+
+    @staticmethod
+    def _validate_analysis_response(
+        request: JobAnalysisRequest,
+        response: JobAnalysisResponse,
+        context: CandidateScoringContext,
+    ) -> None:
+        correlation = (
+            response.request_id == request.request_id
+            and response.candidate_id == request.candidate_id
+            and response.job_id == request.job_id
+            and response.scoring_version == request.scoring_version
+            and response.candidate_snapshot_sha256 == request.candidate_snapshot_sha256
+            and response.job_payload_sha256 == request.job_payload_sha256
+            and response.job_snapshot_sha256 == request.job_snapshot_sha256
+            and response.policy_sha256 == request.policy_sha256
+            and response.application_threshold == request.application_threshold
+        )
+        expected_weights = context.scoring_rules.weights
+        dimension_names = tuple(item.name for item in response.dimensions)
+        weights_match = dimension_names == tuple(expected_weights) and all(
+            item.weight == expected_weights[item.name] for item in response.dimensions
+        )
+        if not correlation or not weights_match:
+            raise JobAnalysisError("job analysis response correlation failed")
 
     def command(
         self,

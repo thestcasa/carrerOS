@@ -3,5 +3,12 @@ from app.agents.contracts import (
     IndependentReviewAgent,
     JobAnalysisAgent,
 )
+from app.agents.job_analysis import DeterministicJobAnalysisAgent, JobAnalysisContractError
 
-__all__ = ["DocumentGenerationAgent", "IndependentReviewAgent", "JobAnalysisAgent"]
+__all__ = [
+    "DeterministicJobAnalysisAgent",
+    "DocumentGenerationAgent",
+    "IndependentReviewAgent",
+    "JobAnalysisAgent",
+    "JobAnalysisContractError",
+]

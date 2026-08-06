@@ -6,7 +6,16 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.candidates.models import CandidateConfig
+from app.candidates.models import (
+    CandidateConfig,
+    CareerStrategy,
+    CompanyRules,
+    Languages,
+    Preferences,
+    RoleRules,
+    ScoringRules,
+    Skills,
+)
 
 
 class _FrozenModel(BaseModel):
@@ -28,7 +37,7 @@ class NormalizedJob(_FrozenModel):
     job_id: str = Field(min_length=1)
     company: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=200_000)
     location: str | None = None
     work_mode: str | None = None
     employment_type: str | None = None
@@ -39,6 +48,36 @@ class NormalizedJob(_FrozenModel):
     salary_min: int | None = Field(default=None, ge=0)
     salary_max: int | None = Field(default=None, ge=0)
     salary_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+
+
+class CandidateScoringContext(_FrozenModel):
+    """Least-privilege candidate policy exposed to the analysis-agent boundary."""
+
+    candidate_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+    profile_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    career_strategy: CareerStrategy
+    roles: RoleRules
+    skills: Skills
+    scoring_rules: ScoringRules
+    preferences: Preferences
+    companies: CompanyRules
+    languages: Languages
+
+    @classmethod
+    def from_config(cls, config: CandidateConfig) -> CandidateScoringContext:
+        return cls(
+            candidate_id=config.manifest.candidate_id,
+            profile_version=config.manifest.profile_version,
+            career_strategy=config.career_strategy,
+            roles=config.roles,
+            skills=config.skills,
+            scoring_rules=config.scoring_rules.model_copy(
+                update={"weights": dict(sorted(config.scoring_rules.weights.items()))}
+            ),
+            preferences=config.preferences,
+            companies=config.companies,
+            languages=config.languages,
+        )
 
 
 class DimensionScore(_FrozenModel):
@@ -79,8 +118,8 @@ def _matches(value: str, configured: tuple[str, ...]) -> bool:
     return any(normalized == _normalized(item) for item in configured)
 
 
-def _classify(job: NormalizedJob, config: CandidateConfig) -> RoleClassification:
-    targets = (*config.career_strategy.target_roles, *config.roles.target)
+def _classify(job: NormalizedJob, context: CandidateScoringContext) -> RoleClassification:
+    targets = (*context.career_strategy.target_roles, *context.roles.target)
     if _matches(job.title, targets):
         return RoleClassification.TARGET
     title_tokens = _tokens(job.title) - _GENERIC_ROLE_TOKENS
@@ -94,10 +133,10 @@ def _percentage(matched: int, total: int, *, empty: int) -> int:
 
 
 def _dimension_values(
-    job: NormalizedJob, config: CandidateConfig, classification: RoleClassification
+    job: NormalizedJob, context: CandidateScoringContext, classification: RoleClassification
 ) -> dict[str, tuple[int, tuple[str, ...], str]]:
     candidate_skills = {
-        _normalized(skill) for category in config.skills.categories.values() for skill in category
+        _normalized(skill) for category in context.skills.categories.values() for skill in category
     }
     required = {_normalized(skill) for skill in job.required_skills}
     preferred = {_normalized(skill) for skill in job.preferred_skills}
@@ -108,18 +147,18 @@ def _dimension_values(
         empty=50,
     )
     location_match = job.location is not None and _matches(
-        job.location, config.preferences.locations
+        job.location, context.preferences.locations
     )
-    mode_match = job.work_mode is not None and job.work_mode in config.preferences.work_modes
+    mode_match = job.work_mode is not None and job.work_mode in context.preferences.work_modes
     location_score = 100 if location_match or mode_match else 0
     domain_match = job.domain is not None and _matches(
-        job.domain, config.career_strategy.priority_domains
+        job.domain, context.career_strategy.priority_domains
     )
-    company_match = _matches(job.company, config.companies.target)
+    company_match = _matches(job.company, context.companies.target)
     compensation_score = 50
     salary_evidence: tuple[str, ...] = ("salary:unknown",)
-    if job.salary_currency == config.preferences.salary.currency and job.salary_max is not None:
-        compensation_score = 100 if job.salary_max >= config.preferences.salary.minimum else 0
+    if job.salary_currency == context.preferences.salary.currency and job.salary_max is not None:
+        compensation_score = 100 if job.salary_max >= context.preferences.salary.minimum else 0
         salary_evidence = (f"salary_max:{job.salary_max}:{job.salary_currency}",)
     role_score = {
         RoleClassification.TARGET: 100,
@@ -161,35 +200,35 @@ def _dimension_values(
     return values
 
 
-def _hard_blockers(job: NormalizedJob, config: CandidateConfig) -> tuple[str, ...]:
+def _hard_blockers(job: NormalizedJob, context: CandidateScoringContext) -> tuple[str, ...]:
     blockers: list[str] = []
-    if _matches(job.company, config.companies.blocked):
+    if _matches(job.company, context.companies.blocked):
         blockers.append("company_blocked")
-    if _matches(job.title, config.roles.blocked):
+    if _matches(job.title, context.roles.blocked):
         blockers.append("role_blocked")
-    if job.domain is not None and _matches(job.domain, config.career_strategy.excluded_domains):
+    if job.domain is not None and _matches(job.domain, context.career_strategy.excluded_domains):
         blockers.append("domain_excluded")
     if (
         job.employment_type is not None
-        and job.employment_type not in config.preferences.employment_types
+        and job.employment_type not in context.preferences.employment_types
     ):
         blockers.append("employment_type_incompatible")
     location_matches = job.location is not None and _matches(
-        job.location, config.preferences.locations
+        job.location, context.preferences.locations
     )
-    mode_matches = job.work_mode is not None and job.work_mode in config.preferences.work_modes
+    mode_matches = job.work_mode is not None and job.work_mode in context.preferences.work_modes
     if (job.location is not None or job.work_mode is not None) and not (
-        location_matches or mode_matches or config.preferences.willing_to_relocate
+        location_matches or mode_matches or context.preferences.willing_to_relocate
     ):
         blockers.append("location_incompatible")
     if (
-        job.salary_currency == config.preferences.salary.currency
+        job.salary_currency == context.preferences.salary.currency
         and job.salary_max is not None
-        and job.salary_max < config.preferences.salary.minimum
+        and job.salary_max < context.preferences.salary.minimum
     ):
         blockers.append("salary_below_minimum")
     candidate_languages = {
-        item.language.casefold(): _LEVEL_RANK[item.level] for item in config.languages.items
+        item.language.casefold(): _LEVEL_RANK[item.level] for item in context.languages.items
     }
     for requirement in job.required_languages:
         if (
@@ -201,11 +240,17 @@ def _hard_blockers(job: NormalizedJob, config: CandidateConfig) -> tuple[str, ..
 
 
 def evaluate_job(job: NormalizedJob, config: CandidateConfig) -> JobEvaluation:
-    classification = _classify(job, config)
-    values = _dimension_values(job, config, classification)
+    return evaluate_job_with_context(job, CandidateScoringContext.from_config(config))
+
+
+def evaluate_job_with_context(
+    job: NormalizedJob, context: CandidateScoringContext
+) -> JobEvaluation:
+    classification = _classify(job, context)
+    values = _dimension_values(job, context, classification)
     dimensions: list[DimensionScore] = []
     total = Decimal(0)
-    for name, weight in config.scoring_rules.weights.items():
+    for name, weight in context.scoring_rules.weights.items():
         score, evidence, explanation = values.get(
             name, (0, (f"unsupported_dimension:{name}",), "No deterministic scorer is configured.")
         )
@@ -222,18 +267,18 @@ def evaluate_job(job: NormalizedJob, config: CandidateConfig) -> JobEvaluation:
             )
         )
     total_score = int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    blockers = _hard_blockers(job, config)
+    blockers = _hard_blockers(job, context)
     if blockers:
         action = "skip"
-    elif total_score >= config.scoring_rules.application_threshold:
+    elif total_score >= context.scoring_rules.application_threshold:
         action = "prepare"
-    elif total_score >= config.scoring_rules.human_review_threshold:
+    elif total_score >= context.scoring_rules.human_review_threshold:
         action = "review"
     else:
         action = "skip"
     evidence = tuple(item for dimension in dimensions for item in dimension.evidence)
     return JobEvaluation(
-        candidate_id=config.manifest.candidate_id,
+        candidate_id=context.candidate_id,
         job_id=job.job_id,
         classification=classification,
         total_score=total_score,
