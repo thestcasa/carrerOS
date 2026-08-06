@@ -200,8 +200,18 @@ durable receipts. Missing settings or an empty adapter allowlist deny scheduling
 Each job mutation locks and verifies the discovery-run attempt in its own transaction, so an
 expired worker cannot commit after a newer lease owns the run. Queue completion and failure also
 treat ownership loss as a non-mutating outcome, leaving the newer worker lease intact. Injection
-findings block analysis and enter the candidate security ledger. Worker and scheduler are distinct Compose processes that
-advertise health through Redis, and external ports bind to localhost by default.
+findings block analysis and enter the candidate security ledger.
+
+A manual `verify` command and every generation, authorization, and synthetic-submission boundary
+refetch the exact allowlisted provider feed. The verifier matches the external or requisition ID,
+reparses the official payload, rejects a changed application destination, and persists bounded
+open/closed/error evidence before the protected mutation begins. A stored timestamp alone is never
+freshness proof. Candidate applications keep the specification duplicate hash for audit and a
+separate, database-unique submission identity for cross-source race prevention. Missing identity
+or fresh evidence fails closed at the gate and immediately before authorization consumption.
+
+Worker and scheduler are distinct Compose processes that advertise health through Redis, and
+external ports bind to localhost by default.
 
 ## Trust and privacy decisions
 

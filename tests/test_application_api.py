@@ -16,6 +16,7 @@ from app.core.settings import Settings
 from app.db import build_session_factory
 from app.discovery.providers import FixtureProviderTransport, ProviderFeedClient
 from app.discovery.scheduled import ScheduledDiscoveryService
+from app.discovery.verification import StoredFixtureJobSourceVerifier
 from app.domain.models import Base
 from app.health import HealthReport, ServiceStatus
 from app.job_service import DiscoveryRequest, JobService
@@ -42,7 +43,8 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(candidates_root)
-    jobs = JobService(sessions, candidates)
+    source_verifier = StoredFixtureJobSourceVerifier()
+    jobs = JobService(sessions, candidates, source_verifier)
     scheduled_discovery = ScheduledDiscoveryService(
         sessions,
         candidates,
@@ -54,6 +56,7 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
         candidates,
         runtime_root,
         synthetic_confirmation=lambda _candidate_id, _application_id: None,
+        source_verifier=source_verifier,
     )
     lifecycle = CandidateLifecycleService(sessions, candidates, runtime_root)
     job_id = jobs.discover(

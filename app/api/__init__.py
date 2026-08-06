@@ -72,6 +72,7 @@ from app.discovery.scheduled import (
     ScheduledDiscoveryError,
     ScheduledDiscoveryService,
 )
+from app.discovery.verification import ProviderJobSourceVerifier
 from app.health import HealthChecker, HealthProbe, HealthReport
 from app.job_service import (
     DiscoveryRequest,
@@ -676,7 +677,10 @@ def create_app(
     engine = build_engine(resolved_settings.database_url)
     session_factory = build_session_factory(engine)
     application.state.candidate_service = resolved_candidate_service
-    resolved_job_service = job_service or JobService(session_factory, resolved_candidate_service)
+    source_verifier = ProviderJobSourceVerifier()
+    resolved_job_service = job_service or JobService(
+        session_factory, resolved_candidate_service, source_verifier
+    )
     application.state.job_service = resolved_job_service
     application.state.scheduled_discovery_service = (
         scheduled_discovery_service
@@ -694,7 +698,10 @@ def create_app(
         )
     )
     application.state.application_service = application_service or ApplicationService(
-        session_factory, resolved_candidate_service, resolved_settings.runtime_root
+        session_factory,
+        resolved_candidate_service,
+        resolved_settings.runtime_root,
+        source_verifier=source_verifier,
     )
     application.state.health_checker = health_checker or HealthProbe(
         engine, resolved_settings.redis_url

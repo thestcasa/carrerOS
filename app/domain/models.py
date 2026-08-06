@@ -82,6 +82,10 @@ class GlobalJob(Base, TimestampMixin):
     salary_period: Mapped[str | None] = mapped_column(String(50))
     source_trust_level: Mapped[str] = mapped_column(String(32), default="unverified")
     verified_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_status: Mapped[str | None] = mapped_column(String(16), index=True)
+    verification_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
+    verification_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     semantic_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
@@ -330,6 +334,11 @@ class Application(Base, TimestampMixin, CandidateScopedMixin):
     __tablename__ = "applications"
     __table_args__ = (
         UniqueConstraint("candidate_id", "job_id", name="uq_candidate_application_job"),
+        UniqueConstraint(
+            "candidate_id",
+            "submission_identity_hash",
+            name="uq_candidate_application_submission_identity",
+        ),
         UniqueConstraint("candidate_id", "id", name="uq_application_scope"),
         ForeignKeyConstraint(
             ["candidate_id", "job_id", "score_id"],
@@ -347,6 +356,8 @@ class Application(Base, TimestampMixin, CandidateScopedMixin):
         ForeignKey("global_jobs.id"), nullable=False, index=True
     )
     score_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("candidate_job_scores.id"))
+    duplicate_hash: Mapped[str] = mapped_column(String(64), index=True)
+    submission_identity_hash: Mapped[str] = mapped_column(String(64), index=True)
     state: Mapped[ApplicationState] = mapped_column(
         Enum(ApplicationState, native_enum=False), default=ApplicationState.DISCOVERED
     )

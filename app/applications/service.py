@@ -55,6 +55,13 @@ from app.correspondence import (
     MessageFixture,
     SubmittedAnswer,
 )
+from app.discovery.deduplication import application_duplicate_hash, submission_identity_hash
+from app.discovery.verification import (
+    JobSourceVerifier,
+    ProviderJobSourceVerifier,
+    VerificationEvidence,
+    apply_verification,
+)
 from app.domain.enums import (
     ApplicationOutcome,
     ApplicationState,
@@ -119,6 +126,9 @@ def _utc(value: datetime) -> datetime:
 class ApplicationService:
     """Candidate-scoped integration boundary for materials, dry runs, and application history."""
 
+    _GENERATION_FRESHNESS = timedelta(hours=24)
+    _SUBMISSION_FRESHNESS = timedelta(minutes=15)
+
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -126,6 +136,7 @@ class ApplicationService:
         runtime_root: Path,
         synthetic_confirmation: Callable[[str, UUID], str | None] | None = None,
         human_action_session_verifier: Callable[[str, UUID, UUID, Path], bool] | None = None,
+        source_verifier: JobSourceVerifier | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
@@ -137,6 +148,7 @@ class ApplicationService:
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
         self._consumer = AuthorizationConsumer(session_factory)
         self._correspondence = CorrespondenceService()
+        self._source_verifier = source_verifier or ProviderJobSourceVerifier()
         self._synthetic_confirmation = synthetic_confirmation or (
             lambda _candidate_id, application_id: f"synthetic-confirmation-{application_id}"
         )
@@ -175,31 +187,57 @@ class ApplicationService:
         job_id: UUID,
         idempotency_key: str,
     ) -> ApplicationDetail:
+        payload = {"job_id": str(job_id)}
+        with self._sessions() as lookup:
+            replay, _, _ = self._administrative_command_replay(
+                lookup, candidate_id, "generate_materials", payload, idempotency_key
+            )
+            if replay is not None:
+                return ApplicationDetail.model_validate(replay)
         config = self._candidates.get_config(candidate_id)
+        generation_blockers = [
+            name
+            for name, approved in {
+                "candidate_profile": config.manifest.validation.profile_approved,
+                "legal_status": config.manifest.validation.legal_status_approved,
+                "automatic_answers": config.manifest.validation.automatic_answers_approved,
+                "cv_templates": config.manifest.validation.cv_templates_approved,
+            }.items()
+            if not approved
+        ]
+        if generation_blockers:
+            raise ApplicationConflictError(
+                "material generation requires approved " + ", ".join(generation_blockers)
+            )
+        self._revalidate_job(job_id)
         with self._sessions.begin() as session:
-            payload = {"job_id": str(job_id)}
             replay, request_sha256, key_sha256 = self._administrative_command_replay(
                 session, candidate_id, "generate_materials", payload, idempotency_key
             )
             if replay is not None:
                 return ApplicationDetail.model_validate(replay)
-            generation_blockers = [
-                name
-                for name, approved in {
-                    "candidate_profile": config.manifest.validation.profile_approved,
-                    "legal_status": config.manifest.validation.legal_status_approved,
-                    "automatic_answers": config.manifest.validation.automatic_answers_approved,
-                    "cv_templates": config.manifest.validation.cv_templates_approved,
-                }.items()
-                if not approved
-            ]
-            if generation_blockers:
-                raise ApplicationConflictError(
-                    "material generation requires approved " + ", ".join(generation_blockers)
-                )
             job = session.get(GlobalJob, job_id)
             if job is None:
                 raise ApplicationNotFoundError(f"job not found: {job_id}")
+            if not self._job_is_fresh(job, datetime.now(UTC), self._GENERATION_FRESHNESS):
+                raise ApplicationConflictError(
+                    "job must be revalidated from its source before material generation"
+                )
+            duplicate_hash = application_duplicate_hash(
+                candidate_id=candidate_id,
+                company=job.company,
+                title=job.normalized_title or job.title,
+                location=job.normalized_location or job.location,
+                requisition_id=job.requisition_id,
+            )
+            identity_hash = submission_identity_hash(
+                candidate_id=candidate_id,
+                company=job.company,
+                title=job.normalized_title or job.title,
+                location=job.normalized_location or job.location,
+                requisition_id=job.requisition_id,
+                application_url=job.application_url,
+            )
             score = session.scalar(
                 select(CandidateJobScore)
                 .where(
@@ -217,11 +255,24 @@ class ApplicationService:
                     Application.job_id == job_id,
                 )
             )
+            duplicate_application = session.scalar(
+                select(Application).where(
+                    Application.candidate_id == candidate_id,
+                    Application.submission_identity_hash == identity_hash,
+                    Application.job_id != job_id,
+                )
+            )
+            if duplicate_application is not None:
+                raise ApplicationConflictError(
+                    "candidate already has an application for this requisition or equivalent job"
+                )
             if application is None:
                 application = Application(
                     candidate_id=candidate_id,
                     job_id=job_id,
                     score_id=score.id,
+                    duplicate_hash=duplicate_hash,
+                    submission_identity_hash=identity_hash,
                     state=ApplicationState.SHORTLISTED,
                 )
                 session.add(application)
@@ -236,6 +287,11 @@ class ApplicationService:
                         to_state=ApplicationState.SHORTLISTED,
                     )
                 )
+            else:
+                if application.duplicate_hash is None:
+                    application.duplicate_hash = duplicate_hash
+                if application.submission_identity_hash is None:
+                    application.submission_identity_hash = identity_hash
             event_replay = session.scalar(
                 select(ApplicationEvent).where(
                     ApplicationEvent.candidate_id == candidate_id,
@@ -717,9 +773,18 @@ class ApplicationService:
     def _authorize(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
     ) -> AuthorizationView:
+        payload = {"application_id": str(application_id)}
+        with self._sessions() as lookup:
+            replay, _, _ = self._administrative_command_replay(
+                lookup, candidate_id, "authorize_application", payload, idempotency_key
+            )
+            if replay is not None:
+                return AuthorizationView.model_validate(replay)
+            application = self._application(lookup, candidate_id, application_id)
+            job_id = application.job_id
+        self._revalidate_job(job_id)
         config = self._candidates.get_config(candidate_id)
         with self._sessions.begin() as session:
-            payload = {"application_id": str(application_id)}
             replay, request_sha256, key_sha256 = self._administrative_command_replay(
                 session, candidate_id, "authorize_application", payload, idempotency_key
             )
@@ -794,6 +859,18 @@ class ApplicationService:
             browser_package_valid = rendered_cv is not None and browser_upload_hashes == (
                 rendered_cv.sha256,
             )
+            equivalent_application_count = session.scalar(
+                select(func.count(Application.id)).where(
+                    Application.candidate_id == candidate_id,
+                    Application.submission_identity_hash == application.submission_identity_hash,
+                    Application.id != application.id,
+                )
+            )
+            duplicate_application = (
+                application.submission_identity_hash is None
+                or application.submitted_at is not None
+                or (equivalent_application_count or 0) > 0
+            )
             rate_limits_allowed = job is not None and self._rate_limits_allow(
                 session, candidate_id, job.company, settings, now
             )
@@ -801,10 +878,10 @@ class ApplicationService:
                 candidate_id=candidate_id,
                 application_id=application_id,
                 job_still_open=job is not None
-                and (job.deadline is None or _utc(job.deadline) > now),
+                and self._job_is_fresh(job, now, self._SUBMISSION_FRESHNESS),
                 official_or_verified_source=job is not None
                 and job.source_trust_level != "unverified",
-                duplicate_application=application.submitted_at is not None,
+                duplicate_application=duplicate_application,
                 company_not_blocked=job is not None
                 and job.company.casefold()
                 not in {value.casefold() for value in config.companies.blocked},
@@ -985,11 +1062,14 @@ class ApplicationService:
                 raise ApplicationConflictError("submission authorization was not found")
             issued_at = _utc(record.issued_at)
             expires_at = _utc(record.expires_at)
+            job_id = application.job_id
         # Reconstructing a gate object is intentionally impossible. Consumption of API-issued
         # records is performed transactionally below and is still state/expiry bound.
         now = datetime.now(UTC)
         if now < issued_at or now >= expires_at:
             raise ApplicationConflictError("submission authorization is expired")
+        self._revalidate_job(job_id)
+        now = datetime.now(UTC)
         with self._sessions.begin() as session:
             application = self._application(session, candidate_id, application_id)
             record = session.get(SubmissionAuthorizationRecord, request.authorization_id)
@@ -1003,6 +1083,22 @@ class ApplicationService:
                 raise ApplicationConflictError("submission authorization was already consumed")
             if application.state is not ApplicationState.READY_TO_SUBMIT:
                 raise ApplicationConflictError("application is no longer ready to submit")
+            job = session.get(GlobalJob, application.job_id)
+            if job is None or not self._job_is_fresh(job, now, self._SUBMISSION_FRESHNESS):
+                raise ApplicationConflictError(
+                    "job source could not confirm the opening immediately before submission"
+                )
+            if application.submission_identity_hash is None:
+                raise ApplicationConflictError("application duplicate identity is missing")
+            duplicate_application = session.scalar(
+                select(func.count(Application.id)).where(
+                    Application.candidate_id == candidate_id,
+                    Application.submission_identity_hash == application.submission_identity_hash,
+                    Application.id != application.id,
+                )
+            )
+            if duplicate_application:
+                raise ApplicationConflictError("candidate has an equivalent application")
             review = session.scalar(
                 select(AgentReview)
                 .where(
@@ -1054,10 +1150,7 @@ class ApplicationService:
             settings = self._settings_record(session, candidate_id)
             if settings.emergency_stopped:
                 raise ApplicationConflictError("emergency stop is active")
-            job = session.get(GlobalJob, application.job_id)
-            if job is None or not self._rate_limits_allow(
-                session, candidate_id, job.company, settings, now
-            ):
+            if not self._rate_limits_allow(session, candidate_id, job.company, settings, now):
                 raise ApplicationConflictError("candidate application rate limit is active")
             self._transition(
                 session,
@@ -2632,6 +2725,32 @@ class ApplicationService:
             )
         )
         session.flush()
+
+    def _revalidate_job(self, job_id: UUID) -> VerificationEvidence:
+        """Persist source evidence independently from a later fail-closed mutation."""
+
+        with self._sessions.begin() as session:
+            job = session.get(GlobalJob, job_id)
+            if job is None:
+                raise ApplicationNotFoundError(f"job not found: {job_id}")
+            evidence = self._source_verifier.verify(job)
+            apply_verification(job, evidence)
+            session.flush()
+            return evidence
+
+    @staticmethod
+    def _job_is_fresh(job: GlobalJob, now: datetime, maximum_age: timedelta) -> bool:
+        checked_at = job.verification_checked_at
+        if checked_at is None or job.verification_status != "open":
+            return False
+        checked_at = _utc(checked_at)
+        return (
+            checked_at <= now
+            and now - checked_at <= maximum_age
+            and job.verified_open_at is not None
+            and job.verification_evidence_sha256 is not None
+            and len(job.verification_evidence_sha256) == 64
+        )
 
     @staticmethod
     def _application(session: Session, candidate_id: str, application_id: UUID) -> Application:

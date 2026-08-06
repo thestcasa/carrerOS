@@ -24,6 +24,7 @@ from app.candidates.service import (
     CandidateService,
 )
 from app.db import build_session_factory
+from app.discovery.verification import StoredFixtureJobSourceVerifier
 from app.domain.enums import ApplicationState, DocumentKind
 from app.domain.models import (
     AdministrativeAuditRecord,
@@ -52,8 +53,9 @@ def _services(
     Base.metadata.create_all(engine)
     sessions = build_session_factory(engine)
     candidates = CandidateService(candidates_root)
+    source_verifier = StoredFixtureJobSourceVerifier()
     return (
-        JobService(sessions, candidates),
+        JobService(sessions, candidates, source_verifier),
         ApplicationService(
             sessions,
             candidates,
@@ -63,6 +65,7 @@ def _services(
                     human_action_verified
                 )
             ),
+            source_verifier=source_verifier,
         ),
         sessions,
     )

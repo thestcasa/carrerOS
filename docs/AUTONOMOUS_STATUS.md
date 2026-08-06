@@ -92,16 +92,26 @@
   and CV-application results and reconciles interruption after version publication. Application
   workflow, correspondence, human-action, security, and interview mutations use durable SQL
   receipts; the frontend retains keys across uncertain failures.
+- Candidate applications now store both the exact specification duplicate hash and a stronger
+  candidate-scoped submission identity based on requisition ID, canonical official application
+  URL, or the normalized fallback. A database constraint prevents equivalent cross-source jobs
+  from racing into separate applications; missing identity denies authorization and execution.
+- Job verification now refetches an exact allowlisted Greenhouse, Lever, or Ashby feed and records
+  open/closed/error evidence with source payload and destination hashes. Generation,
+  authorization, and synthetic submission each revalidate at their own boundary; failed evidence
+  commits independently while the protected mutation remains unchanged. Job views expose stale
+  and possible-duplicate state, and completed command replays do not refetch.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **209 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **221 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
 - Frontend: ESLint, strict TypeScript, **45 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `d1a7e6c9420b`; models and Alembic report no missing operations.
+  pass through `e2b4c7d8f901`; the candidate-deletion application triggers are verified present after
+  both table rebuild directions, and models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
   dependencies with `playwright install --with-deps chromium`.
@@ -122,7 +132,8 @@
   deletion tombstone before multi-user deployment.
 - Add browser E2E/accessibility-critical suites and run PostgreSQL/Compose checks on a capable host.
 - Complete role-specific template/content selection, richer cover-letter policy, and manual
-  rendered-material revision; DOCX remains an optional format.
+  rendered-material revision; DOCX remains an optional format. Cross-source identity and
+  fresh-source proof are complete.
 - Audit every final acceptance criterion, finish docs, commit each coherent slice, and leave the
   worktree clean apart from the preserved user-owned paths.
 

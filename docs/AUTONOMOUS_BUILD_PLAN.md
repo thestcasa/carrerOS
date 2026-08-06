@@ -232,6 +232,26 @@ submission receipts remain in place. Regression tests cover exact response repla
 changed-payload conflicts, interrupted publication, UI retry keys, and side-effect-free settings
 reads.
 
+### Phase 5G — canonical submission identity and fresh-source proof
+
+1. Persist the specification-defined candidate application duplicate hash separately from a
+   stronger candidate/company/requisition-or-URL submission identity.
+2. Enforce the stronger identity with a database uniqueness constraint and fail-closed gate and
+   execution checks across equivalent source records.
+3. Revalidate openings against bounded, allowlisted official ATS feeds immediately before
+   generation, authorization, and synthetic submission.
+4. Persist open, closed, and provider-error evidence independently from later mutation rollback;
+   completed idempotent commands replay without refetching.
+5. Surface stale and possible-duplicate states, preserve candidate-deletion writer fences through
+   SQLite table rebuilds, and cover renamed, cross-source, distinct-requisition, failure, and
+   replay paths deterministically.
+
+Status: complete. Timestamp-only verification was removed. Provider evidence binds the official
+payload hash, current destination, reason, and check time; closed, changed, malformed, absent, and
+unreachable sources deny progress. Legacy application identities are collision-checked before
+non-transactional SQLite DDL, and the migration restores deletion-fence triggers after every batch
+rebuild.
+
 ### Phase 6 — definition-of-done verification
 
 1. Audit all 24 acceptance criteria and mandatory zero-tolerance safety targets.

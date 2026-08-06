@@ -102,6 +102,8 @@ def _authorization_sessions(gate_input: SubmissionGateInput) -> sessionmaker[Ses
                 id=gate_input.application_id,
                 candidate_id=gate_input.candidate_id,
                 job_id=job.id,
+                duplicate_hash="0" * 64,
+                submission_identity_hash="1" * 64,
                 state=ApplicationState.READY_TO_SUBMIT,
             )
         )

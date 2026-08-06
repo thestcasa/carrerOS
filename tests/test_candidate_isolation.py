@@ -102,6 +102,8 @@ def test_application_children_cannot_cross_candidate_boundary() -> None:
         application = Application(
             candidate_id="candidate_alpha",
             job_id=job.id,
+            duplicate_hash="0" * 64,
+            submission_identity_hash="1" * 64,
             state=ApplicationState.MATERIALS_READY,
         )
         session.add(application)

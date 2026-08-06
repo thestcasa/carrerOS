@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -15,8 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.candidates.service import CandidateService
 from app.discovery.adapters import AshbyAdapter, GreenhouseAdapter, LeverAdapter
 from app.discovery.contracts import JobPayloadAdapter, NormalizedJob
-from app.discovery.deduplication import semantic_description_fingerprint
+from app.discovery.deduplication import semantic_description_fingerprint, submission_identity_hash
 from app.discovery.security import scan_prompt_injection
+from app.discovery.verification import (
+    JobSourceVerifier,
+    ProviderJobSourceVerifier,
+    VerificationEvidence,
+    apply_verification,
+)
 from app.domain.models import (
     CandidateDiscoveryCommand,
     CandidateJobCommand,
@@ -73,6 +79,8 @@ class JobView(_Contract):
     ats_platform: str | None
     posted_at: datetime | None
     verified_open_at: datetime | None
+    verification_status: str | None = None
+    verification_reason: str | None = None
     salary_display: str | None
     role_category: str | None
     score: int | None = None
@@ -104,9 +112,11 @@ class JobService:
         self,
         session_factory: sessionmaker[Session],
         candidate_service: CandidateService,
+        source_verifier: JobSourceVerifier | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
+        self._source_verifier = source_verifier or ProviderJobSourceVerifier()
         self._adapters: dict[str, JobPayloadAdapter] = {
             "greenhouse": GreenhouseAdapter(),
             "lever": LeverAdapter(),
@@ -303,7 +313,21 @@ class JobService:
             job = session.get(GlobalJob, job_id)
             if job is None:
                 raise JobNotFoundError(f"job not found: {job_id}")
-            state = {"verify": "discovered", "shortlist": "shortlisted", "skip": "ignored"}[command]
+            if self._command_replay(session, candidate_id, job_id, command, idempotency_key):
+                return self._view(session, job, candidate_id)
+            evidence: VerificationEvidence | None = None
+            if command == "verify":
+                evidence = self._source_verifier.verify(job)
+                apply_verification(job, evidence)
+            state = {
+                "verify": (
+                    "verified"
+                    if evidence is not None and evidence.status == "open"
+                    else "verification_failed"
+                ),
+                "shortlist": "shortlisted",
+                "skip": "ignored",
+            }[command]
             return self._record_decision(
                 session, candidate_id, job, state, command, idempotency_key
             )
@@ -345,7 +369,7 @@ class JobService:
                 CandidateJobDecision.job_id == job.id,
             )
         )
-        verified_at = datetime.now(UTC) if command == "verify" else None
+        verified_at = job.verified_open_at if command == "verify" else None
         if decision is None:
             decision = CandidateJobDecision(
                 candidate_id=candidate_id,
@@ -356,7 +380,7 @@ class JobService:
             session.add(decision)
         else:
             decision.state = state
-            if verified_at is not None:
+            if command == "verify":
                 decision.verified_open_at = verified_at
         session.add(
             CandidateJobCommand(
@@ -366,8 +390,6 @@ class JobService:
                 idempotency_key=idempotency_key,
             )
         )
-        if verified_at is not None:
-            job.verified_open_at = verified_at
         session.flush()
         return self._view(session, job, candidate_id)
 
@@ -467,6 +489,43 @@ class JobService:
                 CandidateJobDecision.job_id == job.id,
             )
         )
+        identity = submission_identity_hash(
+            candidate_id=candidate_id,
+            company=job.company,
+            title=job.normalized_title or job.title,
+            location=job.normalized_location or job.location,
+            requisition_id=job.requisition_id,
+            application_url=job.application_url,
+        )
+        possible_duplicate = any(
+            submission_identity_hash(
+                candidate_id=candidate_id,
+                company=other.company,
+                title=other.normalized_title or other.title,
+                location=other.normalized_location or other.location,
+                requisition_id=other.requisition_id,
+                application_url=other.application_url,
+            )
+            == identity
+            or (
+                other.company.casefold() == job.company.casefold()
+                and other.semantic_fingerprint is not None
+                and other.semantic_fingerprint == job.semantic_fingerprint
+            )
+            for other in session.scalars(select(GlobalJob).where(GlobalJob.id != job.id))
+        )
+        checked_at = job.verification_checked_at
+        checked_at = (
+            checked_at
+            if checked_at is None or checked_at.tzinfo is not None
+            else checked_at.replace(tzinfo=UTC)
+        )
+        stale = (
+            job.verification_status != "open"
+            or checked_at is None
+            or checked_at > datetime.now(UTC)
+            or datetime.now(UTC) - checked_at > timedelta(hours=24)
+        )
         return JobView(
             job_id=job.id,
             candidate_id=candidate_id,
@@ -479,6 +538,12 @@ class JobService:
             ats_platform=job.ats_platform,
             posted_at=job.posted_at,
             verified_open_at=job.verified_open_at,
+            verification_status=job.verification_status,
+            verification_reason=(
+                str(job.verification_evidence.get("reason"))
+                if job.verification_evidence.get("reason") is not None
+                else None
+            ),
             salary_display=(
                 f"{job.salary_currency} {job.salary_min or '?'}-{job.salary_max or '?'}"
                 if job.salary_currency
@@ -495,6 +560,8 @@ class JobService:
             description_normalized=job.description_normalized or job.description,
             source_verified=job.source_trust_level != "unverified",
             source_trust_level=job.source_trust_level,
+            possible_duplicate=possible_duplicate,
+            stale=stale,
             proposed_action=rationale.get("proposed_action", "review"),
             required_skills=tuple(job.required_skills),
             preferred_skills=tuple(job.preferred_skills),

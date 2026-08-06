@@ -439,6 +439,8 @@ def test_retention_sweep_removes_expired_ready_browser_files(
         application = Application(
             candidate_id="example_candidate",
             job_id=job.id,
+            duplicate_hash="0" * 64,
+            submission_identity_hash="1" * 64,
         )
         session.add(application)
         session.flush()
@@ -502,6 +504,8 @@ def test_retention_sweep_removes_expired_human_takeover_profile(
         application = Application(
             candidate_id="example_candidate",
             job_id=job.id,
+            duplicate_hash="0" * 64,
+            submission_identity_hash="1" * 64,
             state=ApplicationState.HUMAN_ACTION_REQUIRED,
         )
         session.add(application)
@@ -585,7 +589,12 @@ def test_retention_restores_quarantine_when_metadata_transaction_fails(
         )
         session.add(job)
         session.flush()
-        application = Application(candidate_id="example_candidate", job_id=job.id)
+        application = Application(
+            candidate_id="example_candidate",
+            job_id=job.id,
+            duplicate_hash="0" * 64,
+            submission_identity_hash="1" * 64,
+        )
         session.add(application)
         session.flush()
         browser_session = BrowserSession(
@@ -808,7 +817,12 @@ def test_storage_reference_outside_canonical_roots_blocks_erasure_preflight(
         )
         session.add(job)
         session.flush()
-        application = Application(candidate_id="unsafe_ref", job_id=job.id)
+        application = Application(
+            candidate_id="unsafe_ref",
+            job_id=job.id,
+            duplicate_hash="0" * 64,
+            submission_identity_hash="1" * 64,
+        )
         session.add(application)
         session.flush()
         session.add(
