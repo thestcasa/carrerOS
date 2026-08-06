@@ -338,6 +338,13 @@ a final receipt which truthfully marks confirmation screenshots unavailable, a r
 and a final manifest. No placeholder image is fabricated. Both versions remain recursively
 verifiable.
 
+Runtime job analysis crosses a provider-neutral agent boundary using only a minimal scoring-policy
+projection. The service holds the candidate lifecycle fence across analysis, binds candidate,
+profile, job-version, source-payload, normalized-job, and policy hashes, and requires exact semantic
+agreement with deterministic dimension scores, evidence, contributions, totals, thresholds, and
+blockers before persistence. Provider, model, and prompt identity are assigned by the service;
+agent-supplied identity cannot enter the durable audit record.
+
 ## Local authorization
 
 Runtime defaults require a signed local bearer session plus CSRF for mutations. Candidate IDs from

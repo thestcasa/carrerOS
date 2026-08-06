@@ -131,16 +131,18 @@
   attempt evidence is discarded after lease loss, and immutable attempt evidence is included in
   bounded candidate lifecycle exports.
 - Runtime job analysis now invokes a provider-neutral `JobAnalysisAgent` implementation with a
-  redacted candidate scoring context. Candidate/job/policy/version hashes and strict correlation
-  are persisted with provider/model/prompt metadata, while deterministic recomputation remains
-  authoritative for classification, blockers, score, threshold, and proposed action. Injection-
-  blocked jobs never invoke the agent, and failures or mismatches persist no partial analysis.
+  minimal candidate scoring projection. Candidate/job/policy/version hashes, exact semantic
+  agreement, and strict correlation are required before service-owned provider/model/prompt
+  metadata is persisted. A candidate lifecycle fence prevents profile/deletion drift while
+  deterministic recomputation remains authoritative for classification, blockers, score,
+  threshold, and proposed action. Injection-blocked jobs never invoke the agent, and failures or
+  mismatches persist no partial analysis.
 - Discovery UI mutations retain their idempotency key across uncertain manual-discovery,
   source-create, and source-toggle responses and rotate it only after backend confirmation.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **263 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **264 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
 - Frontend: ESLint, strict TypeScript, **54 Vitest tests**, and the Next.js production build pass

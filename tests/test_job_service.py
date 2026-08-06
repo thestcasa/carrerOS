@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event, Thread
 from typing import NoReturn
 
 import pytest
@@ -39,13 +40,14 @@ def _service(
     *,
     source_verifier: ProviderJobSourceVerifier | None = None,
     analysis_agent: JobAnalysisAgent | None = None,
+    candidate_service: CandidateService | None = None,
 ) -> tuple[JobService, sessionmaker[Session]]:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     factory = build_session_factory(engine)
     return JobService(
         factory,
-        CandidateService(copied_candidates_root),
+        candidate_service or CandidateService(copied_candidates_root),
         source_verifier=source_verifier,
         analysis_agent=analysis_agent,
     ), factory
@@ -190,14 +192,31 @@ def test_runtime_analysis_uses_redacted_context_and_replay_skips_agent(
     assert "identity" not in context
     assert "legal_status" not in context
     assert "approved_answers" not in context
+    assert set(context["career_strategy"]) == {
+        "target_roles",
+        "priority_domains",
+        "excluded_domains",
+    }
+    assert set(context["scoring_rules"]) == {
+        "application_threshold",
+        "human_review_threshold",
+        "weights",
+    }
+    assert set(context["preferences"]) == {
+        "locations",
+        "work_modes",
+        "employment_types",
+        "salary",
+        "willing_to_relocate",
+    }
     assert request.candidate_id == "example_candidate"
     assert request.application_threshold == 78
     with factory() as session:
         score = session.scalar(select(CandidateJobScore))
         assert score is not None
         agent_analysis = score.rationale["agent_analysis"]
-        assert agent_analysis["provider"] == "local"
-        assert agent_analysis["model"] == "deterministic-scoring-v1"
+        assert agent_analysis["provider"] == "injected"
+        assert agent_analysis["model"].endswith("._CapturingAnalysisAgent")
         assert len(score.rationale["analysis_request_sha256"]) == 64
         assert len(score.rationale["analysis_response_sha256"]) == 64
 
@@ -234,10 +253,10 @@ def test_agent_failure_or_correlation_mismatch_persists_no_analysis(
         assert session.scalar(select(func.count(CandidateJobDecision.id))) == 0
 
 
-def test_agent_score_cannot_override_deterministic_hard_blocker(
+def test_agent_score_cannot_override_or_pollute_deterministic_analysis(
     copied_candidates_root: Path,
 ) -> None:
-    service, _factory = _service(
+    service, factory = _service(
         copied_candidates_root, analysis_agent=FakeJobAnalysisAgent(score=100)
     )
     result = service.discover(
@@ -257,10 +276,66 @@ def test_agent_score_cannot_override_deterministic_hard_blocker(
         )
     )
 
-    analyzed = service.analyze("example_candidate", result.job_ids[0], "blocked-agent-4203")
+    with pytest.raises(JobAnalysisError, match="correlation failed"):
+        service.analyze("example_candidate", result.job_ids[0], "blocked-agent-4203")
 
-    assert analyzed.proposed_action == "skip"
-    assert "company_blocked" in analyzed.hard_blockers
+    with factory() as session:
+        assert session.scalar(select(func.count(CandidateJobScore.id))) == 0
+        assert session.scalar(select(func.count(CandidateJobCommand.id))) == 0
+
+
+def test_runtime_analysis_holds_candidate_lifecycle_fence(
+    copied_candidates_root: Path,
+) -> None:
+    started = Event()
+    acquired = Event()
+    contender = CandidateService(copied_candidates_root)
+    delegate = DeterministicJobAnalysisAgent()
+    worker: Thread | None = None
+
+    class LifecycleProbeAgent:
+        def analyze(self, request: JobAnalysisRequest) -> JobAnalysisResponse:
+            nonlocal worker
+
+            def contend() -> None:
+                started.set()
+                with contender.lifecycle_fence(request.candidate_id):
+                    acquired.set()
+
+            worker = Thread(target=contend)
+            worker.start()
+            assert started.wait(timeout=5)
+            assert not acquired.wait(timeout=0.1)
+            return delegate.analyze(request)
+
+    service, _factory = _service(
+        copied_candidates_root,
+        analysis_agent=LifecycleProbeAgent(),
+        candidate_service=CandidateService(copied_candidates_root),
+    )
+    result = service.discover(
+        DiscoveryRequest(
+            candidate_id="example_candidate",
+            platform="greenhouse",
+            company="Fictional Fence Ltd",
+            company_domain="fictional-fence.invalid",
+            payloads=(
+                {
+                    "id": 4204,
+                    "title": "Machine Learning Engineer",
+                    "content": "Build deterministic Python systems.",
+                    "absolute_url": "https://boards.greenhouse.io/fictional/jobs/4204",
+                },
+            ),
+        )
+    )
+
+    service.analyze("example_candidate", result.job_ids[0], "fenced-agent-4204")
+
+    assert acquired.wait(timeout=5)
+    assert worker is not None
+    worker.join(timeout=5)
+    assert not worker.is_alive()
 
 
 def test_official_verification_persists_open_evidence_and_replay_does_not_refetch(

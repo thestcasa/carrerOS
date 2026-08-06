@@ -43,8 +43,9 @@ not add browser automation or live submission.
 - [x] Add durable discovery receipts, persisted injection events, and passing API/frontend
   contract coverage under the available Python 3.14 runtime.
 - [x] Route runtime analysis through a typed provider-neutral `JobAnalysisAgent` boundary using a
-  redacted scoring context, version/policy hashes, strict response correlation, and independent
-  deterministic policy recomputation.
+  minimal scoring projection, a candidate lifecycle fence, version/policy hashes, exact semantic
+  response correlation, service-owned provenance, and independent deterministic policy
+  recomputation.
 
 ## Milestone 3 and later
 

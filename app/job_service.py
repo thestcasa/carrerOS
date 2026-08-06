@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import DeterministicJobAnalysisAgent, JobAnalysisAgent
 from app.agents.contracts import JobAnalysisRequest, JobAnalysisResponse
 from app.agents.job_analysis import analysis_policy_sha256, canonical_json, content_sha256
+from app.candidates.models import CandidateConfig
 from app.candidates.service import CandidateService
 from app.discovery.adapters import AshbyAdapter, GreenhouseAdapter, LeverAdapter
 from app.discovery.contracts import JobPayloadAdapter, NormalizedJob
@@ -35,7 +36,7 @@ from app.domain.models import (
     JobVersion,
     SecurityEvent,
 )
-from app.jobs.scoring import CandidateScoringContext, evaluate_job_with_context
+from app.jobs.scoring import CandidateScoringContext, JobEvaluation, evaluate_job_with_context
 from app.jobs.scoring import NormalizedJob as ScoringJob
 
 
@@ -126,6 +127,7 @@ class JobService:
         self._candidates = candidate_service
         self._source_verifier = source_verifier or ProviderJobSourceVerifier()
         self._analysis_agent = analysis_agent or DeterministicJobAnalysisAgent()
+        self._analysis_provenance = self._service_owned_analysis_provenance(analysis_agent is None)
         self._adapters: dict[str, JobPayloadAdapter] = {
             "greenhouse": GreenhouseAdapter(),
             "lever": LeverAdapter(),
@@ -229,7 +231,24 @@ class JobService:
         *,
         transaction_guard: Callable[[Session], None] | None = None,
     ) -> JobView:
-        config = self._candidates.get_config(candidate_id)
+        with self._candidates.lifecycle_read(candidate_id) as config:
+            return self._analyze_fenced(
+                candidate_id,
+                job_id,
+                idempotency_key,
+                config,
+                transaction_guard=transaction_guard,
+            )
+
+    def _analyze_fenced(
+        self,
+        candidate_id: str,
+        job_id: UUID,
+        idempotency_key: str,
+        config: CandidateConfig,
+        *,
+        transaction_guard: Callable[[Session], None] | None,
+    ) -> JobView:
         with self._sessions.begin() as session:
             if transaction_guard is not None:
                 transaction_guard(session)
@@ -288,8 +307,13 @@ class JobService:
                 )
             except Exception as exc:
                 raise JobAnalysisError("job analysis agent failed closed") from exc
-            self._validate_analysis_response(analysis_request, analysis, scoring_context)
-            analysis_payload = analysis.model_dump(mode="json")
+            self._validate_analysis_response(
+                analysis_request, analysis, scoring_context, evaluation
+            )
+            analysis_payload = analysis.model_dump(
+                mode="json", exclude={"provider", "model", "prompt_version"}
+            )
+            analysis_payload.update(self._analysis_provenance)
             session.add(
                 CandidateJobScore(
                     candidate_id=candidate_id,
@@ -361,6 +385,7 @@ class JobService:
         request: JobAnalysisRequest,
         response: JobAnalysisResponse,
         context: CandidateScoringContext,
+        evaluation: JobEvaluation,
     ) -> None:
         correlation = (
             response.request_id == request.request_id
@@ -378,8 +403,41 @@ class JobService:
         weights_match = dimension_names == tuple(expected_weights) and all(
             item.weight == expected_weights[item.name] for item in response.dimensions
         )
-        if not correlation or not weights_match:
+        semantic_match = (
+            response.total_score == evaluation.total_score
+            and response.meets_threshold
+            == (evaluation.total_score >= context.scoring_rules.application_threshold)
+            and response.warnings
+            == tuple(f"hard_blocker:{item}" for item in evaluation.hard_blockers)
+            and len(response.dimensions) == len(evaluation.dimensions)
+            and all(
+                received.name == expected.name
+                and received.score == expected.score
+                and received.weight == expected.weight
+                and received.contribution == expected.contribution
+                and received.rationale == expected.explanation
+                and received.evidence_ids == expected.evidence
+                for received, expected in zip(
+                    response.dimensions, evaluation.dimensions, strict=True
+                )
+            )
+        )
+        if not correlation or not weights_match or not semantic_match:
             raise JobAnalysisError("job analysis response correlation failed")
+
+    def _service_owned_analysis_provenance(self, production_default: bool) -> dict[str, str]:
+        if production_default:
+            return {
+                "provider": "local",
+                "model": "deterministic-scoring-v1",
+                "prompt_version": "1.0",
+            }
+        agent_type = type(self._analysis_agent)
+        return {
+            "provider": "injected",
+            "model": f"{agent_type.__module__}.{agent_type.__qualname__}",
+            "prompt_version": "job-analysis-contract-v1",
+        }
 
     def command(
         self,

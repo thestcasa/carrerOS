@@ -4,18 +4,9 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.candidates.models import (
-    CandidateConfig,
-    CareerStrategy,
-    CompanyRules,
-    Languages,
-    Preferences,
-    RoleRules,
-    ScoringRules,
-    Skills,
-)
+from app.candidates.models import CandidateConfig
 
 
 class _FrozenModel(BaseModel):
@@ -50,33 +41,109 @@ class NormalizedJob(_FrozenModel):
     salary_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
 
+class CareerScoringPolicy(_FrozenModel):
+    target_roles: tuple[str, ...]
+    priority_domains: tuple[str, ...]
+    excluded_domains: tuple[str, ...]
+
+
+class RoleScoringPolicy(_FrozenModel):
+    target: tuple[str, ...]
+    blocked: tuple[str, ...]
+
+
+class SkillScoringPolicy(_FrozenModel):
+    categories: dict[str, tuple[str, ...]]
+
+
+class ScorePolicy(_FrozenModel):
+    application_threshold: int = Field(ge=0, le=100)
+    human_review_threshold: int = Field(ge=0, le=100)
+    weights: dict[str, Decimal]
+
+    @model_validator(mode="after")
+    def thresholds_and_weights_are_valid(self) -> ScorePolicy:
+        if self.human_review_threshold > self.application_threshold:
+            raise ValueError("human review threshold cannot exceed application threshold")
+        if any(weight < 0 or weight > 1 for weight in self.weights.values()):
+            raise ValueError("scoring weights must be between zero and one")
+        if sum(self.weights.values(), Decimal(0)) != Decimal(1):
+            raise ValueError("scoring weights must sum to one")
+        return self
+
+
+class SalaryScoringPolicy(_FrozenModel):
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    minimum: int = Field(ge=0)
+
+
+class PreferenceScoringPolicy(_FrozenModel):
+    locations: tuple[str, ...]
+    work_modes: tuple[str, ...]
+    employment_types: tuple[str, ...]
+    salary: SalaryScoringPolicy
+    willing_to_relocate: bool
+
+
+class CompanyScoringPolicy(_FrozenModel):
+    target: tuple[str, ...]
+    blocked: tuple[str, ...]
+
+
+class LanguageScoringPolicy(_FrozenModel):
+    language: str = Field(min_length=1)
+    level: str = Field(pattern=r"^(A1|A2|B1|B2|C1|C2|native)$")
+
+
 class CandidateScoringContext(_FrozenModel):
     """Least-privilege candidate policy exposed to the analysis-agent boundary."""
 
     candidate_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
     profile_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    career_strategy: CareerStrategy
-    roles: RoleRules
-    skills: Skills
-    scoring_rules: ScoringRules
-    preferences: Preferences
-    companies: CompanyRules
-    languages: Languages
+    career_strategy: CareerScoringPolicy
+    roles: RoleScoringPolicy
+    skills: SkillScoringPolicy
+    scoring_rules: ScorePolicy
+    preferences: PreferenceScoringPolicy
+    companies: CompanyScoringPolicy
+    languages: tuple[LanguageScoringPolicy, ...]
 
     @classmethod
     def from_config(cls, config: CandidateConfig) -> CandidateScoringContext:
         return cls(
             candidate_id=config.manifest.candidate_id,
             profile_version=config.manifest.profile_version,
-            career_strategy=config.career_strategy,
-            roles=config.roles,
-            skills=config.skills,
-            scoring_rules=config.scoring_rules.model_copy(
-                update={"weights": dict(sorted(config.scoring_rules.weights.items()))}
+            career_strategy=CareerScoringPolicy(
+                target_roles=config.career_strategy.target_roles,
+                priority_domains=config.career_strategy.priority_domains,
+                excluded_domains=config.career_strategy.excluded_domains,
             ),
-            preferences=config.preferences,
-            companies=config.companies,
-            languages=config.languages,
+            roles=RoleScoringPolicy(target=config.roles.target, blocked=config.roles.blocked),
+            skills=SkillScoringPolicy(categories=config.skills.categories),
+            scoring_rules=ScorePolicy(
+                application_threshold=config.scoring_rules.application_threshold,
+                human_review_threshold=config.scoring_rules.human_review_threshold,
+                weights=dict(sorted(config.scoring_rules.weights.items())),
+            ),
+            preferences=PreferenceScoringPolicy(
+                locations=config.preferences.locations,
+                work_modes=config.preferences.work_modes,
+                employment_types=config.preferences.employment_types,
+                salary=SalaryScoringPolicy(
+                    currency=config.preferences.salary.currency,
+                    minimum=config.preferences.salary.minimum,
+                ),
+                willing_to_relocate=config.preferences.willing_to_relocate,
+            ),
+            companies=CompanyScoringPolicy(
+                target=config.companies.target,
+                blocked=config.companies.blocked,
+            ),
+            languages=tuple(
+                LanguageScoringPolicy(language=item.language, level=item.level)
+                for item in config.languages.items
+                if item.approved and not item.archived
+            ),
         )
 
 
@@ -228,7 +295,7 @@ def _hard_blockers(job: NormalizedJob, context: CandidateScoringContext) -> tupl
     ):
         blockers.append("salary_below_minimum")
     candidate_languages = {
-        item.language.casefold(): _LEVEL_RANK[item.level] for item in context.languages.items
+        item.language.casefold(): _LEVEL_RANK[item.level] for item in context.languages
     }
     for requirement in job.required_languages:
         if (

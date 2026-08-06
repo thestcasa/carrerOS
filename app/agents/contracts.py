@@ -21,6 +21,13 @@ class ScoringDimension(ContractModel):
     rationale: str = Field(min_length=1, max_length=1000)
     evidence_ids: tuple[str, ...] = ()
 
+    @model_validator(mode="after")
+    def contribution_matches_score_and_weight(self) -> ScoringDimension:
+        expected = (Decimal(self.score) * self.weight).quantize(Decimal("0.01"))
+        if self.contribution != expected:
+            raise ValueError("analysis contribution does not match score and weight")
+        return self
+
 
 class JobAnalysisRequest(ContractModel):
     request_id: UUID
