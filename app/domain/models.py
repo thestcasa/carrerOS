@@ -279,6 +279,11 @@ class WorkflowTask(Base, TimestampMixin, CandidateScopedMixin):
     locked_by: Mapped[str | None] = mapped_column(String(128))
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_category: Mapped[str | None] = mapped_column(String(64))
+    last_error_retryable: Mapped[bool | None] = mapped_column(Boolean)
+    attempt_history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

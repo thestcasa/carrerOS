@@ -18,3 +18,9 @@ archives, fixtures, logs, or Git.
 CAPTCHA, OTP, magic links, and identity checks always pause and create a human action in the same
 session. CAPTCHA farms, fingerprint spoofing, hidden ATS text, fake identities, and anti-bot or
 rate-limit evasion are forbidden. This repository has no live final-click implementation.
+
+Browser workers hold the candidate lifecycle fence for the complete external attempt and evidence
+publication, preventing erasure races from recreating candidate files. Attempt screenshots and
+HTML are accepted only from exact candidate/session leaf names and are opened without following
+symlinks. Lease-lost attempt evidence is removed before the stale result is discarded; referenced
+evidence remains immutable, hash-verified, and included in bounded lifecycle exports.

@@ -42,8 +42,20 @@ from app.archive import (
     canonical_json_bytes,
     sha256_bytes,
 )
-from app.browser import DryRunRequest, FieldKind, SyntheticBrowserDryRunner, UploadArtifact
-from app.browser.fixtures import standard_application_form
+from app.browser import (
+    BrowserExecutor,
+    BrowserFailureCategory,
+    BrowserWorkerFailure,
+    PlaywrightDryRunRequest,
+    PlaywrightDryRunResult,
+    UploadArtifact,
+)
+from app.browser.evidence import (
+    BrowserAttemptManifest,
+    BrowserEvidenceError,
+    BrowserEvidenceStore,
+    StoredBrowserEvidence,
+)
 from app.candidates.models import CandidateConfig, ClaimFact
 from app.candidates.service import CandidateService
 from app.candidates.snapshot import CandidateSnapshot
@@ -109,6 +121,7 @@ from app.materials.contracts import (
 )
 from app.operations import AuthorizationConsumer
 from app.submission_gate import SubmissionGate, SubmissionGateInput
+from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 from app.workflow import VALID_TRANSITIONS
 
 
@@ -149,7 +162,8 @@ class ApplicationService:
         self._generator = DeterministicMaterialGenerator()
         self._renderer = DeterministicPdfRenderer()
         self._reviewer = IndependentMaterialReviewer()
-        self._browser = SyntheticBrowserDryRunner(self._runtime_root)
+        self._tasks = TaskQueue(session_factory)
+        self._browser_evidence = BrowserEvidenceStore(self._runtime_root)
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
         self._consumer = AuthorizationConsumer(session_factory)
         self._correspondence = CorrespondenceService()
@@ -1027,7 +1041,7 @@ class ApplicationService:
         command: DryRunCommand,
         idempotency_key: str,
     ) -> ApplicationDetail:
-        config = self._candidates.get_config(candidate_id)
+        self._candidates.get_config(candidate_id)
         with self._sessions.begin() as session:
             payload = {
                 "application_id": str(application_id),
@@ -1071,70 +1085,32 @@ class ApplicationService:
             )
             if browser_session is None:
                 raise ApplicationConflictError("browser session is missing")
-            challenge = FieldKind(command.challenge) if command.challenge else None
-            result = self._browser.run(
-                DryRunRequest(
-                    application_id=application_id,
-                    candidate_id=candidate_id,
-                    session_id=browser_session.id,
-                    form=standard_application_form(challenge=challenge),
-                    answers={
-                        "first_name": config.identity.full_name.split()[0],
-                        "email": config.identity.email,
-                    },
-                    uploads=(
-                        UploadArtifact(
-                            field_key="cv",
-                            path=Path(rendered_cv.storage_uri),
-                            sha256=rendered_cv.sha256,
-                        ),
-                    ),
-                    allowed_upload_sha256=frozenset({rendered_cv.sha256}),
-                )
+            if browser_session.status == "queued":
+                raise ApplicationConflictError("a browser dry run is already queued")
+            task = self._tasks.enqueue_in_session(
+                session,
+                candidate_id=candidate_id,
+                kind="browser_dry_run",
+                idempotency_key=(
+                    f"browser:{application_id}:"
+                    f"{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+                ),
+                payload={
+                    "application_id": str(application_id),
+                    "session_id": str(browser_session.id),
+                    "challenge": command.challenge,
+                },
+                max_attempts=3,
             )
-            browser_session.status = "human_action_required" if result.human_actions else "ready"
-            browser_session.external_session_ref = str(result.session_directory)
-            event_payload = result.model_dump(mode="json")
-            if result.human_actions:
-                action_result = result.human_actions[0]
-                action = HumanAction(
-                    candidate_id=candidate_id,
-                    application_id=application_id,
-                    actor_id="system",
-                    action=HumanActionKind.PAUSE,
-                    kind=action_result.reason.value,
-                    reason=action_result.message,
-                    payload=event_payload,
-                    browser_session_id=browser_session.id,
-                    screenshot_uri=str(result.screenshot_path),
-                    expires_at=datetime.now(UTC) + timedelta(minutes=15),
-                )
-                session.add(action)
-                self._transition(
-                    session,
-                    application,
-                    ApplicationState.HUMAN_ACTION_REQUIRED,
-                    idempotency_key,
-                    "HUMAN_ACTION_REQUIRED",
-                    payload=event_payload,
-                )
-            else:
-                self._transition(
-                    session,
-                    application,
-                    ApplicationState.FINAL_VALIDATION,
-                    f"{idempotency_key}:validation",
-                    "FINAL_VALIDATION_STARTED",
-                    payload=event_payload,
-                )
-                self._transition(
-                    session,
-                    application,
-                    ApplicationState.READY_TO_SUBMIT,
-                    f"{idempotency_key}:ready",
-                    "FINAL_VALIDATION_PASSED",
-                    payload={"synthetic_only": True},
-                )
+            browser_session.status = "queued"
+            browser_session.stopped_reason = None
+            self._append_same_state_event(
+                session,
+                application,
+                f"browser-task:{task.task_id}:queued",
+                "BROWSER_DRY_RUN_QUEUED",
+                payload={"task_id": str(task.task_id), "challenge": command.challenge},
+            )
             session.flush()
             view = self._detail(session, application)
             self._append_administrative_command_receipt(
@@ -1146,6 +1122,444 @@ class ApplicationService:
                 view.model_dump(mode="json"),
             )
             return view
+
+    def execute_browser_task(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        executor: BrowserExecutor,
+        fixture_base_url: str,
+        now: datetime | None = None,
+    ) -> TaskView:
+        """Execute one leased browser attempt while fenced against candidate erasure."""
+
+        with self._candidates.lifecycle_write(task.candidate_id):
+            return self._execute_browser_task_locked(
+                queue,
+                task,
+                worker_id=worker_id,
+                executor=executor,
+                fixture_base_url=fixture_base_url,
+                now=now,
+            )
+
+    def _execute_browser_task_locked(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        executor: BrowserExecutor,
+        fixture_base_url: str,
+        now: datetime | None = None,
+    ) -> TaskView:
+        """Run browser I/O and publish evidence under the held lifecycle fence."""
+
+        started_at = now or datetime.now(UTC)
+        try:
+            request = self._browser_task_request(task, fixture_base_url)
+            result = executor.run(request)
+            self._validate_browser_result(task, request, result)
+            completed_at = datetime.now(UTC)
+            evidence = self._browser_evidence.store(
+                task_id=task.task_id,
+                attempt=task.attempts,
+                result=result,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
+        except BrowserWorkerFailure as exc:
+            return self._fail_browser_task(
+                queue,
+                task,
+                worker_id=worker_id,
+                category=exc.category,
+                retryable=exc.retryable,
+                safe_message=exc.safe_details,
+                now=started_at,
+            )
+        except (ApplicationConflictError, BrowserEvidenceError, ValueError):
+            return self._fail_browser_task(
+                queue,
+                task,
+                worker_id=worker_id,
+                category=BrowserFailureCategory.VALIDATION_FAILURE,
+                retryable=False,
+                safe_message="The browser package or immutable evidence failed validation.",
+                now=started_at,
+            )
+        except Exception:
+            return self._fail_browser_task(
+                queue,
+                task,
+                worker_id=worker_id,
+                category=BrowserFailureCategory.BROWSER_CRASH,
+                retryable=True,
+                safe_message="The isolated browser attempt stopped unexpectedly.",
+                now=started_at,
+            )
+
+        try:
+            with self._sessions.begin() as session:
+                queue.assert_lease_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    expected_attempt=task.attempts,
+                )
+                self._finalize_browser_task(session, task, result, evidence)
+                return queue.complete_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    now=completed_at,
+                    expected_attempt=task.attempts,
+                )
+        except TaskLeaseLostError:
+            self._browser_evidence.discard(evidence)
+            current = queue.get(task.task_id)
+            if current is None:
+                raise
+            return current
+        except (ApplicationConflictError, BrowserEvidenceError, ValueError):
+            return self._fail_browser_task(
+                queue,
+                task,
+                worker_id=worker_id,
+                category=BrowserFailureCategory.VALIDATION_FAILURE,
+                retryable=False,
+                safe_message="The browser result no longer matches the active application.",
+                now=completed_at,
+            )
+
+    def _browser_task_request(
+        self, task: TaskView, fixture_base_url: str
+    ) -> PlaywrightDryRunRequest:
+        if task.kind != "browser_dry_run":
+            raise ApplicationConflictError("workflow task is not a browser dry run")
+        try:
+            application_id = UUID(str(task.payload["application_id"]))
+            session_id = UUID(str(task.payload["session_id"]))
+            challenge_value = task.payload.get("challenge")
+        except (KeyError, ValueError) as exc:
+            raise ApplicationConflictError("browser task identity is invalid") from exc
+        if challenge_value not in {None, "captcha", "otp"}:
+            raise ApplicationConflictError("browser task challenge is invalid")
+        config = self._candidates.get_config(task.candidate_id)
+        with self._sessions() as session:
+            application = self._application(session, task.candidate_id, application_id)
+            if application.state is not ApplicationState.FORM_FILLING:
+                raise ApplicationConflictError("application is not ready for browser execution")
+            browser_session = session.get(BrowserSession, session_id)
+            if (
+                browser_session is None
+                or browser_session.candidate_id != task.candidate_id
+                or browser_session.application_id != application_id
+            ):
+                raise ApplicationConflictError("browser task session identity is invalid")
+            review = session.scalar(
+                select(AgentReview)
+                .where(
+                    AgentReview.candidate_id == task.candidate_id,
+                    AgentReview.application_id == application_id,
+                )
+                .order_by(AgentReview.created_at.desc())
+                .limit(1)
+            )
+            if review is None:
+                raise ApplicationConflictError("reviewed browser package is missing")
+            rendered_cv = next(
+                (
+                    artifact
+                    for document, artifact in self._reviewed_materials(session, application, review)
+                    if document.kind is DocumentKind.CV
+                ),
+                None,
+            )
+            if rendered_cv is None:
+                raise ApplicationConflictError("reviewed browser CV is missing")
+            fixture_url = f"{fixture_base_url}?challenge={challenge_value or 'none'}"
+            return PlaywrightDryRunRequest(
+                application_id=application_id,
+                candidate_id=task.candidate_id,
+                session_id=session_id,
+                fixture_url=fixture_url,
+                answers={
+                    "first_name": config.identity.full_name.split()[0],
+                    "email": config.identity.email,
+                },
+                uploads=(
+                    UploadArtifact(
+                        field_key="cv",
+                        path=Path(rendered_cv.storage_uri),
+                        sha256=rendered_cv.sha256,
+                    ),
+                ),
+                allowed_upload_sha256=frozenset({rendered_cv.sha256}),
+            )
+
+    def _validate_browser_result(
+        self,
+        task: TaskView,
+        request: PlaywrightDryRunRequest,
+        result: PlaywrightDryRunResult,
+    ) -> None:
+        expected_session = (
+            self._runtime_root
+            / "candidates"
+            / request.candidate_id
+            / "sessions"
+            / str(request.session_id)
+        )
+        expected_values: dict[str, str | bool] = {
+            **request.answers,
+            **{upload.field_key: upload.path.name for upload in request.uploads},
+        }
+        if (
+            task.kind != "browser_dry_run"
+            or result.application_id != request.application_id
+            or result.candidate_id != request.candidate_id
+            or result.session_id != request.session_id
+            or result.fixture_url != request.fixture_url
+            or result.session_directory.absolute() != expected_session
+            or result.persistent_profile_directory.absolute()
+            != expected_session / "playwright-profile"
+            or result.screenshot_path.absolute() != expected_session / "playwright-final-page.png"
+            or result.final_page_snapshot_path.absolute()
+            != expected_session / "playwright-final-page.html"
+            or result.mapped_values != expected_values
+            or result.upload_hashes != tuple(upload.sha256 for upload in request.uploads)
+            or result.allowed_network_requests != 1
+            or not result.final_submit_present
+            or result.ready_for_human_review != (result.human_action is None)
+        ):
+            raise ApplicationConflictError("browser result failed final-page validation")
+
+    def _finalize_browser_task(
+        self,
+        session: Session,
+        task: TaskView,
+        result: PlaywrightDryRunResult,
+        evidence: StoredBrowserEvidence,
+    ) -> None:
+        application_id = UUID(str(task.payload["application_id"]))
+        session_id = UUID(str(task.payload["session_id"]))
+        if (
+            result.candidate_id != task.candidate_id
+            or result.application_id != application_id
+            or result.session_id != session_id
+            or evidence.manifest.task_id != task.task_id
+            or evidence.manifest.attempt != task.attempts
+        ):
+            raise ApplicationConflictError("browser result identity does not match its task")
+        application = self._application(session, task.candidate_id, application_id)
+        if application.state is not ApplicationState.FORM_FILLING:
+            raise ApplicationConflictError("application changed during browser execution")
+        browser_session = session.get(BrowserSession, session_id)
+        if (
+            browser_session is None
+            or browser_session.candidate_id != task.candidate_id
+            or browser_session.application_id != application_id
+        ):
+            raise ApplicationConflictError("browser result session identity is invalid")
+        manifest_payload = evidence.manifest.model_dump(mode="json")
+        event_payload = {
+            "task_id": str(task.task_id),
+            "attempt": task.attempts,
+            "browser_evidence": manifest_payload,
+            "final_page": {
+                "source_url": result.fixture_url,
+                "upload_hashes": list(result.upload_hashes),
+                "final_submit_present": result.final_submit_present,
+                "final_submit_clicked": False,
+            },
+        }
+        artifact_values = (
+            (
+                "browser_pre_submit_screenshot",
+                evidence.screenshot_path,
+                evidence.manifest.screenshot_sha256,
+                "image/png",
+            ),
+            (
+                "browser_final_page_snapshot",
+                evidence.final_page_path,
+                evidence.manifest.final_page_sha256,
+                "text/html",
+            ),
+            (
+                "browser_attempt_manifest",
+                evidence.manifest_path,
+                hashlib.sha256(evidence.manifest_path.read_bytes()).hexdigest(),
+                "application/json",
+            ),
+        )
+        for kind, path, digest, content_type in artifact_values:
+            version = (
+                session.scalar(
+                    select(func.max(ApplicationArtifact.version)).where(
+                        ApplicationArtifact.candidate_id == task.candidate_id,
+                        ApplicationArtifact.application_id == application_id,
+                        ApplicationArtifact.kind == kind,
+                    )
+                )
+                or 0
+            ) + 1
+            session.add(
+                ApplicationArtifact(
+                    candidate_id=task.candidate_id,
+                    application_id=application_id,
+                    kind=kind,
+                    version=version,
+                    storage_uri=str(path),
+                    sha256=digest,
+                    content_type=content_type,
+                    immutable=True,
+                    artifact_metadata={
+                        "task_id": str(task.task_id),
+                        "attempt": task.attempts,
+                        "session_id": str(session_id),
+                    },
+                )
+            )
+        browser_session.external_session_ref = str(result.session_directory)
+        browser_session.stopped_reason = None
+        if result.human_action is not None:
+            browser_session.status = "human_action_required"
+            session.add(
+                HumanAction(
+                    candidate_id=task.candidate_id,
+                    application_id=application_id,
+                    actor_id="system",
+                    action=HumanActionKind.PAUSE,
+                    kind=result.human_action,
+                    reason=(
+                        f"{result.human_action.upper()} requires human completion in this session."
+                    ),
+                    payload=event_payload,
+                    browser_session_id=session_id,
+                    screenshot_uri=str(evidence.screenshot_path),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=15),
+                )
+            )
+            self._transition(
+                session,
+                application,
+                ApplicationState.HUMAN_ACTION_REQUIRED,
+                f"browser-task:{task.task_id}:attempt:{task.attempts}:human",
+                "HUMAN_ACTION_REQUIRED",
+                payload=event_payload,
+            )
+        else:
+            browser_session.status = "ready"
+            self._transition(
+                session,
+                application,
+                ApplicationState.FINAL_VALIDATION,
+                f"browser-task:{task.task_id}:attempt:{task.attempts}:validation",
+                "FINAL_VALIDATION_STARTED",
+                payload=event_payload,
+            )
+            self._transition(
+                session,
+                application,
+                ApplicationState.READY_TO_SUBMIT,
+                f"browser-task:{task.task_id}:attempt:{task.attempts}:ready",
+                "FINAL_VALIDATION_PASSED",
+                payload={"synthetic_only": True, "task_id": str(task.task_id)},
+            )
+
+    def _fail_browser_task(
+        self,
+        queue: TaskQueue,
+        task: TaskView,
+        *,
+        worker_id: str,
+        category: BrowserFailureCategory,
+        retryable: bool,
+        safe_message: str,
+        now: datetime,
+    ) -> TaskView:
+        try:
+            with (
+                self._candidates.lifecycle_write(task.candidate_id),
+                self._sessions.begin() as session,
+            ):
+                failed = queue.fail_in_session(
+                    session,
+                    task.task_id,
+                    worker_id=worker_id,
+                    category=category.value,
+                    retryable=retryable,
+                    safe_details={"message": safe_message},
+                    now=now,
+                    expected_attempt=task.attempts,
+                )
+                application_id = UUID(str(task.payload["application_id"]))
+                application = self._application(session, task.candidate_id, application_id)
+                if application.state is not ApplicationState.FORM_FILLING:
+                    return failed
+                event_payload = {
+                    "task_id": str(task.task_id),
+                    "attempt": task.attempts,
+                    "category": category.value,
+                    "retryable": retryable,
+                    "message": safe_message,
+                }
+                if failed.status == "pending":
+                    self._append_same_state_event(
+                        session,
+                        application,
+                        f"browser-task:{task.task_id}:attempt:{task.attempts}:failed",
+                        "BROWSER_DRY_RUN_FAILED",
+                        payload=event_payload,
+                    )
+                else:
+                    browser_session = session.get(
+                        BrowserSession, UUID(str(task.payload["session_id"]))
+                    )
+                    if browser_session is not None:
+                        browser_session.status = "failed"
+                        browser_session.stopped_reason = category.value
+                    session.add(
+                        HumanAction(
+                            candidate_id=task.candidate_id,
+                            application_id=application_id,
+                            actor_id="system",
+                            action=HumanActionKind.PAUSE,
+                            kind="browser_failure",
+                            reason=safe_message,
+                            payload=event_payload,
+                            browser_session_id=(browser_session.id if browser_session else None),
+                            expires_at=now + timedelta(hours=24),
+                        )
+                    )
+                    session.add(
+                        NotificationRecord(
+                            candidate_id=task.candidate_id,
+                            application_id=application_id,
+                            event_type="browser_dry_run_failed",
+                            channel="dashboard",
+                            message="Browser dry run needs human review.",
+                            immediate=True,
+                        )
+                    )
+                    self._transition(
+                        session,
+                        application,
+                        ApplicationState.HUMAN_ACTION_REQUIRED,
+                        f"browser-task:{task.task_id}:terminal",
+                        "BROWSER_DRY_RUN_FAILED",
+                        payload=event_payload,
+                    )
+                return failed
+        except TaskLeaseLostError:
+            current = queue.get(task.task_id)
+            if current is None:
+                raise
+            return current
 
     def authorize(
         self, candidate_id: str, application_id: UUID, idempotency_key: str
@@ -1609,11 +2023,6 @@ class ApplicationService:
                         "submission_receipt",
                         2,
                         "application/json",
-                    ),
-                    "submission/confirmation_screenshot.png": (
-                        "confirmation_screenshot",
-                        1,
-                        "image/png",
                     ),
                     "submission/confirmation.html": (
                         "submission_confirmation",
@@ -2185,6 +2594,7 @@ class ApplicationService:
             application = self._application(session, candidate_id, action.application_id)
             if application.state is not ApplicationState.HUMAN_ACTION_REQUIRED:
                 raise ApplicationConflictError("application is not awaiting human action")
+            browser_session: BrowserSession | None = None
             if not cancel and action.browser_session_id is not None:
                 browser_session = session.get(BrowserSession, action.browser_session_id)
                 if (
@@ -2222,22 +2632,65 @@ class ApplicationService:
                     browser_session.status = "cancelled"
             action.status = "cancelled" if cancel else "completed"
             action.completed_at = datetime.now(UTC)
-            target = ApplicationState.WITHDRAWN if cancel else ApplicationState.FINAL_VALIDATION
-            self._transition(
-                session,
-                application,
-                target,
-                idempotency_key,
-                "HUMAN_ACTION_CANCELLED" if cancel else "HUMAN_ACTION_COMPLETED",
+            resume_browser = (
+                not cancel
+                and action.kind in {"captcha", "otp"}
+                and action.browser_session_id is not None
             )
-            if not cancel:
+            if resume_browser:
+                assert browser_session is not None
+                resume_task = self._tasks.enqueue_in_session(
+                    session,
+                    candidate_id=candidate_id,
+                    kind="browser_dry_run",
+                    idempotency_key=f"browser-resume:{action.id}",
+                    payload={
+                        "application_id": str(application.id),
+                        "session_id": str(browser_session.id),
+                        "challenge": None,
+                    },
+                    max_attempts=3,
+                )
+                browser_session.status = "queued"
+                browser_session.stopped_reason = None
                 self._transition(
                     session,
                     application,
-                    ApplicationState.READY_TO_SUBMIT,
-                    f"{idempotency_key}:ready",
-                    "FINAL_VALIDATION_PASSED",
+                    ApplicationState.FORM_FILLING,
+                    f"{idempotency_key}:resume",
+                    "HUMAN_ACTION_COMPLETED",
+                    payload={
+                        "action_id": str(action.id),
+                        "browser_session_id": str(browser_session.id),
+                        "resume_task_id": str(resume_task.task_id),
+                    },
                 )
+            else:
+                target = ApplicationState.WITHDRAWN if cancel else ApplicationState.FINAL_VALIDATION
+                if not cancel:
+                    self._append_same_state_event(
+                        session,
+                        application,
+                        idempotency_key,
+                        "HUMAN_ACTION_COMPLETED",
+                        payload={"action_id": str(action.id)},
+                    )
+                self._transition(
+                    session,
+                    application,
+                    target,
+                    idempotency_key if cancel else f"{idempotency_key}:validation",
+                    "HUMAN_ACTION_CANCELLED" if cancel else "FINAL_VALIDATION_STARTED",
+                    payload=None if cancel else action.payload,
+                )
+                if not cancel:
+                    self._transition(
+                        session,
+                        application,
+                        ApplicationState.READY_TO_SUBMIT,
+                        f"{idempotency_key}:ready",
+                        "FINAL_VALIDATION_PASSED",
+                    )
             session.flush()
             view = self._human_action_view(session, action)
             self._append_administrative_command_receipt(
@@ -2870,8 +3323,18 @@ class ApplicationService:
             raise ApplicationConflictError("reviewed documents use different candidate snapshots")
         return tuple(reviewed)
 
-    @staticmethod
-    def _browser_upload_hashes(session: Session, application: Application) -> tuple[str, ...]:
+    def _browser_upload_hashes(self, session: Session, application: Application) -> tuple[str, ...]:
+        try:
+            manifest, _screenshot, _final_page = self._verified_browser_evidence(
+                session, application
+            )
+        except ApplicationConflictError:
+            return ()
+        return manifest.upload_hashes
+
+    def _verified_browser_evidence(
+        self, session: Session, application: Application
+    ) -> tuple[BrowserAttemptManifest, bytes, bytes]:
         event = session.scalar(
             select(ApplicationEvent)
             .where(
@@ -2883,17 +3346,100 @@ class ApplicationService:
             .limit(1)
         )
         if event is None:
-            return ()
-        final_page = event.payload.get("final_page")
-        values = final_page.get("upload_hashes") if isinstance(final_page, dict) else None
-        if not isinstance(values, list) or not all(
-            isinstance(value, str)
-            and len(value) == 64
-            and all(character in "0123456789abcdef" for character in value)
-            for value in values
+            raise ApplicationConflictError("verified browser evidence is missing")
+        try:
+            manifest = BrowserAttemptManifest.model_validate(event.payload["browser_evidence"])
+        except (KeyError, ValueError) as exc:
+            raise ApplicationConflictError("verified browser evidence identity is invalid") from exc
+        if (
+            manifest.candidate_id != application.candidate_id
+            or manifest.application_id != application.id
         ):
-            return ()
-        return tuple(values)
+            raise ApplicationConflictError("verified browser evidence identity is invalid")
+        artifacts = session.scalars(
+            select(ApplicationArtifact).where(
+                ApplicationArtifact.candidate_id == application.candidate_id,
+                ApplicationArtifact.application_id == application.id,
+                ApplicationArtifact.kind.in_(
+                    {
+                        "browser_pre_submit_screenshot",
+                        "browser_final_page_snapshot",
+                        "browser_attempt_manifest",
+                    }
+                ),
+            )
+        ).all()
+        matching_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_metadata.get("task_id") == str(manifest.task_id)
+            and artifact.artifact_metadata.get("attempt") == manifest.attempt
+            and artifact.artifact_metadata.get("session_id") == str(manifest.session_id)
+        ]
+        by_kind = {artifact.kind: artifact for artifact in matching_artifacts}
+        if (
+            set(by_kind)
+            != {
+                "browser_pre_submit_screenshot",
+                "browser_final_page_snapshot",
+                "browser_attempt_manifest",
+            }
+            or len(matching_artifacts) != 3
+        ):
+            raise ApplicationConflictError("verified browser evidence artifacts are incomplete")
+        content: dict[str, bytes] = {}
+        expected_directory = (
+            self._runtime_root
+            / "candidates"
+            / application.candidate_id
+            / "browser_evidence"
+            / str(manifest.task_id)
+            / f"attempt-{manifest.attempt}"
+        )
+        for kind, artifact in by_kind.items():
+            raw_path = Path(artifact.storage_uri).absolute()
+            if not raw_path.is_relative_to(self._runtime_root):
+                raise ApplicationConflictError("verified browser evidence path is invalid")
+            for parent in (raw_path, *raw_path.parents):
+                if parent == self._runtime_root:
+                    break
+                if parent.is_symlink():
+                    raise ApplicationConflictError("verified browser evidence path is invalid")
+            try:
+                resolved = raw_path.resolve(strict=True)
+            except OSError as exc:
+                raise ApplicationConflictError("verified browser evidence is missing") from exc
+            if (
+                raw_path.is_symlink()
+                or resolved.parent != expected_directory.resolve()
+                or artifact.artifact_metadata.get("task_id") != str(manifest.task_id)
+                or artifact.artifact_metadata.get("attempt") != manifest.attempt
+                or artifact.artifact_metadata.get("session_id") != str(manifest.session_id)
+            ):
+                raise ApplicationConflictError("verified browser evidence path is invalid")
+            value = resolved.read_bytes()
+            if hashlib.sha256(value).hexdigest() != artifact.sha256:
+                raise ApplicationConflictError("verified browser evidence hash does not match")
+            content[kind] = value
+        try:
+            stored_manifest = BrowserAttemptManifest.model_validate_json(
+                content["browser_attempt_manifest"]
+            )
+        except ValueError as exc:
+            raise ApplicationConflictError("verified browser evidence manifest is invalid") from exc
+        if (
+            stored_manifest != manifest
+            or hashlib.sha256(content["browser_pre_submit_screenshot"]).hexdigest()
+            != manifest.screenshot_sha256
+            or hashlib.sha256(content["browser_final_page_snapshot"]).hexdigest()
+            != manifest.final_page_sha256
+        ):
+            raise ApplicationConflictError("verified browser evidence manifest does not match")
+        return (
+            manifest,
+            content["browser_pre_submit_screenshot"],
+            content["browser_final_page_snapshot"],
+        )
 
     @staticmethod
     def _reviewed_snapshot(
@@ -3036,6 +3582,9 @@ class ApplicationService:
         if snapshot_record is None:
             raise ApplicationConflictError("candidate snapshot is missing")
         candidate_snapshot = self._load_candidate_snapshot(application, snapshot_record)
+        _browser_manifest, browser_screenshot, browser_final_page = self._verified_browser_evidence(
+            session, application
+        )
 
         archive = self._archives.create(
             candidate_id=application.candidate_id,
@@ -3113,6 +3662,8 @@ class ApplicationService:
                 required_document_kinds=(
                     ("cv", "cover_letter") if config.cover_letter_rules.enabled else ("cv",)
                 ),
+                browser_pre_submit_screenshot=browser_screenshot,
+                browser_final_page_snapshot=browser_final_page,
             ),
         )
         exposed_files = {
@@ -3194,6 +3745,39 @@ class ApplicationService:
         )
         session.flush()
 
+    @staticmethod
+    def _append_same_state_event(
+        session: Session,
+        application: Application,
+        idempotency_key: str,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        existing = session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.candidate_id == application.candidate_id,
+                ApplicationEvent.application_id == application.id,
+                ApplicationEvent.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.event_type != event_type or existing.payload != (payload or {}):
+                raise ApplicationConflictError("idempotency key was reused for another event")
+            return
+        session.add(
+            ApplicationEvent(
+                candidate_id=application.candidate_id,
+                application_id=application.id,
+                idempotency_key=idempotency_key,
+                event_type=event_type,
+                from_state=application.state,
+                to_state=application.state,
+                payload=payload or {},
+            )
+        )
+        session.flush()
+
     def _revalidate_job(self, job_id: UUID) -> VerificationEvidence:
         """Persist source evidence independently from a later fail-closed mutation."""
 
@@ -3246,6 +3830,17 @@ class ApplicationService:
             .order_by(ApplicationEvent.occurred_at.desc())
             .limit(1)
         )
+        browser_status = None
+        if application.state is ApplicationState.FORM_FILLING:
+            browser_status = session.scalar(
+                select(BrowserSession.status)
+                .where(
+                    BrowserSession.candidate_id == application.candidate_id,
+                    BrowserSession.application_id == application.id,
+                )
+                .order_by(BrowserSession.created_at.desc())
+                .limit(1)
+            )
         return ApplicationSummary(
             application_id=application.id,
             candidate_id=application.candidate_id,
@@ -3256,7 +3851,11 @@ class ApplicationService:
             state=application.state,
             last_event=last_event,
             updated_at=application.updated_at,
-            next_action=self._next_action(application.state),
+            next_action=(
+                "Waiting for isolated browser worker"
+                if browser_status == "queued"
+                else self._next_action(application.state)
+            ),
         )
 
     def _detail(self, session: Session, application: Application) -> ApplicationDetail:

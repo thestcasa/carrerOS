@@ -136,6 +136,22 @@ def test_candidate_deletion_removes_owned_rows_and_files_but_retains_shared_data
         encoding="utf-8",
     )
     (browser_root / "cookies.json").write_text("secret-cookie", encoding="utf-8")
+    attempt_root = (
+        runtime_root
+        / "candidates"
+        / "delete_me"
+        / "browser_evidence"
+        / "fictional-task"
+        / "attempt-1"
+    )
+    attempt_root.mkdir(parents=True)
+    (attempt_root / "pre-submit.png").write_bytes(b"fictional-attempt-png")
+    (attempt_root / "final-page.html").write_text(
+        "<html>fictional attempt page</html>", encoding="utf-8"
+    )
+    (attempt_root / "manifest.json").write_text(
+        '{"final_submit_clicked":false}\n', encoding="utf-8"
+    )
     service = CandidateLifecycleService(sessions, candidates, runtime_root)
     request = CandidateDeletionRequest(confirmation="delete_me", delete_archives=True)
 
@@ -159,6 +175,18 @@ def test_candidate_deletion_removes_owned_rows_and_files_but_retains_shared_data
     assert any(item.path.endswith("final-page.json") for item in exported.files)
     assert any(item.path.endswith("playwright-final-page.png") for item in exported.files)
     assert any(item.path.endswith("playwright-final-page.html") for item in exported.files)
+    assert any(
+        item.path == "browser_attempt_evidence/fictional-task/attempt-1/pre-submit.png"
+        for item in exported.files
+    )
+    assert any(
+        item.path == "browser_attempt_evidence/fictional-task/attempt-1/final-page.html"
+        for item in exported.files
+    )
+    assert any(
+        item.path == "browser_attempt_evidence/fictional-task/attempt-1/manifest.json"
+        for item in exported.files
+    )
     playwright_metadata = next(
         item for item in exported.files if item.path.endswith("playwright-session.json")
     )

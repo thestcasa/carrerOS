@@ -75,13 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover.add_argument("--idempotency-key", required=True, type=_idempotency_key)
     subparsers.add_parser("run-worker")
+    subparsers.add_parser("run-browser-worker")
     subparsers.add_parser("run-scheduler")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command in {"run-worker", "run-scheduler"}:
+    if args.command in {"run-worker", "run-browser-worker", "run-scheduler"}:
         run_process(args.command.removeprefix("run-"))
 
     candidate_service = CandidateService(_candidates_root())

@@ -3,7 +3,8 @@
 ## Current state
 
 - Build status: **IN PROGRESS**
-- Active phase: isolated browser-worker execution and immutable evidence
+- Active phase: validate and commit isolated browser-worker evidence, then implement remaining
+  role-aware material policy and answer revision
 - Branch baseline: `autonomous-build`; latest completed slice is safe configuration portability
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
@@ -114,32 +115,51 @@
   active/workflow switches and cannot restore database workflow, archives, browser profiles,
   secrets, command receipts, or deletion state. API, CLI, and settings controls remain explicitly
   separate from the full lifecycle export.
+- Browser dry runs now execute only through a dedicated durable worker task. Queue publication and
+  workflow state are atomic, browser activity is outside SQL, and finalization rechecks the exact
+  lease before committing task completion and application state together. The general worker uses
+  a disjoint kind allowlist. Each attempt retains categorized retry evidence and publishes exact
+  immutable PNG, HTML, and a strict manifest binding task/session/profile/URL/fields/upload hashes,
+  network counts, and `submit_clicked=false`. Stale workers cannot mutate application state;
+  retryable failures are bounded; terminal or exhausted work creates a human action and
+  notification. Gate authorization and archives hash-check those exact files. The application UI
+  polls durable queued/retrying state without offering duplicate dry-run commands, and synthetic
+  confirmation no longer fabricates a placeholder screenshot.
+- Browser execution and evidence publication are fenced against candidate deletion. Executor
+  outputs must use exact session-relative screenshot/HTML paths opened with `O_NOFOLLOW`, stale
+  attempt evidence is discarded after lease loss, and immutable attempt evidence is included in
+  bounded candidate lifecycle exports.
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **243 pytest tests pass** on Python
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **259 pytest tests pass** on Python
   3.14.4. The actual Chromium test reports one explicit skip because no Playwright browser is
   installed in the host cache; one upstream Starlette `httpx` deprecation warning remains.
-- Frontend: ESLint, strict TypeScript, **51 Vitest tests**, and the Next.js production build pass
+- Frontend: ESLint, strict TypeScript, **52 Vitest tests**, and the Next.js production build pass
   for all required routes.
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `e2b4c7d8f901`; the candidate-deletion application triggers are verified present after
-  both table rebuild directions, and models and Alembic report no missing operations.
+  pass through `f3c5d8e9012a`; workflow-task deletion fences are present after the table rebuild and
+  models and Alembic report no missing operations.
 - Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
   Playwright Chromium path remain externally unverified. The image installs Chromium and system
   dependencies with `playwright install --with-deps chromium`.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
+The resumed 2026-08-06 session independently reran the recorded host gates after reconciling two
+stale test expectations with the new durable flow: CAPTCHA completion queues a same-session browser
+verification before readiness, and an artifact's revision count remains distinct from the durable
+task-attempt number stored in its metadata. Backend format/lint/type/tests, frontend
+lint/type/tests/build, fresh SQLite migration/check, and newest downgrade/re-upgrade all pass with
+the counts above. Chromium, Docker Compose, PostgreSQL, and Redis remain externally unverified for
+the environment reasons recorded below.
+
 ## Remaining definition-of-done gaps
 
 - Verify the real Playwright synthetic fixture test in the Docker image; no real final clicks are
   authorized in this repository. Add a deployment-specific interactive transport before claiming
-  production same-context human takeover, and wire the fixture harness through the isolated
-  application worker boundary. The local API currently performs only a validated session handshake.
-  A safe synthetic execution adapter must still model timeout inspection, restart recovery,
-  categorized adapter failures, bounded retries, and repeated-failure human escalation without
-  introducing any live submission capability.
+  production same-context human takeover. Timeout mapping, restart/lease recovery, categorized
+  bounded retries, and repeated-failure human escalation are complete in the synthetic worker.
 - Establish hosted authentication/encryption, tenant-bound deletion recovery, and a legal
   retention/pseudonymization policy for the minimal deletion tombstone before multi-user
   deployment. Configuration portability is complete; full lifecycle exports intentionally remain
@@ -155,6 +175,6 @@
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Continue the full specification audit with the isolated browser worker/evidence slice,
-   role-aware material policy, and remaining hosted productionization gaps.
+3. Continue the full specification audit with role-aware material policy and remaining hosted
+   productionization gaps.
 4. Run backend, migration, and frontend gates after each coherent phase.

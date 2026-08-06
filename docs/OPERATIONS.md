@@ -26,6 +26,7 @@ python -m app import-cv --candidate fictional_friend --file /private/path/cv.txt
   --idempotency-key import-fictional-friend-cv
 python -m app discover --candidate fictional_friend --fixture fixtures/jobs.json
 python -m app.browser.fixture_server --port 8090
+python -m app run-browser-worker
 ```
 
 CV import retains only a structured unapproved draft and the raw document hash. The raw TXT is
@@ -39,10 +40,18 @@ python -m playwright install --with-deps chromium
 pytest tests/test_playwright_browser.py
 ```
 
-The fixture server rejects non-loopback binds. The browser harness requires an exact configured
-fixture URL, validates uploads against the candidate runtime directory and expected hashes, permits
-only its first GET document request, and never clicks the fixture's final-submit control. It is a
-test harness, not the application's production browser transport.
+The fixture server rejects non-loopback binds. The browser worker starts its own loopback fixture,
+claims only `browser_dry_run` tasks, requires an exact configured URL, validates uploads against the
+candidate runtime directory and expected hashes, permits only its first GET document request, and
+never clicks the fixture's final-submit control. The normal worker cannot claim browser tasks.
+
+Each attempt writes immutable `pre-submit.png`, `final-page.html`, and `manifest.json` evidence.
+The manifest records the exact session, task attempt, profile reuse, URL, field keys, upload hashes,
+network counts, and `submit_clicked=false`. Retryable timeouts, transient network failures, browser
+crashes, and selector failures are bounded by the task's maximum attempts. Validation failures,
+human verification, closed jobs, terminal rejection, and exhausted retries create a human action
+and notification instead of silently looping. The application page polls durable state while a
+worker owns or retries the task.
 
 New candidates are unapproved, blocked drafts with an `.invalid` address. Complete and approve
 legal/profile/answer configuration before enabling discovery; autonomous mode has additional
@@ -73,9 +82,11 @@ expired human-takeover profiles are quarantined, committed as retained metadata,
 Expired human actions return their application to form filling with an audit event. Submitted
 immutable archives are retained until intentional candidate deletion.
 
-Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts are immutable
-and hash verified. A failed hash check is a security incident: stop automation, preserve the files,
-and inspect event/security ledgers.
+Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts and browser
+attempt evidence are immutable and hash verified. A failed hash check is a security incident: stop
+automation, preserve the files, and inspect event/security ledgers. Synthetic confirmation does
+not fabricate a screenshot; its receipt explicitly reports that no confirmation screenshot is
+available.
 
 The autonomous development environment has no Docker binary, so Compose startup and configuration
 parsing must be verified on a Docker-capable host. Its minimal musl runtime also cannot launch the

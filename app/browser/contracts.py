@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -29,6 +29,33 @@ class HumanActionReason(StrEnum):
     CAPTCHA = "captcha"
     OTP = "otp"
     NOVEL_REQUIRED_FIELD = "novel_required_field"
+
+
+class BrowserFailureCategory(StrEnum):
+    TIMEOUT = "timeout"
+    TRANSIENT_NETWORK = "transient_network"
+    BROWSER_CRASH = "browser_crash"
+    SELECTOR_FAILURE = "selector_failure"
+    VALIDATION_FAILURE = "validation_failure"
+    HUMAN_VERIFICATION = "human_verification"
+    CLOSED_JOB = "closed_job"
+    TERMINAL_REJECTION = "terminal_rejection"
+
+
+class BrowserWorkerFailure(RuntimeError):
+    """A bounded failure safe to persist without raw browser or page content."""
+
+    def __init__(
+        self,
+        category: BrowserFailureCategory,
+        *,
+        retryable: bool,
+        safe_details: str,
+    ) -> None:
+        super().__init__(safe_details)
+        self.category = category
+        self.retryable = retryable
+        self.safe_details = safe_details
 
 
 class FormField(BrowserContract):
@@ -149,6 +176,7 @@ class PlaywrightDryRunResult(BrowserContract):
     fixture_url: str
     session_directory: Path
     persistent_profile_directory: Path
+    recovered_profile: bool
     screenshot_path: Path
     final_page_snapshot_path: Path
     mapped_values: dict[str, str | bool]
@@ -159,3 +187,7 @@ class PlaywrightDryRunResult(BrowserContract):
     allowed_network_requests: int = Field(ge=0)
     blocked_network_requests: int = Field(ge=0)
     ready_for_human_review: bool
+
+
+class BrowserExecutor(Protocol):
+    def run(self, request: PlaywrightDryRunRequest) -> PlaywrightDryRunResult: ...

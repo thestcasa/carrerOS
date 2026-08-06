@@ -13,6 +13,12 @@ from app.materials.contracts import ApprovedFact, GenerationRequest, JobTarget
 from app.materials.generation import DeterministicMaterialGenerator
 from app.materials.rendering import DeterministicPdfRenderer
 
+_BROWSER_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c63606060f80f0001040100c89f17d90000000049454e44ae426082"
+)
+_BROWSER_HTML = b"<!doctype html><html><body>Distinct browser evidence</body></html>\n"
+
 
 def _rendered_cv(path: Path) -> tuple[Path, str]:
     request = GenerationRequest(
@@ -62,6 +68,8 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
         answers=[{"key": "authorization", "answer": "Yes", "supported": True}],
         validation_report={"passed": True},
         event_log=[{"event": "review_passed"}],
+        browser_pre_submit_screenshot=_BROWSER_PNG,
+        browser_final_page_snapshot=_BROWSER_HTML,
     )
 
     archive_path = builder.create(
@@ -70,6 +78,8 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
 
     archived_cv = (archive_path / "submitted_documents" / "cv_submitted.pdf").read_bytes()
     assert archived_cv == cv_source.read_bytes()
+    assert (archive_path / "submission" / "pre_submit_screenshot.png").read_bytes() == _BROWSER_PNG
+    assert (archive_path / "submission" / "final_page_snapshot.html").read_bytes() == _BROWSER_HTML
     assert builder.verify(archive_path) is True
     manifest = json.loads((archive_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["cv"]["sha256"] == cv_sha256
@@ -124,6 +134,8 @@ def test_confirmed_archive_is_copy_on_write_and_contains_final_receipt(tmp_path:
             validation_report={"valid": True},
             event_log=[],
             required_document_kinds=(),
+            browser_pre_submit_screenshot=_BROWSER_PNG,
+            browser_final_page_snapshot=_BROWSER_HTML,
         ),
     )
     original_receipt = (source / "submission" / "receipt.json").read_bytes()
@@ -146,7 +158,8 @@ def test_confirmed_archive_is_copy_on_write_and_contains_final_receipt(tmp_path:
     assert manifest["status"] == "confirmed"
     assert manifest["application_version"] == 2
     assert (confirmed / "submission" / "confirmation.html").is_file()
-    assert (confirmed / "submission" / "confirmation_screenshot.png").is_file()
+    assert not (confirmed / "submission" / "confirmation_screenshot.png").exists()
+    assert receipt["confirmation_screenshot_available"] is False
     assert (
         builder.finalize_confirmed(
             source,
@@ -173,6 +186,24 @@ def test_archive_fails_closed_when_exact_required_document_is_missing(tmp_path: 
                 answers=[],
                 validation_report={"valid": True},
                 event_log=[],
+            ),
+        )
+
+
+def test_archive_fails_closed_without_real_browser_evidence(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="browser pre-submit screenshot"):
+        ApplicationArchiveBuilder(tmp_path / "archives").create(
+            candidate_id="candidate_alpha",
+            application_id=UUID("00000000-0000-0000-0000-000000000030"),
+            data=ApplicationArchiveData(
+                candidate_snapshot={},
+                job_snapshot={"company": "Example Corp", "title": "Engineer"},
+                scoring_results={},
+                generated_document_references=[],
+                answers=[],
+                validation_report={"valid": True},
+                event_log=[],
+                required_document_kinds=(),
             ),
         )
 
@@ -222,6 +253,8 @@ def test_archive_job_identity_is_slugged_and_cannot_escape_root(tmp_path: Path) 
             validation_report={"valid": True},
             event_log=[],
             required_document_kinds=(),
+            browser_pre_submit_screenshot=_BROWSER_PNG,
+            browser_final_page_snapshot=_BROWSER_HTML,
         ),
     )
 
@@ -279,6 +312,8 @@ def test_archive_verification_rejects_symlinked_content(tmp_path: Path) -> None:
             answers=[],
             validation_report={"valid": True},
             event_log=[],
+            browser_pre_submit_screenshot=_BROWSER_PNG,
+            browser_final_page_snapshot=_BROWSER_HTML,
         ),
     )
     archived_cv = archive / "submitted_documents" / "cv_submitted.pdf"

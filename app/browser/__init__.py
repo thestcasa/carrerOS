@@ -5,6 +5,9 @@ navigate only to loopback synthetic fixtures.
 """
 
 from app.browser.contracts import (
+    BrowserExecutor,
+    BrowserFailureCategory,
+    BrowserWorkerFailure,
     DryRunRequest,
     DryRunResult,
     FieldKind,
@@ -21,6 +24,9 @@ from app.browser.playwright_worker import RestrictedPlaywrightWorker
 
 __all__ = [
     "BrowserDryRunError",
+    "BrowserExecutor",
+    "BrowserFailureCategory",
+    "BrowserWorkerFailure",
     "CandidateSessionPaths",
     "DryRunRequest",
     "DryRunResult",

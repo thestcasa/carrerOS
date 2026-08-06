@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import create_app
 from app.applications import ApplicationService
 from app.auth.lifecycle import CandidateLifecycleService
+from app.browser.fakes import DeterministicBrowserExecutor
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
 from app.db import build_session_factory
@@ -20,6 +21,7 @@ from app.discovery.verification import StoredFixtureJobSourceVerifier
 from app.domain.models import Base
 from app.health import HealthReport, ServiceStatus
 from app.job_service import DiscoveryRequest, JobService
+from app.tasks import TaskQueue
 
 
 class _HealthyServices:
@@ -28,7 +30,9 @@ class _HealthyServices:
         return HealthReport(status="ok", api=available, database=available, redis=available)
 
 
-def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]:
+def _client(
+    candidates_root: Path, runtime_root: Path
+) -> tuple[TestClient, str, ApplicationService, TaskQueue]:
     scoring_path = candidates_root / "example_candidate" / "scoring_rules.json"
     scoring = json.loads(scoring_path.read_text(encoding="utf-8"))
     scoring["application_threshold"] = 40
@@ -99,13 +103,16 @@ def _client(candidates_root: Path, runtime_root: Path) -> tuple[TestClient, str]
             )
         ),
         str(job_id),
+        applications,
+        TaskQueue(sessions),
     )
 
 
 def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmation(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
-    client, job_id = _client(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    client, job_id, applications, task_queue = _client(copied_candidates_root, runtime_root)
     with client:
         assert client.get("/api/jobs?candidate_id=example_candidate").status_code == 401
         login = client.post("/api/auth/local-session", json={"candidate_id": "example_candidate"})
@@ -257,6 +264,19 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
                 json=body,
             )
             assert response.status_code == 200, response.text
+        task = task_queue.claim(
+            worker_id="api-browser-worker",
+            allowed_kinds=frozenset({"browser_dry_run"}),
+        )
+        assert task is not None
+        completed = applications.execute_browser_task(
+            task_queue,
+            task,
+            worker_id="api-browser-worker",
+            executor=DeterministicBrowserExecutor(runtime_root),
+            fixture_base_url="http://127.0.0.1:8090/application",
+        )
+        assert completed.status == "completed"
         authorization = client.post(
             f"/api/applications/{application_id}/authorize?candidate_id=example_candidate",
             headers={**mutation, "Idempotency-Key": "api-authorize-0001"},
@@ -306,7 +326,9 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
 def test_candidate_deletion_requires_confirmation_and_revokes_stale_grant(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
-    client, _job_id = _client(copied_candidates_root, tmp_path / "runtime-delete")
+    client, _job_id, _applications, _task_queue = _client(
+        copied_candidates_root, tmp_path / "runtime-delete"
+    )
     with client:
         initial = client.post(
             "/api/auth/local-session", json={"candidate_id": "example_candidate"}

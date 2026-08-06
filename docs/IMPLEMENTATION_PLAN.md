@@ -67,7 +67,10 @@ not add browser automation or live submission.
   browser-profile retention.
 - [x] Add bounded deterministic whole-candidate configuration import/export with atomic versioning
   and distinct API, CLI, and settings controls.
-- [ ] Complete isolated Playwright application integration and hosted security.
+- [x] Integrate Playwright dry runs through a task-kind-isolated worker with immutable attempt
+  evidence, lease-fenced finalization, bounded categorized retries, and human escalation.
+- [ ] Complete hosted identity, encrypted secret storage, and deployment-specific interactive
+  human-takeover transport.
 - [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
   external runtimes are available.
 

@@ -2,8 +2,18 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
-SYNTHETIC_ATS_HTML = b"""<!doctype html>
+
+def synthetic_ats_html(challenge: str) -> bytes:
+    challenge_markup = {
+        "captcha": (
+            '<div id="challenge" role="status" data-human-action="captcha">Complete CAPTCHA</div>'
+        ),
+        "otp": '<div id="challenge" role="status" data-human-action="otp">Enter OTP</div>',
+        "none": '<div id="challenge" role="status" hidden>No challenge</div>',
+    }[challenge]
+    return f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Synthetic ATS</title></head>
 <body>
@@ -16,31 +26,46 @@ SYNTHETIC_ATS_HTML = b"""<!doctype html>
     <input id="email" type="email" data-field-key="email" required>
     <label for="cv">CV</label>
     <input id="cv" type="file" data-field-key="cv" required>
-    <div id="challenge" role="status" data-human-action="captcha">Complete CAPTCHA</div>
+    {challenge_markup}
     <button type="submit" data-final-submit>Submit application</button>
   </form>
 </main>
 <script>
-if (localStorage.getItem('syntheticHumanActionCompleted') === 'true') {
+if (localStorage.getItem('syntheticHumanActionCompleted') === 'true') {{
   document.getElementById('challenge').hidden = true;
-}
-document.querySelector('form').addEventListener('change', () => {
-  fetch(window.location.href, {method: 'POST', body: 'must-be-blocked'}).catch(() => {});
-  fetch('https://network-must-be-blocked.invalid/exfiltrate').catch(() => {});
-});
+}}
+document.querySelector('form').addEventListener('change', () => {{
+  fetch(window.location.href, {{method: 'POST', body: 'must-be-blocked'}}).catch(() => {{}});
+  fetch('https://network-must-be-blocked.invalid/exfiltrate').catch(() => {{}});
+}});
 </script>
 </body>
 </html>
-"""
+""".encode()
+
+
+SYNTHETIC_ATS_HTML = synthetic_ats_html("captcha")
 
 
 class SyntheticATSHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        parsed = urlsplit(self.path)
+        values = parse_qs(parsed.query, keep_blank_values=True)
+        challenge = values.get("challenge", ["captcha"])
+        if (
+            parsed.path != "/application"
+            or set(values) - {"challenge"}
+            or len(challenge) != 1
+            or challenge[0] not in {"none", "captcha", "otp"}
+        ):
+            self.send_error(404)
+            return
+        content = synthetic_ats_html(challenge[0])
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(SYNTHETIC_ATS_HTML)))
+        self.send_header("Content-Length", str(len(content)))
         self.end_headers()
-        self.wfile.write(SYNTHETIC_ATS_HTML)
+        self.wfile.write(content)
 
     def log_message(self, _format: str, *args: object) -> None:
         del args

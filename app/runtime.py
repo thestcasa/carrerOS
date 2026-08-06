@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 import time
 from datetime import UTC, datetime
+from http.server import ThreadingHTTPServer
 from typing import NoReturn
 
 from redis import Redis
 
+from app.applications.service import ApplicationService
 from app.auth.lifecycle import CandidateLifecycleService
+from app.browser.fixture_server import SyntheticATSHandler
+from app.browser.playwright_worker import RestrictedPlaywrightWorker
 from app.candidates.service import CandidateService
 from app.core.settings import Settings
 from app.db import build_engine, build_session_factory
 from app.discovery.providers import ProviderFeedClient
 from app.discovery.scheduled import ScheduledDiscoveryService
+from app.discovery.verification import ProviderJobSourceVerifier
 from app.job_service import JobService
 from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 
@@ -69,7 +75,13 @@ def run_worker_once(
     discovery: ScheduledDiscoveryService | None = None,
     lifecycle: CandidateLifecycleService | None = None,
 ) -> TaskView | None:
-    task = queue.claim(worker_id=worker_id, now=now)
+    task = queue.claim(
+        worker_id=worker_id,
+        now=now,
+        allowed_kinds=frozenset(
+            {"candidate_readiness_check", "candidate_retention_sweep", "discover_source"}
+        ),
+    )
     if task is None:
         return None
     try:
@@ -92,45 +104,116 @@ def run_worker_once(
         return queue.get(task.task_id)
 
 
+def run_browser_worker_once(
+    queue: TaskQueue,
+    applications: ApplicationService,
+    executor: RestrictedPlaywrightWorker,
+    *,
+    worker_id: str,
+    fixture_base_url: str,
+    now: datetime | None = None,
+) -> TaskView | None:
+    task = queue.claim(
+        worker_id=worker_id,
+        now=now,
+        allowed_kinds=frozenset({"browser_dry_run"}),
+    )
+    if task is None:
+        return None
+    return applications.execute_browser_task(
+        queue,
+        task,
+        worker_id=worker_id,
+        executor=executor,
+        fixture_base_url=fixture_base_url,
+        now=now,
+    )
+
+
 def run_process(role: str) -> NoReturn:
     """Run a durable local scheduler or worker with Redis health publication."""
     settings = Settings.from_environment()
     sessions = build_session_factory(build_engine(settings.database_url))
     queue = TaskQueue(sessions)
     candidates = CandidateService(settings.candidates_root)
+    source_verifier = ProviderJobSourceVerifier()
     discovery = ScheduledDiscoveryService(
         sessions,
         candidates,
-        JobService(sessions, candidates),
+        JobService(sessions, candidates, source_verifier),
         ProviderFeedClient(),
     )
     lifecycle = CandidateLifecycleService(sessions, candidates, settings.runtime_root)
+    applications = ApplicationService(
+        sessions,
+        candidates,
+        settings.runtime_root,
+        source_verifier=source_verifier,
+    )
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     worker_id = f"{role}-{secrets.token_hex(6)}"
     channel = f"careeros:{role}:heartbeat"
-    while True:
-        if role == "scheduler":
-            processed = len(
-                run_scheduler_once(queue, candidates, discovery=discovery, lifecycle=lifecycle)
-            )
-        elif role == "worker":
-            processed = int(
-                run_worker_once(
-                    queue,
-                    candidates,
-                    worker_id=worker_id,
-                    discovery=discovery,
-                    lifecycle=lifecycle,
-                )
-                is not None
-            )
-        else:
-            raise ValueError(f"unsupported runtime role: {role}")
-        redis.set(
-            channel,
-            json.dumps(
-                {"role": role, "status": "ready", "processed": processed, "worker_id": worker_id}
+    fixture_server: ThreadingHTTPServer | None = None
+    fixture_thread: threading.Thread | None = None
+    fixture_base_url = "http://127.0.0.1:8090/application"
+    browser_executor: RestrictedPlaywrightWorker | None = None
+    if role == "browser-worker":
+        fixture_server = ThreadingHTTPServer(("127.0.0.1", 8090), SyntheticATSHandler)
+        fixture_thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
+        fixture_thread.start()
+        browser_executor = RestrictedPlaywrightWorker(
+            settings.runtime_root,
+            frozenset(
+                f"{fixture_base_url}?challenge={challenge}"
+                for challenge in ("none", "captcha", "otp")
             ),
-            ex=90,
         )
-        time.sleep(15 if role == "worker" else 30)
+    try:
+        while True:
+            if role == "scheduler":
+                processed = len(
+                    run_scheduler_once(queue, candidates, discovery=discovery, lifecycle=lifecycle)
+                )
+            elif role == "worker":
+                processed = int(
+                    run_worker_once(
+                        queue,
+                        candidates,
+                        worker_id=worker_id,
+                        discovery=discovery,
+                        lifecycle=lifecycle,
+                    )
+                    is not None
+                )
+            elif role == "browser-worker" and browser_executor is not None:
+                processed = int(
+                    run_browser_worker_once(
+                        queue,
+                        applications,
+                        browser_executor,
+                        worker_id=worker_id,
+                        fixture_base_url=fixture_base_url,
+                    )
+                    is not None
+                )
+            else:
+                raise ValueError(f"unsupported runtime role: {role}")
+            redis.set(
+                channel,
+                json.dumps(
+                    {
+                        "role": role,
+                        "status": "ready",
+                        "processed": processed,
+                        "worker_id": worker_id,
+                    }
+                ),
+                ex=90,
+            )
+            time.sleep(15 if role in {"worker", "browser-worker"} else 30)
+    finally:
+        if fixture_server is not None:
+            fixture_server.shutdown()
+            fixture_server.server_close()
+        if fixture_thread is not None:
+            fixture_thread.join(timeout=5)

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications import (
     ApplicationConflictError,
+    ApplicationDetail,
     ApplicationService,
     CorrespondenceIngestRequest,
     DryRunCommand,
@@ -18,6 +19,7 @@ from app.applications import (
     SyntheticSubmissionRequest,
 )
 from app.archive import ApplicationArchiveBuilder
+from app.browser.fakes import DeterministicBrowserExecutor
 from app.candidates.service import (
     CandidateCreateRequest,
     CandidateSectionUpdate,
@@ -37,6 +39,7 @@ from app.domain.models import (
     SecurityEvent,
 )
 from app.job_service import DiscoveryRequest, JobService
+from app.tasks import TaskQueue
 
 
 def _services(
@@ -102,11 +105,38 @@ def _lower_fixture_threshold(candidates_root: Path) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
+def _execute_browser_dry_run(
+    applications: ApplicationService,
+    sessions: sessionmaker[Session],
+    runtime_root: Path,
+    application_id: UUID,
+    command: DryRunCommand,
+    idempotency_key: str,
+) -> tuple[ApplicationDetail, ApplicationDetail]:
+    queued = applications.dry_run("example_candidate", application_id, command, idempotency_key)
+    queue = TaskQueue(sessions)
+    task = queue.claim(
+        worker_id="test-browser-worker",
+        allowed_kinds=frozenset({"browser_dry_run"}),
+    )
+    assert task is not None
+    completed = applications.execute_browser_task(
+        queue,
+        task,
+        worker_id="test-browser-worker",
+        executor=DeterministicBrowserExecutor(runtime_root),
+        fixture_base_url="http://127.0.0.1:8090/application",
+    )
+    assert completed.status == "completed"
+    return queued, applications.get_application("example_candidate", application_id)
+
+
 def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integrated(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
     job_id = _job(jobs)
 
     generated = applications.generate_materials(
@@ -145,12 +175,15 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         applications.start("example_candidate", generated.application_id, "start-application-501")
         == started
     )
-    ready = applications.dry_run(
-        "example_candidate",
+    queued, ready = _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
         generated.application_id,
         DryRunCommand(),
         "dry-run-501",
     )
+    assert queued.state is ApplicationState.FORM_FILLING
     assert ready.state is ApplicationState.READY_TO_SUBMIT
     assert (
         applications.dry_run(
@@ -159,7 +192,7 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
             DryRunCommand(),
             "dry-run-501",
         )
-        == ready
+        == queued
     )
     with pytest.raises(ApplicationConflictError, match="reused"):
         applications.dry_run(
@@ -388,7 +421,8 @@ def test_render_failure_is_persisted_and_cannot_be_approved(
     biography = json.loads(biography_path.read_text(encoding="utf-8"))
     biography["summary"] += " 🧪"
     biography_path.write_text(json.dumps(biography, ensure_ascii=False), encoding="utf-8")
-    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, _sessions = _services(copied_candidates_root, runtime_root)
 
     generated = applications.generate_materials(
         "example_candidate", _job(jobs, 502), "generate-materials-502"
@@ -412,7 +446,8 @@ def test_tampered_rendered_cv_is_rejected_before_browser_upload(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, _sessions = _services(copied_candidates_root, runtime_root)
     generated = applications.generate_materials(
         "example_candidate", _job(jobs, 503), "generate-materials-503"
     )
@@ -444,7 +479,8 @@ def test_materials_can_be_regenerated_with_a_new_exact_snapshot_and_version(
     biography = json.loads(biography_path.read_text(encoding="utf-8"))
     biography["summary"] += " 🧪"
     biography_path.write_text(json.dumps(biography, ensure_ascii=False), encoding="utf-8")
-    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
     job_id = _job(jobs, 505)
 
     failed = applications.generate_materials(
@@ -482,8 +518,13 @@ def test_materials_can_be_regenerated_with_a_new_exact_snapshot_and_version(
         "example_candidate", regenerated.application_id, "approve-materials-505"
     )
     applications.start("example_candidate", regenerated.application_id, "start-505")
-    applications.dry_run(
-        "example_candidate", regenerated.application_id, DryRunCommand(), "dry-run-505"
+    _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
+        regenerated.application_id,
+        DryRunCommand(),
+        "dry-run-505",
     )
     applications.authorize("example_candidate", regenerated.application_id, "authorize-505")
     submitted_cv = next(
@@ -522,7 +563,8 @@ def test_authorization_and_submission_reject_package_identity_drift(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
     generated = applications.generate_materials(
         "example_candidate", _job(jobs, 507), "generate-materials-507"
     )
@@ -530,8 +572,13 @@ def test_authorization_and_submission_reject_package_identity_drift(
         "example_candidate", generated.application_id, "approve-materials-507"
     )
     applications.start("example_candidate", generated.application_id, "start-507")
-    applications.dry_run(
-        "example_candidate", generated.application_id, DryRunCommand(), "dry-run-507"
+    _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
+        generated.application_id,
+        DryRunCommand(),
+        "dry-run-507",
     )
 
     with sessions.begin() as session:
@@ -543,20 +590,16 @@ def test_authorization_and_submission_reject_package_identity_drift(
         )
         assert event_record is not None
         payload = dict(event_record.payload)
-        final_page = dict(payload["final_page"])
-        final_page["upload_hashes"] = ["0" * 64]
-        payload["final_page"] = final_page
+        browser_evidence = dict(payload["browser_evidence"])
+        original_upload_hashes = browser_evidence["upload_hashes"]
+        browser_evidence["upload_hashes"] = ["0" * 64]
+        payload["browser_evidence"] = browser_evidence
         event_record.payload = payload
     with pytest.raises(ApplicationConflictError, match="submission gate denied"):
         applications.authorize(
             "example_candidate", generated.application_id, "authorize-507-invalid"
         )
 
-    rendered_cv = next(
-        item
-        for item in applications.list_artifacts("example_candidate", generated.application_id)
-        if item.kind == "rendered_cv"
-    )
     with sessions.begin() as session:
         event_record = session.scalar(
             select(ApplicationEvent).where(
@@ -566,9 +609,9 @@ def test_authorization_and_submission_reject_package_identity_drift(
         )
         assert event_record is not None
         payload = dict(event_record.payload)
-        final_page = dict(payload["final_page"])
-        final_page["upload_hashes"] = [rendered_cv.sha256]
-        payload["final_page"] = final_page
+        browser_evidence = dict(payload["browser_evidence"])
+        browser_evidence["upload_hashes"] = original_upload_hashes
+        payload["browser_evidence"] = browser_evidence
         event_record.payload = payload
     authorization = applications.authorize(
         "example_candidate", generated.application_id, "authorize-507-valid"
@@ -644,7 +687,8 @@ def test_captcha_creates_visible_resumable_human_action(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
     job_id = _job(jobs, 502)
     generated = applications.generate_materials(
         "example_candidate", job_id, "generate-materials-502"
@@ -654,8 +698,10 @@ def test_captcha_creates_visible_resumable_human_action(
     )
     applications.start("example_candidate", generated.application_id, "start-application-502")
 
-    blocked = applications.dry_run(
-        "example_candidate",
+    _queued, blocked = _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
         generated.application_id,
         DryRunCommand(challenge="captcha"),
         "dry-run-captcha-502",
@@ -707,16 +753,39 @@ def test_captcha_creates_visible_resumable_human_action(
             cancel=True,
         )
     detail = applications.get_application("example_candidate", generated.application_id)
+    assert detail.state is ApplicationState.FORM_FILLING
+
+    queue = TaskQueue(sessions)
+    resume_task = queue.claim(
+        worker_id="test-browser-resume-worker",
+        allowed_kinds=frozenset({"browser_dry_run"}),
+    )
+    assert resume_task is not None
+    assert resume_task.payload["session_id"] == str(actions[0].browser_session_id)
+    resumed = applications.execute_browser_task(
+        queue,
+        resume_task,
+        worker_id="test-browser-resume-worker",
+        executor=DeterministicBrowserExecutor(runtime_root),
+        fixture_base_url="http://127.0.0.1:8090/application",
+    )
+    assert resumed.status == "completed"
+    detail = applications.get_application("example_candidate", generated.application_id)
     assert detail.state is ApplicationState.READY_TO_SUBMIT
+    authorization = applications.authorize(
+        "example_candidate", generated.application_id, "authorize-after-captcha-502"
+    )
+    assert authorization.application_id == generated.application_id
 
 
 def test_captcha_completion_fails_closed_without_same_session_verification(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
-    jobs, applications, _sessions = _services(
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(
         copied_candidates_root,
-        tmp_path / "runtime",
+        runtime_root,
         human_action_verified=False,
     )
     job_id = _job(jobs, 503)
@@ -727,8 +796,10 @@ def test_captcha_completion_fails_closed_without_same_session_verification(
         "example_candidate", generated.application_id, "approve-materials-503"
     )
     applications.start("example_candidate", generated.application_id, "start-application-503")
-    applications.dry_run(
-        "example_candidate",
+    _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
         generated.application_id,
         DryRunCommand(challenge="captcha"),
         "dry-run-captcha-503",

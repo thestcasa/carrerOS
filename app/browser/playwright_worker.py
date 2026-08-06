@@ -6,9 +6,23 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
 
-from playwright.sync_api import BrowserContext, Page, Route, WebSocketRoute, sync_playwright
+from playwright.sync_api import (
+    BrowserContext,
+    Page,
+    Route,
+    WebSocketRoute,
+    sync_playwright,
+)
+from playwright.sync_api import (
+    Error as PlaywrightError,
+)
+from playwright.sync_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from app.browser.contracts import (
+    BrowserFailureCategory,
+    BrowserWorkerFailure,
     PlaywrightDryRunRequest,
     PlaywrightDryRunResult,
     UploadArtifact,
@@ -29,6 +43,30 @@ class RestrictedPlaywrightWorker:
         self._allowed_fixture_urls = allowed_fixture_urls
 
     def run(self, request: PlaywrightDryRunRequest) -> PlaywrightDryRunResult:
+        try:
+            return self._run(request)
+        except BrowserWorkerFailure:
+            raise
+        except PlaywrightTimeoutError as exc:
+            raise BrowserWorkerFailure(
+                BrowserFailureCategory.TIMEOUT,
+                retryable=True,
+                safe_details="The synthetic browser action exceeded its bounded timeout.",
+            ) from exc
+        except PlaywrightError as exc:
+            raise BrowserWorkerFailure(
+                BrowserFailureCategory.BROWSER_CRASH,
+                retryable=True,
+                safe_details="The isolated browser process stopped unexpectedly.",
+            ) from exc
+        except BrowserDryRunError as exc:
+            raise BrowserWorkerFailure(
+                BrowserFailureCategory.VALIDATION_FAILURE,
+                retryable=False,
+                safe_details="The synthetic browser package failed validation.",
+            ) from exc
+
+    def _run(self, request: PlaywrightDryRunRequest) -> PlaywrightDryRunResult:
         self._require_allowed_fixture(request.fixture_url)
         try:
             session_directory = self._paths.session_directory(
@@ -38,6 +76,7 @@ class RestrictedPlaywrightWorker:
             raise BrowserDryRunError(str(exc)) from exc
         self._validate_session_path(session_directory)
         profile_directory = session_directory / "playwright-profile"
+        recovered_profile = profile_directory.is_dir()
         if profile_directory.is_symlink():
             raise BrowserDryRunError("candidate browser profile path contains a symlink")
         session_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -51,9 +90,11 @@ class RestrictedPlaywrightWorker:
                 str(profile_directory), headless=True, service_workers="block"
             )
             try:
+                context.set_default_timeout(15_000)
+                context.set_default_navigation_timeout(15_000)
                 network_audit = self._restrict_context(context, request.fixture_url)
                 page = context.pages[0] if context.pages else context.new_page()
-                page.goto(request.fixture_url, wait_until="domcontentloaded")
+                self._navigate(page, request.fixture_url)
                 if page.url != request.fixture_url:
                     raise BrowserDryRunError(
                         "Playwright navigation left the allowlisted fixture URL"
@@ -63,8 +104,10 @@ class RestrictedPlaywrightWorker:
                     self._validate_upload(request, upload)
                     locator = page.locator(f'[data-field-key="{upload.field_key}"]')
                     if locator.count() != 1:
-                        raise BrowserDryRunError(
-                            f"synthetic fixture upload field is missing: {upload.field_key}"
+                        raise BrowserWorkerFailure(
+                            BrowserFailureCategory.SELECTOR_FAILURE,
+                            retryable=True,
+                            safe_details="A required synthetic upload field was unavailable.",
                         )
                     locator.set_input_files(str(upload.path.resolve()))
                     if not locator.input_value().endswith(upload.path.name):
@@ -115,6 +158,7 @@ class RestrictedPlaywrightWorker:
             fixture_url=request.fixture_url,
             session_directory=session_directory,
             persistent_profile_directory=profile_directory,
+            recovered_profile=recovered_profile,
             screenshot_path=screenshot_path,
             final_page_snapshot_path=snapshot_path,
             mapped_values=mapped_values,
@@ -175,7 +219,11 @@ class RestrictedPlaywrightWorker:
         for field_key, value in answers.items():
             locator = page.locator(f'[data-field-key="{field_key}"]')
             if locator.count() != 1:
-                raise BrowserDryRunError(f"synthetic fixture field is missing: {field_key}")
+                raise BrowserWorkerFailure(
+                    BrowserFailureCategory.SELECTOR_FAILURE,
+                    retryable=True,
+                    safe_details="A required synthetic form field was unavailable.",
+                )
             field_type = locator.get_attribute("type")
             tag_name = locator.evaluate("element => element.tagName.toLowerCase()")
             if field_type == "checkbox":
@@ -195,6 +243,19 @@ class RestrictedPlaywrightWorker:
             if locator.count() and locator.first.is_visible():
                 return kind
         return None
+
+    @staticmethod
+    def _navigate(page: Page, fixture_url: str) -> None:
+        try:
+            page.goto(fixture_url, wait_until="domcontentloaded")
+        except PlaywrightTimeoutError:
+            raise
+        except PlaywrightError as exc:
+            raise BrowserWorkerFailure(
+                BrowserFailureCategory.TRANSIENT_NETWORK,
+                retryable=True,
+                safe_details="The loopback synthetic fixture was temporarily unavailable.",
+            ) from exc
 
     def _validate_upload(self, request: PlaywrightDryRunRequest, artifact: UploadArtifact) -> None:
         try:

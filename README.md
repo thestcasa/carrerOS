@@ -12,8 +12,9 @@ docker compose up --build
 
 Open the web control plane at `http://localhost:3000`; the API and OpenAPI docs are at
 `http://localhost:8000` and `http://localhost:8000/docs`. Compose starts the frontend, FastAPI,
-PostgreSQL, Redis, workflow worker, and scheduler, then applies Alembic migrations. Candidate edits
-and runtime artifacts use separate persistent volumes. Services bind to localhost by default.
+PostgreSQL, Redis, general workflow worker, isolated browser dry-run worker, and scheduler, then
+applies Alembic migrations. Candidate edits and runtime artifacts use separate persistent volumes.
+Services bind to localhost by default.
 
 ## Local setup
 

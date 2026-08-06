@@ -35,7 +35,11 @@ The production application is a single deployable service which orchestrates thr
 
 Each worker receives a complete, immutable request and returns a validated response. Workers do not share conversation history or mutable memory. Real model adapters will be process- or service-isolated in a later milestone; Milestone 1 provides strict protocols and stateless deterministic fakes.
 
-The `ApplicationOrchestrator` controls sequencing, but cannot authorize submission. Only `SubmissionGate` can issue a `SubmissionAuthorization`. The gate is deterministic, defaults to denial, and treats every absent, unknown, or false prerequisite as failure. The future browser worker will accept an authorization but will never score suitability, invent answers, generate documents, or bypass CAPTCHA/anti-bot controls.
+The `ApplicationOrchestrator` controls sequencing, but cannot authorize submission. Only
+`SubmissionGate` can issue a `SubmissionAuthorization`. The gate is deterministic, defaults to
+denial, and treats every absent, unknown, or false prerequisite as failure. The isolated browser
+worker performs only a pre-submit dry run: it never receives an authorization, scores suitability,
+invents answers, generates documents, or bypasses CAPTCHA/anti-bot controls.
 
 ```text
 Candidate files + global job
@@ -48,10 +52,12 @@ Candidate files + global job
  Analysis  Generation Review
    \          |          /
     \         v         /
-     +--> SubmissionGate ----> authorization or denial
-                                  |
-                                  v
-                         future browser worker
+     +--> browser dry-run worker --> immutable attempt evidence
+     |                                  |
+     +------------- SubmissionGate <----+
+                       |
+                       v
+                authorization or denial
 ```
 
 ## Candidate configuration
@@ -277,13 +283,24 @@ candidate/session in a symlink-checked persistent browser profile. Each run perm
 request; all subresources, later navigation, redirects, WebSockets, and form submissions are
 blocked and counted. The worker only detects the final-submit control and has no click operation.
 
-The persisted application workflow still uses the deterministic non-network dry runner; Playwright
-integration through an isolated worker remains pending. CAPTCHA and OTP markers persist a visible
-human action, screenshot, page snapshot, and same-session reference. The API requires an explicit
-session-open handshake, but completion also calls a browser-owned verifier which defaults to denial.
-Thus the handshake cannot itself clear a challenge or reach `READY_TO_SUBMIT`. A fixture-only
-acknowledgement helper changes local fixture state for deterministic testing, accepts only an exact
-allowlisted loopback URL, and cannot solve or bypass a live challenge.
+Dry runs are durable `browser_dry_run` tasks claimed only by the dedicated browser-worker process.
+Enqueueing and the application event occur in one database transaction; navigation and rendering
+run outside that transaction; finalization rechecks the exact task lease before committing workflow
+state and queue completion together. Expired leases cannot commit after a newer attempt owns the
+task. Failures use bounded categories and retry flags, retain safe attempt history, and escalate
+non-retryable or exhausted work to a visible human action and notification.
+
+Every attempt publishes an exclusive evidence directory containing the exact PNG, final-page HTML,
+and strict manifest. The manifest binds the task attempt, candidate, application, browser session,
+exact loopback URL, mapped fields, upload hashes, network counts, profile reuse, and an explicit
+`submit_clicked=false`. The gate and archive re-read and hash-check those files; missing, changed,
+cross-session, symlinked, or mismatched evidence denies authorization. CAPTCHA and OTP attempts keep
+the same persistent profile and create a same-session human action. Completion cannot bypass the
+browser-owned verifier, and only the evidence-backed final-validation event can progress.
+The worker holds the candidate lifecycle fence across browser I/O and evidence publication so
+intentional deletion cannot race and recreate private files. Evidence sources are read by exact
+session-relative names with `O_NOFOLLOW`; stale-lease publications are discarded, and the bounded
+candidate lifecycle export includes the immutable attempt-evidence tree.
 
 ## Candidate configuration portability
 
@@ -309,8 +326,9 @@ matching idempotency-key retry returns the persisted outcome.
 Authorization runs a no-write gate preflight before sealing artifacts. Required CV and cover-letter
 sources fail closed instead of being skipped. A successful execution never rewrites its pre-submit
 archive: it creates a separately hashed confirmed v2 archive containing backend confirmation HTML,
-a screenshot, a final receipt, a refreshed audit, and a final manifest. Both versions remain
-recursively verifiable.
+a final receipt which truthfully marks confirmation screenshots unavailable, a refreshed audit,
+and a final manifest. No placeholder image is fabricated. Both versions remain recursively
+verifiable.
 
 ## Local authorization
 
@@ -321,9 +339,10 @@ substitute for hosted multi-user identity and encrypted storage.
 
 ## Durable operations and correspondence
 
-The scheduler creates candidate-scoped SQL tasks with deterministic bucket keys. Workers claim
-tasks under a lease, recover expired work, retry with a bound, and reject keys reused for different
-payloads. Redis publishes process health; SQL remains the task source of truth.
+The scheduler creates candidate-scoped SQL tasks with deterministic bucket keys. General and
+browser workers claim disjoint task-kind allowlists under a lease, recover expired work, retry with
+a bound, and reject keys reused for different payloads. Redis publishes process health; SQL remains
+the task source of truth.
 
 Correspondence ingestion stores message hashes rather than raw bodies, associates only on unique
 deterministic evidence, and permits unmatched candidate-owned records. Valid interview, rejection,

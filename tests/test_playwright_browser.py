@@ -5,6 +5,8 @@ import threading
 from collections.abc import Iterator
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen
 from uuid import uuid4
 
 import pytest
@@ -12,11 +14,12 @@ from playwright.sync_api import Error as PlaywrightError
 from pydantic import ValidationError
 
 from app.browser import (
+    BrowserFailureCategory,
+    BrowserWorkerFailure,
     PlaywrightDryRunRequest,
     RestrictedPlaywrightWorker,
     UploadArtifact,
 )
-from app.browser.dry_run import BrowserDryRunError
 from app.browser.fixture_server import SyntheticATSHandler
 
 
@@ -59,13 +62,18 @@ def test_playwright_fixture_pauses_and_resumes_same_persistent_profile(
 
     try:
         paused = worker.run(request)
-    except PlaywrightError as exc:
+    except BrowserWorkerFailure as exc:
+        cause = exc.__cause__
         unavailable_markers = (
             "Executable doesn't exist",
             "error while loading shared libraries",
         )
-        if any(marker in str(exc) for marker in unavailable_markers):
-            pytest.skip(f"Playwright Chromium runtime unavailable: {exc}")
+        if (
+            exc.category is BrowserFailureCategory.BROWSER_CRASH
+            and isinstance(cause, PlaywrightError)
+            and any(marker in str(cause) for marker in unavailable_markers)
+        ):
+            pytest.skip(f"Playwright Chromium runtime unavailable: {cause}")
         raise
 
     assert paused.human_action == "captcha"
@@ -76,6 +84,7 @@ def test_playwright_fixture_pauses_and_resumes_same_persistent_profile(
     assert paused.blocked_network_requests >= 2
     assert paused.screenshot_path.is_file()
     assert paused.persistent_profile_directory.is_dir()
+    assert paused.recovered_profile is False
     assert paused.upload_hashes == (cv_hash,)
 
     worker.acknowledge_fixture_human_action(
@@ -89,6 +98,7 @@ def test_playwright_fixture_pauses_and_resumes_same_persistent_profile(
     assert resumed.human_action is None
     assert resumed.ready_for_human_review
     assert resumed.persistent_profile_directory == paused.persistent_profile_directory
+    assert resumed.recovered_profile is True
     assert resumed.final_submit_clicked is False
     snapshot = resumed.final_page_snapshot_path.read_text(encoding="utf-8")
     assert "<main>" in snapshot
@@ -106,6 +116,21 @@ def test_playwright_contract_rejects_external_navigation() -> None:
         )
 
 
+def test_fixture_exposes_only_exact_allowlisted_challenge_variants(
+    synthetic_ats_url: str,
+) -> None:
+    with urlopen(f"{synthetic_ats_url}?challenge=none", timeout=2) as response:
+        no_challenge = response.read().decode()
+    with urlopen(f"{synthetic_ats_url}?challenge=otp", timeout=2) as response:
+        otp = response.read().decode()
+
+    assert "data-human-action" not in no_challenge
+    assert 'data-human-action="otp"' in otp
+    with pytest.raises(HTTPError) as caught:
+        urlopen(f"{synthetic_ats_url}?challenge=unknown", timeout=2)
+    assert caught.value.code == 404
+
+
 def test_playwright_worker_rejects_unapproved_loopback_origin(tmp_path: Path) -> None:
     worker = RestrictedPlaywrightWorker(tmp_path / "runtime", frozenset({"http://127.0.0.1:8090"}))
     request = PlaywrightDryRunRequest(
@@ -116,8 +141,9 @@ def test_playwright_worker_rejects_unapproved_loopback_origin(tmp_path: Path) ->
         answers={},
     )
 
-    with pytest.raises(BrowserDryRunError, match="fixture URL is not allowlisted"):
+    with pytest.raises(BrowserWorkerFailure) as caught:
         worker.run(request)
+    assert caught.value.category is BrowserFailureCategory.VALIDATION_FAILURE
 
 
 def test_playwright_worker_rejects_symlinked_session_directory(tmp_path: Path) -> None:
@@ -138,8 +164,9 @@ def test_playwright_worker_rejects_symlinked_session_directory(tmp_path: Path) -
         answers={},
     )
 
-    with pytest.raises(BrowserDryRunError, match="contains a symlink"):
+    with pytest.raises(BrowserWorkerFailure) as caught:
         worker.run(request)
+    assert caught.value.category is BrowserFailureCategory.VALIDATION_FAILURE
 
 
 def test_playwright_worker_rejects_symlinked_profile_directory(tmp_path: Path) -> None:
@@ -160,5 +187,6 @@ def test_playwright_worker_rejects_symlinked_profile_directory(tmp_path: Path) -
         answers={},
     )
 
-    with pytest.raises(BrowserDryRunError, match="profile path contains a symlink"):
+    with pytest.raises(BrowserWorkerFailure) as caught:
         worker.run(request)
+    assert caught.value.category is BrowserFailureCategory.VALIDATION_FAILURE

@@ -186,6 +186,30 @@ describe("ApplicationPageClient", () => {
     expect(screen.getByRole("button", { name: "Download exact artifact" })).toBeEnabled();
   });
 
+  it("shows queued browser ownership without offering a duplicate dry run", async () => {
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application).mockResolvedValue({
+      ...ready,
+      state: "form_filling",
+      last_event: "BROWSER_DRY_RUN_QUEUED",
+      next_action: "Waiting for isolated browser worker",
+      archive_available: false,
+    });
+
+    const view = render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+
+    expect(await screen.findByText("Waiting for isolated browser worker")).toBeVisible();
+    expect(screen.getByText(/isolated browser worker owns this attempt/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "dry run" })).not.toBeInTheDocument();
+    expect(api.dryRun).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it("sends the exact revision and reuses its idempotency key after an uncertain failure", async () => {
     const revisionResult: ApplicationDetail = {
       ...editable,

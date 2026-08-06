@@ -81,6 +81,23 @@ services:
       redis:
         condition: service_healthy
 
+  browser-worker:
+    build: .
+    command: ["python", "-m", "app", "run-browser-worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
+      REDIS_URL: redis://redis:6379/0
+      CANDIDATES_ROOT: /app/candidates
+      RUNTIME_ROOT: /app/runtime
+    volumes:
+      - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   scheduler:
     build: .
     command: ["python", "-m", "app", "run-scheduler"]

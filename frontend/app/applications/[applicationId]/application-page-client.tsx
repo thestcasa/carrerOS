@@ -67,6 +67,21 @@ export function ApplicationPageClient({
     };
   }, [candidateId, applicationId]);
 
+  const browserTaskPending =
+    application?.state === "form_filling" &&
+    (application.last_event === "BROWSER_DRY_RUN_QUEUED" ||
+      application.last_event === "BROWSER_DRY_RUN_FAILED");
+
+  useEffect(() => {
+    if (!browserTaskPending) return;
+    const timer = window.setInterval(() => {
+      void load().catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "Browser task status is unavailable.");
+      });
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [browserTaskPending, load]);
+
   async function action(
     kind: "approve-materials" | "start" | "dry-run" | "authorize-submit",
   ) {
@@ -191,7 +206,7 @@ export function ApplicationPageClient({
       ? "approve-materials"
       : application.state === "application_started"
         ? "start"
-        : application.state === "form_filling"
+        : application.state === "form_filling" && !browserTaskPending
           ? "dry-run"
           : application.state === "ready_to_submit"
             ? "authorize-submit"
@@ -218,7 +233,11 @@ export function ApplicationPageClient({
         <div>
           <p className="eyebrow">Authoritative backend state</p>
           <h2>{application.next_action}</h2>
-          <p className="muted">The interface updates only from the persisted API response.</p>
+          <p className="muted">
+            {browserTaskPending
+              ? "The isolated browser worker owns this attempt. This page refreshes from durable state; no submit control is available to the worker."
+              : "The interface updates only from the persisted API response."}
+          </p>
         </div>
         {nextAction ? (
           <button

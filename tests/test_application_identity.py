@@ -16,6 +16,7 @@ from app.applications import (
     DryRunCommand,
     SyntheticSubmissionRequest,
 )
+from app.browser.fakes import DeterministicBrowserExecutor
 from app.candidates.service import CandidateService
 from app.db import build_session_factory
 from app.discovery.verification import StoredFixtureJobSourceVerifier, VerificationEvidence
@@ -28,6 +29,7 @@ from app.domain.models import (
     SubmissionAuthorizationRecord,
 )
 from app.job_service import DiscoveryRequest, JobService
+from app.tasks import TaskQueue
 
 
 class CountingFixtureVerifier(StoredFixtureJobSourceVerifier):
@@ -87,6 +89,24 @@ def _lower_fixture_threshold(candidates_root: Path) -> None:
     data["application_threshold"] = 40
     data["human_review_threshold"] = 30
     path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _execute_browser_dry_run(
+    applications: ApplicationService,
+    sessions: sessionmaker[Session],
+    runtime_root: Path,
+) -> None:
+    queue = TaskQueue(sessions)
+    task = queue.claim(worker_id="identity-browser-worker")
+    assert task is not None and task.kind == "browser_dry_run"
+    result = applications.execute_browser_task(
+        queue,
+        task,
+        worker_id="identity-browser-worker",
+        executor=DeterministicBrowserExecutor(runtime_root),
+        fixture_base_url="http://127.0.0.1:8090/application",
+    )
+    assert result.status == "completed"
 
 
 def _discover_greenhouse_job(
@@ -264,9 +284,10 @@ def test_submission_revalidates_and_preserves_unconsumed_authorization_on_failur
 ) -> None:
     _lower_fixture_threshold(copied_candidates_root)
     verifier = SequentialFixtureVerifier(("open", "open", final_status))
+    runtime_root = tmp_path / f"runtime-submit-{final_status}"
     jobs, applications, sessions = _services(
         copied_candidates_root,
-        tmp_path / f"runtime-submit-{final_status}",
+        runtime_root,
         verifier,
     )
     job_id = _discover_greenhouse_job(
@@ -287,6 +308,7 @@ def test_submission_revalidates_and_preserves_unconsumed_authorization_on_failur
         DryRunCommand(),
         f"dry-run-7601-{final_status}",
     )
+    _execute_browser_dry_run(applications, sessions, runtime_root)
     authorization = applications.authorize(
         "example_candidate", generated.application_id, f"authorize-7601-{final_status}"
     )

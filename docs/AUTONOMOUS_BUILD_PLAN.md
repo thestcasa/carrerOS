@@ -29,6 +29,11 @@ CAPTCHA bypass, ATS manipulation, employer contact, and committed real candidate
 - The specification contains real pilot data, but repository safety rules prohibit committing
   it. Pilot behavior will be proven with fictional configuration and documented onboarding
   blockers rather than copying personal data into version control.
+- Resume audit on 2026-08-06 found an inherited, uncommitted isolated browser-worker slice. It
+  adds durable task attempts, immutable evidence, bounded retry/escalation behavior, archive/gate
+  binding, a dedicated Compose worker, and regression coverage. Preserve it, run the complete
+  quality and migration gates, review it for tenant/safety regressions, and commit it as the next
+  coherent checkpoint before starting material-policy work.
 
 ## Execution order
 
@@ -86,14 +91,14 @@ security, settings, analytics, and artifacts are integrated. Correspondence rema
    submit control.
 3. Add human-action APIs and queue/takeover UI with same-session resumption.
 
-Status: a restricted Playwright fixture harness and loopback-only synthetic ATS fixture server are
-implemented. It uses candidate-isolated persistent profiles, hash-verified uploads, DOM field
-readback, human-action detection, and permits exactly one allowlisted GET document request per run;
-all later requests, WebSockets, service workers, redirects, and form submissions are blocked. It
-has no final-submit click operation. The application workflow is not yet wired to this harness.
-Human completion now defaults to denial unless a browser-owned same-session verifier is injected;
-the local API handshake alone cannot clear the challenge. Contract tests pass; the actual Chromium
-test is skipped on this host, and the Docker execution path and interactive transport remain open.
+Status: the restricted Playwright harness is integrated through a dedicated durable task worker.
+Enqueue and state mutation are atomic; browser activity runs outside SQL; exact lease ownership is
+rechecked when immutable PNG/HTML/manifest evidence and workflow state are finalized. General and
+browser workers claim disjoint task kinds. Attempt history, categorized bounded retries, profile
+reuse, stale-lease recovery, human escalation, and same-session CAPTCHA/OTP handling are covered by
+deterministic tests. The gate and archive verify the exact attempt manifest and bytes, and the
+worker has no submit operation. The actual Chromium test is skipped on this host; the Docker path
+and deployment-specific interactive transport remain external.
 
 ### Phase 4 — Milestones 5 and 6: controlled submission and operations
 
@@ -290,6 +295,18 @@ import command key across uncertain failures.
 4. Update architecture, setup, operations, onboarding, security, adapter, and status documents.
 5. Commit only coherent passing milestones with Conventional Commit subjects and finish with a
    clean working tree apart from preserved pre-existing user changes.
+
+### Current execution checkpoint
+
+1. Validate and integrate the inherited browser-worker attempt-evidence slice; commit it only when
+   backend, frontend, and migration gates pass.
+2. Implement the remaining Milestone 3 policy surface as small end-to-end slices: role-specific
+   template/content selection, configuration-driven cover-letter inclusion, then append-only
+   free-text answer revision with backend-derived provenance and review.
+3. Add the missing browser route/accessibility-critical test layer using deterministic local
+   fixtures where the host permits it; document only genuinely external Chromium/Compose limits.
+4. Re-audit all 24 acceptance criteria and mandatory zero-tolerance targets, repair any remaining
+   product/API/UI/documentation gaps, and run the full fictional workflow before final commits.
 
 ## Conservative decisions
 

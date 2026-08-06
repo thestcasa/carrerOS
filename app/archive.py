@@ -60,6 +60,8 @@ class ApplicationArchiveData(BaseModel):
     security_event_log: Any = ()
     error_log: Any = ()
     required_document_kinds: tuple[str, ...] = ("cv",)
+    browser_pre_submit_screenshot: bytes | None = None
+    browser_final_page_snapshot: bytes | None = None
 
 
 _PNG_1PX = bytes.fromhex(
@@ -274,14 +276,20 @@ class ApplicationArchiveBuilder:
             )
             write("answers/application_questions.json", canonical_json_bytes(questions))
             write("answers/final_answers.json", canonical_json_bytes(data.answers))
-            write("submission/pre_submit_screenshot.png", _PNG_1PX)
-            write(
-                "submission/final_page_snapshot.html",
-                (
-                    b"<!doctype html><html><body><p>Synthetic final page captured before "
-                    b"submit.</p></body></html>\n"
-                ),
-            )
+            screenshot = data.browser_pre_submit_screenshot
+            final_page_snapshot = data.browser_final_page_snapshot
+            if screenshot is None or not screenshot.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("verified browser pre-submit screenshot is required")
+            if final_page_snapshot is None:
+                raise ValueError("verified browser final-page snapshot is required")
+            try:
+                final_page_text = final_page_snapshot.decode("utf-8")
+            except UnicodeError as exc:
+                raise ValueError("verified browser final-page snapshot is invalid") from exc
+            if "<html" not in final_page_text.casefold():
+                raise ValueError("verified browser final-page snapshot is invalid")
+            write("submission/pre_submit_screenshot.png", screenshot)
+            write("submission/final_page_snapshot.html", final_page_snapshot)
             write(
                 "submission/receipt.json",
                 canonical_json_bytes(
@@ -421,9 +429,9 @@ class ApplicationArchiveBuilder:
                 "confirmation_reference": confirmation_reference,
                 "submitted_at": submitted_at,
                 "synthetic_only": True,
+                "confirmation_screenshot_available": False,
             }
             (temp_path / "submission" / "receipt.json").write_bytes(canonical_json_bytes(receipt))
-            (temp_path / "submission" / "confirmation_screenshot.png").write_bytes(_PNG_1PX)
             (temp_path / "submission" / "confirmation.html").write_text(
                 "<!doctype html><html><body><p>Synthetic backend confirmation: "
                 f"{html.escape(confirmation_reference)}</p></body></html>\n",
@@ -473,6 +481,15 @@ class ApplicationArchiveBuilder:
                 return False
         except (OSError, ValueError, TypeError):
             return False
+        try:
+            archived_screenshot = (
+                archive_path / "submission" / "pre_submit_screenshot.png"
+            ).read_bytes()
+            archived_final_page = (
+                archive_path / "submission" / "final_page_snapshot.html"
+            ).read_bytes()
+        except OSError:
+            return False
         expected: dict[str, str] = {}
         references = data.generated_document_references
         if not isinstance(references, list):
@@ -485,9 +502,14 @@ class ApplicationArchiveBuilder:
             if not isinstance(kind, str) or not isinstance(digest, str) or kind in expected:
                 return False
             expected[kind] = digest
-        return manifest.cv.get("sha256") == expected.get("cv") and manifest.cover_letter.get(
-            "sha256"
-        ) == expected.get("cover_letter")
+        return (
+            manifest.cv.get("sha256") == expected.get("cv")
+            and manifest.cover_letter.get("sha256") == expected.get("cover_letter")
+            and data.browser_pre_submit_screenshot is not None
+            and data.browser_final_page_snapshot is not None
+            and archived_screenshot == data.browser_pre_submit_screenshot
+            and archived_final_page == data.browser_final_page_snapshot
+        )
 
     @staticmethod
     def verify(archive_path: Path) -> bool:
