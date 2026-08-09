@@ -99,25 +99,23 @@ class RestrictedPlaywrightWorker:
                     raise BrowserDryRunError(
                         "Playwright navigation left the allowlisted fixture URL"
                     )
-                self._fill_answers(page, request.answers, mapped_values)
-                for upload in request.uploads:
-                    self._validate_upload(request, upload)
-                    locator = page.locator(f'[data-field-key="{upload.field_key}"]')
-                    if locator.count() != 1:
-                        raise BrowserWorkerFailure(
-                            BrowserFailureCategory.SELECTOR_FAILURE,
-                            retryable=True,
-                            safe_details="A required synthetic upload field was unavailable.",
-                        )
-                    locator.set_input_files(str(upload.path.resolve()))
-                    if not locator.input_value().endswith(upload.path.name):
-                        raise BrowserDryRunError(
-                            "synthetic fixture did not retain the selected upload"
-                        )
-                    upload_hashes.append(upload.sha256)
-                    mapped_values[upload.field_key] = upload.path.name
+                closed = page.locator("[data-job-closed]")
+                if closed.count() and closed.first.is_visible():
+                    raise BrowserWorkerFailure(
+                        BrowserFailureCategory.CLOSED_JOB,
+                        retryable=False,
+                        safe_details="The synthetic opening is closed.",
+                    )
+                self._complete_visible_steps(
+                    page,
+                    request,
+                    mapped_values,
+                    upload_hashes,
+                )
 
                 human_action = self._human_action(page)
+                if human_action is None and self._has_unmapped_required_field(page, mapped_values):
+                    human_action = "novel_required_field"
                 submit = page.locator("[data-final-submit]")
                 submit_present = submit.count() > 0 and submit.first.is_visible()
                 screenshot_path = session_directory / "playwright-final-page.png"
@@ -213,17 +211,15 @@ class RestrictedPlaywrightWorker:
                 context.close()
 
     @staticmethod
-    def _fill_answers(
+    def _fill_available_answers(
         page: Page, answers: dict[str, str | bool], mapped_values: dict[str, str | bool]
     ) -> None:
         for field_key, value in answers.items():
+            if field_key in mapped_values:
+                continue
             locator = page.locator(f'[data-field-key="{field_key}"]')
-            if locator.count() != 1:
-                raise BrowserWorkerFailure(
-                    BrowserFailureCategory.SELECTOR_FAILURE,
-                    retryable=True,
-                    safe_details="A required synthetic form field was unavailable.",
-                )
+            if locator.count() != 1 or not locator.first.is_visible():
+                continue
             field_type = locator.get_attribute("type")
             tag_name = locator.evaluate("element => element.tagName.toLowerCase()")
             if field_type == "checkbox":
@@ -235,6 +231,49 @@ class RestrictedPlaywrightWorker:
             else:
                 locator.fill(str(value))
                 mapped_values[field_key] = locator.input_value()
+
+    def _complete_visible_steps(
+        self,
+        page: Page,
+        request: PlaywrightDryRunRequest,
+        mapped_values: dict[str, str | bool],
+        upload_hashes: list[str],
+    ) -> None:
+        for _step in range(4):
+            self._fill_available_answers(page, request.answers, mapped_values)
+            for upload in request.uploads:
+                if upload.field_key in mapped_values:
+                    continue
+                locator = page.locator(f'[data-field-key="{upload.field_key}"]')
+                if locator.count() != 1 or not locator.first.is_visible():
+                    continue
+                self._validate_upload(request, upload)
+                locator.set_input_files(str(upload.path.resolve()))
+                if not locator.input_value().endswith(upload.path.name):
+                    raise BrowserDryRunError("synthetic fixture did not retain the selected upload")
+                upload_hashes.append(upload.sha256)
+                mapped_values[upload.field_key] = upload.path.name
+            next_step = page.locator("[data-next-step]")
+            if next_step.count() == 0 or not next_step.first.is_visible():
+                break
+            next_step.first.click()
+        expected = set(request.answers) | {upload.field_key for upload in request.uploads}
+        if set(mapped_values) != expected:
+            raise BrowserWorkerFailure(
+                BrowserFailureCategory.SELECTOR_FAILURE,
+                retryable=True,
+                safe_details="A required synthetic form field was unavailable.",
+            )
+
+    @staticmethod
+    def _has_unmapped_required_field(page: Page, mapped_values: dict[str, str | bool]) -> bool:
+        required = page.locator("[required][data-field-key]")
+        for index in range(required.count()):
+            field = required.nth(index)
+            key = field.get_attribute("data-field-key")
+            if field.is_visible() and key not in mapped_values:
+                return True
+        return False
 
     @staticmethod
     def _human_action(page: Page) -> str | None:

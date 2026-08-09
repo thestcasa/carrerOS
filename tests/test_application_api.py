@@ -476,3 +476,31 @@ def test_candidate_deletion_requires_confirmation_and_revokes_stale_grant(
     assert recovery_status.json()["status"] == "completed"
     assert recovered.status_code == 200
     assert recovered.json() == deleted.json()
+
+
+def test_settings_api_rejects_self_asserted_autonomy_evidence(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    client, _job_id, _applications, _task_queue = _client(
+        copied_candidates_root, tmp_path / "runtime-settings-evidence"
+    )
+    with client:
+        login = client.post(
+            "/api/auth/local-session", json={"candidate_id": "example_candidate"}
+        ).json()
+        response = client.patch(
+            "/api/settings",
+            headers={
+                "Authorization": f"Bearer {login['session_token']}",
+                "X-CSRF-Token": login["csrf_token"],
+                "Idempotency-Key": "forged-autonomy-evidence",
+            },
+            json={
+                "candidate_id": "example_candidate",
+                "tested_ats_adapters": ["greenhouse"],
+                "dry_run_acceptance_passed": True,
+                "explicit_autonomy_confirmation": True,
+            },
+        )
+
+    assert response.status_code == 422

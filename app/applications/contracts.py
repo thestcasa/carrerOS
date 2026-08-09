@@ -298,6 +298,7 @@ class SettingsView(ApplicationContract):
     maximum_applications_per_company_30_days: int
     browser_session_retention_days: int
     autonomy_blockers: tuple[str, ...]
+    autonomy_prerequisites: tuple[AutonomyPrerequisiteView, ...] = ()
     controlled_submission_enabled: bool = False
 
 
@@ -306,13 +307,27 @@ class SettingsUpdate(ApplicationContract):
     automation_mode: Literal["disabled", "dry_run", "approval_required", "autonomous"] | None = None
     discovery_enabled: bool | None = None
     allowed_ats_adapters: tuple[str, ...] | None = None
-    tested_ats_adapters: tuple[str, ...] | None = None
-    dry_run_acceptance_passed: bool | None = None
-    explicit_autonomy_confirmation: bool | None = None
     maximum_applications_per_day: int | None = Field(default=None, ge=1, le=100)
     maximum_applications_per_week: int | None = Field(default=None, ge=1, le=500)
     maximum_applications_per_company_30_days: int | None = Field(default=None, ge=1, le=20)
     browser_session_retention_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class AutonomyPrerequisiteView(ApplicationContract):
+    code: str
+    title: str
+    explanation: str
+    passed: bool
+    resolution: str
+    action_href: str
+    evidence_id: UUID | None = None
+    evidence_summary: str | None = None
+    evidenced_at: datetime | None = None
+
+
+class AutonomyConfirmationRequest(ApplicationContract):
+    acknowledged: Literal[True]
+    consequence_version: Literal["autonomy-consequences-v1"]
 
 
 class AnalyticsOverview(ApplicationContract):

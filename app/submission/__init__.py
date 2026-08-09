@@ -1,5 +1,9 @@
 """Controlled final-submission boundary; disabled unless explicitly enabled by runtime policy."""
 
+from app.submission.acceptance import (
+    SyntheticAdapterAcceptanceResult,
+    SyntheticGreenhouseAcceptanceRunner,
+)
 from app.submission.contracts import (
     ControlledAuthorizationRequest,
     ControlledGreenhouseFormPayload,
@@ -32,4 +36,6 @@ __all__ = [
     "GreenhouseFormInspection",
     "GreenhousePlaywrightExecutor",
     "PreparedControlledSubmission",
+    "SyntheticAdapterAcceptanceResult",
+    "SyntheticGreenhouseAcceptanceRunner",
 ]

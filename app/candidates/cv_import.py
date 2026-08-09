@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import io
 import re
+import zipfile
 from datetime import date
 from pathlib import Path
 from typing import Literal
+from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field
+from pypdf import PdfReader
 
 from app.candidates.models import ClaimFact, Education, EducationItem, Experience, ExperienceItem
 
@@ -19,6 +23,9 @@ MAX_SECTION_ENTRIES = 100
 MAX_ENTRY_BULLETS = 20
 MAX_ENTRY_FIELDS = 20
 MAX_FIELD_CHARACTERS = 500
+MAX_PDF_PAGES = 50
+MAX_DOCX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+MAX_DOCX_XML_BYTES = 4 * 1024 * 1024
 
 
 class CVImportError(ValueError):
@@ -28,7 +35,7 @@ class CVImportError(ValueError):
 class CVImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    filename: str = Field(pattern=r"^[^/\\\x00]{1,120}\.txt$")
+    filename: str = Field(pattern=r"^[^/\\\x00]{1,120}\.(?:txt|pdf|docx)$")
     content_base64: str = Field(min_length=1, max_length=3_000_000)
 
 
@@ -108,10 +115,12 @@ def _extract_text(filename: str, document: bytes) -> str:
             text = document.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise CVImportError("text CV must be valid UTF-8") from exc
+    elif suffix == ".pdf":
+        text = _extract_pdf_text(document)
+    elif suffix == ".docx":
+        text = _extract_docx_text(document)
     else:
-        raise CVImportError(
-            "CV import supports only UTF-8 text until PDF parsing is worker-isolated"
-        )
+        raise CVImportError("CV import supports UTF-8 text, PDF, and DOCX files")
     normalized = "\n".join(line.strip() for line in text.splitlines()).strip()
     if len(normalized) > MAX_EXTRACTED_CHARACTERS:
         raise CVImportError("CV extracted text exceeds the safety limit")
@@ -120,6 +129,62 @@ def _extract_text(filename: str, document: bytes) -> str:
     if len(normalized.splitlines()) > MAX_CV_LINES:
         raise CVImportError("CV exceeds the structured line limit")
     return normalized
+
+
+def _extract_pdf_text(document: bytes) -> str:
+    if not document.startswith(b"%PDF-"):
+        raise CVImportError("PDF CV has an invalid file signature")
+    try:
+        reader = PdfReader(io.BytesIO(document), strict=True)
+        if reader.is_encrypted:
+            raise CVImportError("encrypted PDF CVs are not supported")
+        if not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
+            raise CVImportError("PDF CV must contain 1 to 50 pages")
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except CVImportError:
+        raise
+    except Exception as exc:
+        raise CVImportError("PDF CV could not be parsed safely") from exc
+
+
+def _extract_docx_text(document: bytes) -> str:
+    if not document.startswith(b"PK"):
+        raise CVImportError("DOCX CV has an invalid file signature")
+    try:
+        with zipfile.ZipFile(io.BytesIO(document)) as archive:
+            entries = archive.infolist()
+            if any(
+                entry.filename.startswith(("/", "\\")) or ".." in Path(entry.filename).parts
+                for entry in entries
+            ):
+                raise CVImportError("DOCX CV contains an unsafe archive path")
+            if sum(entry.file_size for entry in entries) > MAX_DOCX_UNCOMPRESSED_BYTES:
+                raise CVImportError("DOCX CV exceeds the uncompressed safety limit")
+            try:
+                document_entry = archive.getinfo("word/document.xml")
+            except KeyError as exc:
+                raise CVImportError("DOCX CV is missing its document body") from exc
+            if document_entry.file_size > MAX_DOCX_XML_BYTES:
+                raise CVImportError("DOCX CV document body exceeds the safety limit")
+            xml = archive.read(document_entry)
+    except CVImportError:
+        raise
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise CVImportError("DOCX CV could not be parsed safely") from exc
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError as exc:
+        raise CVImportError("DOCX CV document XML is invalid") from exc
+    paragraphs: list[str] = []
+    for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
+        text = "".join(
+            node.text or ""
+            for node in paragraph.iter(
+                "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+            )
+        )
+        paragraphs.append(text)
+    return "\n".join(paragraphs)
 
 
 def _parse_sections(text: str) -> tuple[tuple[_ParsedEntry, ...], tuple[_ParsedEntry, ...]]:

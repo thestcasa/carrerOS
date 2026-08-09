@@ -25,6 +25,8 @@ from app.applications.contracts import (
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
+    AutonomyConfirmationRequest,
+    AutonomyPrerequisiteView,
     CorrespondenceIngestRequest,
     CorrespondenceView,
     DocumentView,
@@ -95,6 +97,7 @@ from app.domain.models import (
     ApplicationArtifact,
     ApplicationDocument,
     ApplicationEvent,
+    AtsAdapterAcceptanceRecord,
     BrowserSession,
     CandidateJobScore,
     CandidateSettingsRecord,
@@ -121,10 +124,12 @@ from app.materials.contracts import (
     ApprovedAnswerFact,
     ApprovedFact,
     Claim,
+    DocumentGenerationAgent,
     GeneratedAnswer,
     GeneratedDocument,
     GenerationRequest,
     GenerationResult,
+    IndependentReviewAgent,
     JobTarget,
     MaterialReview,
     RenderValidationReport,
@@ -143,6 +148,8 @@ from app.submission import (
     ControlledSubmissionUncertainError,
     GreenhouseControlledAdapter,
     PreparedControlledSubmission,
+    SyntheticAdapterAcceptanceResult,
+    SyntheticGreenhouseAcceptanceRunner,
 )
 from app.submission_gate import (
     FinalClickPermit,
@@ -175,6 +182,7 @@ class ApplicationService:
 
     _GENERATION_FRESHNESS = timedelta(hours=24)
     _SUBMISSION_FRESHNESS = timedelta(minutes=15)
+    _AUTONOMY_CONSEQUENCE_VERSION = "autonomy-consequences-v1"
 
     @staticmethod
     def _material_policy(application: Application) -> ApplicationMaterialPolicy:
@@ -205,13 +213,15 @@ class ApplicationService:
         human_action_session_verifier: Callable[[str, UUID, UUID, Path], bool] | None = None,
         source_verifier: JobSourceVerifier | None = None,
         controlled_submission_enabled: bool = False,
+        document_generation_agent: DocumentGenerationAgent | None = None,
+        independent_review_agent: IndependentReviewAgent | None = None,
     ) -> None:
         self._sessions = session_factory
         self._candidates = candidate_service
         self._runtime_root = runtime_root.resolve()
-        self._generator = DeterministicMaterialGenerator()
+        self._generator = document_generation_agent or DeterministicMaterialGenerator()
         self._renderer = DeterministicPdfRenderer()
-        self._reviewer = IndependentMaterialReviewer()
+        self._reviewer = independent_review_agent or IndependentMaterialReviewer()
         self._tasks = TaskQueue(session_factory)
         self._browser_evidence = BrowserEvidenceStore(self._runtime_root)
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
@@ -744,6 +754,7 @@ class ApplicationService:
                 job = lookup.get(GlobalJob, application.job_id)
                 settings = self._settings_record(lookup, candidate_id)
                 target_url = self._validate_controlled_policy(
+                    lookup,
                     config,
                     settings,
                     job,
@@ -813,7 +824,7 @@ class ApplicationService:
             if (
                 settings is None
                 or settings.automation_mode != "autonomous"
-                or self._settings_view(config, settings).autonomy_blockers
+                or self._settings_view(session, config, settings).autonomy_blockers
             ):
                 return ()
             ready = tuple(
@@ -900,7 +911,7 @@ class ApplicationService:
             job = session.get(GlobalJob, application.job_id)
             settings = self._settings_record(session, candidate_id)
             target_url = self._validate_controlled_policy(
-                config, settings, job, approval_acknowledged=True
+                session, config, settings, job, approval_acknowledged=True
             )
             assert job is not None
             if record.target_url_sha256 is None or not hmac.compare_digest(
@@ -1108,25 +1119,7 @@ class ApplicationService:
             )
             if review is None:
                 raise ApplicationConflictError("reviewed controlled form package is missing")
-            reviewed_materials = self._reviewed_materials(session, application, review)
-            snapshot_record = self._reviewed_snapshot(session, application, reviewed_materials)
-            snapshot = self._load_candidate_snapshot(application, snapshot_record)
-            try:
-                snapshot_config = CandidateConfig.model_validate_json(snapshot.config_json)
-            except ValueError as exc:
-                raise ApplicationConflictError(
-                    "controlled form candidate snapshot is invalid"
-                ) from exc
-            name_parts = snapshot_config.identity.full_name.split(maxsplit=1)
-            if len(name_parts) != 2 or not all(name_parts):
-                raise ApplicationConflictError(
-                    "controlled Greenhouse submission requires a reviewed first and last name"
-                )
-            rendered_cv = next(
-                artifact
-                for document, artifact in reviewed_materials
-                if document.kind is DocumentKind.CV
-            )
+            form_payload = self._controlled_form_payload(session, application, review)
             return (
                 ControlledSubmissionPreparationRequest(
                     attempt_id=attempt.id,
@@ -1135,16 +1128,38 @@ class ApplicationService:
                     authorization_id=attempt.authorization_id,
                     browser_session_id=attempt.browser_session_id,
                     target_url=attempt.target_url,
-                    form=ControlledGreenhouseFormPayload(
-                        first_name=name_parts[0],
-                        last_name=name_parts[1],
-                        email=snapshot_config.identity.email,
-                        resume_path=Path(rendered_cv.storage_uri),
-                        resume_sha256=rendered_cv.sha256,
-                    ),
+                    form=form_payload,
                 ),
                 application.job_id,
             )
+
+    def _controlled_form_payload(
+        self, session: Session, application: Application, review: AgentReview
+    ) -> ControlledGreenhouseFormPayload:
+        reviewed_materials = self._reviewed_materials(session, application, review)
+        snapshot_record = self._reviewed_snapshot(session, application, reviewed_materials)
+        snapshot = self._load_candidate_snapshot(application, snapshot_record)
+        try:
+            snapshot_config = CandidateConfig.model_validate_json(snapshot.config_json)
+        except ValueError as exc:
+            raise ApplicationConflictError("controlled form candidate snapshot is invalid") from exc
+        name_parts = snapshot_config.identity.full_name.split(maxsplit=1)
+        if len(name_parts) != 2 or not all(name_parts):
+            raise ApplicationConflictError(
+                "controlled Greenhouse submission requires a reviewed first and last name"
+            )
+        rendered_cv = next(
+            artifact
+            for document, artifact in reviewed_materials
+            if document.kind is DocumentKind.CV
+        )
+        return ControlledGreenhouseFormPayload(
+            first_name=name_parts[0],
+            last_name=name_parts[1],
+            email=snapshot_config.identity.email,
+            resume_path=Path(rendered_cv.storage_uri),
+            resume_sha256=rendered_cv.sha256,
+        )
 
     @staticmethod
     def _validate_controlled_preparation(
@@ -1211,7 +1226,7 @@ class ApplicationService:
             job = session.get(GlobalJob, application.job_id)
             settings = self._settings_record(session, task.candidate_id)
             target_url = self._validate_controlled_policy(
-                config, settings, job, approval_acknowledged=True
+                session, config, settings, job, approval_acknowledged=True
             )
             assert job is not None
             target_sha256 = hashlib.sha256(target_url.encode()).hexdigest()
@@ -1276,6 +1291,17 @@ class ApplicationService:
                 session, task.candidate_id, job.company, settings, now
             ):
                 raise ApplicationConflictError("controlled submission policy stopped the click")
+            current_adapter = GreenhouseControlledAdapter()
+            exact_acceptance = any(
+                item.adapter_version == current_adapter.VERSION
+                and item.destination_policy_sha256 == current_adapter.destination_policy_sha256
+                and item.form_fingerprint == prepared.inspection.form_fingerprint
+                for item in self._valid_adapter_acceptances(session, task.candidate_id)
+            )
+            if not exact_acceptance:
+                raise ApplicationConflictError(
+                    "controlled form pattern has no current synthetic acceptance evidence"
+                )
             claimed = session.execute(
                 update(SubmissionAuthorizationRecord)
                 .where(
@@ -2417,13 +2443,15 @@ class ApplicationService:
             if rendered_cv is None:
                 raise ApplicationConflictError("reviewed browser CV is missing")
             fixture_url = f"{fixture_base_url}?challenge={challenge_value or 'none'}"
+            name_parts = config.identity.full_name.split()
             return PlaywrightDryRunRequest(
                 application_id=application_id,
                 candidate_id=task.candidate_id,
                 session_id=session_id,
                 fixture_url=fixture_url,
                 answers={
-                    "first_name": config.identity.full_name.split()[0],
+                    "first_name": name_parts[0],
+                    "last_name": name_parts[-1],
                     "email": config.identity.email,
                 },
                 uploads=(
@@ -3889,7 +3917,7 @@ class ApplicationService:
                     CandidateSettingsRecord.candidate_id == candidate_id
                 )
             ) or self._default_settings_record(candidate_id)
-            return self._settings_view(config, record)
+            return self._settings_view(session, config, record)
 
     def update_settings(self, update: SettingsUpdate, idempotency_key: str) -> SettingsView:
         with self._candidates.lifecycle_write(update.candidate_id):
@@ -3912,7 +3940,7 @@ class ApplicationService:
             values = update.model_dump(exclude_none=True, exclude={"candidate_id"})
             for key, value in values.items():
                 setattr(record, key, list(value) if isinstance(value, tuple) else value)
-            view = self._settings_view(config, record)
+            view = self._settings_view(session, config, record)
             if view.automation_mode == "autonomous" and view.autonomy_blockers:
                 raise ApplicationConflictError(
                     "autonomous mode is blocked: " + ", ".join(view.autonomy_blockers)
@@ -3932,6 +3960,203 @@ class ApplicationService:
                 view,
             )
             return view
+
+    def confirm_autonomy(
+        self,
+        candidate_id: str,
+        request: AutonomyConfirmationRequest,
+        idempotency_key: str,
+    ) -> SettingsView:
+        with self._candidates.lifecycle_write(candidate_id):
+            config = self._candidates.get_config(candidate_id)
+            payload = request.model_dump(mode="json")
+            with self._sessions.begin() as session:
+                replay, request_sha256, key_sha256 = self._settings_command_replay(
+                    session,
+                    candidate_id,
+                    "autonomy_confirmation_recorded",
+                    payload,
+                    idempotency_key,
+                )
+                if replay is not None:
+                    return replay
+                record = self._settings_record(session, candidate_id)
+                acceptances = tuple(
+                    item
+                    for item in self._valid_adapter_acceptances(session, candidate_id)
+                    if item.adapter in record.allowed_ats_adapters
+                )
+                dry_run_evidence = self._valid_dry_run_evidence(session, candidate_id)
+                provisional = self._settings_view(
+                    session,
+                    config,
+                    record,
+                    acceptances=acceptances,
+                    ignore_confirmation=True,
+                )
+                blockers = tuple(
+                    blocker
+                    for blocker in provisional.autonomy_blockers
+                    if blocker != "explicit_confirmation_missing"
+                )
+                if blockers:
+                    raise ApplicationConflictError(
+                        "autonomy confirmation prerequisites are blocked: " + ", ".join(blockers)
+                    )
+                scope_sha256 = self._autonomy_scope_sha256(
+                    config, record, acceptances, dry_run_evidence
+                )
+                confirmed_at = datetime.now(UTC)
+                record.explicit_autonomy_confirmation = True
+                record.autonomy_confirmation_scope_sha256 = scope_sha256
+                record.autonomy_confirmed_at = confirmed_at
+                self._append_admin_audit(
+                    session,
+                    candidate_id,
+                    "autonomy_confirmation_recorded",
+                    {
+                        "consequence_version": request.consequence_version,
+                        "scope_sha256": scope_sha256,
+                        "tested_adapters": sorted({item.adapter for item in acceptances}),
+                        "evidence_ids": [str(item.id) for item in acceptances],
+                        "maximum_applications_per_day": record.maximum_applications_per_day,
+                        "maximum_applications_per_week": record.maximum_applications_per_week,
+                        "maximum_applications_per_company_30_days": (
+                            record.maximum_applications_per_company_30_days
+                        ),
+                    },
+                )
+                view = self._settings_view(session, config, record, acceptances=acceptances)
+                self._append_settings_receipt(
+                    session,
+                    candidate_id,
+                    "autonomy_confirmation_recorded",
+                    key_sha256,
+                    request_sha256,
+                    view,
+                )
+                return view
+
+    def run_synthetic_adapter_acceptance(
+        self,
+        candidate_id: str,
+        application_id: UUID,
+        idempotency_key: str,
+    ) -> SettingsView:
+        """Exercise the actual controlled adapter in memory and bind it to a passing dry run."""
+
+        with self._candidates.lifecycle_write(candidate_id):
+            config = self._candidates.get_config(candidate_id)
+            payload = {"application_id": str(application_id), "adapter": "greenhouse"}
+            with self._sessions.begin() as session:
+                replay, request_sha256, key_sha256 = self._settings_command_replay(
+                    session,
+                    candidate_id,
+                    "synthetic_adapter_acceptance_passed",
+                    payload,
+                    idempotency_key,
+                )
+                if replay is not None:
+                    return replay
+                application = self._application(session, candidate_id, application_id)
+                job = session.get(GlobalJob, application.job_id)
+                if job is None or (job.ats_platform or "").casefold() != "greenhouse":
+                    raise ApplicationConflictError(
+                        "synthetic adapter acceptance requires a Greenhouse application"
+                    )
+                manifest, _screenshot, _final_page = self._verified_browser_evidence(
+                    session, application
+                )
+                if not self._dry_run_manifest_passed(manifest):
+                    raise ApplicationConflictError(
+                        "synthetic adapter acceptance requires passing browser evidence"
+                    )
+                review = session.scalar(
+                    select(AgentReview)
+                    .where(
+                        AgentReview.candidate_id == candidate_id,
+                        AgentReview.application_id == application_id,
+                    )
+                    .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
+                    .limit(1)
+                )
+                if review is None:
+                    raise ApplicationConflictError("reviewed adapter package is missing")
+                form_payload = self._controlled_form_payload(session, application, review)
+                result = SyntheticGreenhouseAcceptanceRunner().run(form_payload)
+                manifest_artifact = self._browser_manifest_artifact(session, application, manifest)
+                package_sha256 = self._adapter_acceptance_package_sha256(
+                    result, manifest, manifest_artifact.sha256
+                )
+                existing = session.scalar(
+                    select(AtsAdapterAcceptanceRecord).where(
+                        AtsAdapterAcceptanceRecord.candidate_id == candidate_id,
+                        AtsAdapterAcceptanceRecord.adapter == result.adapter,
+                        AtsAdapterAcceptanceRecord.adapter_version == result.adapter_version,
+                        AtsAdapterAcceptanceRecord.form_fingerprint == result.form_fingerprint,
+                        AtsAdapterAcceptanceRecord.browser_task_id == manifest.task_id,
+                        AtsAdapterAcceptanceRecord.browser_attempt == manifest.attempt,
+                    )
+                )
+                if existing is None:
+                    acceptance = AtsAdapterAcceptanceRecord(
+                        candidate_id=candidate_id,
+                        application_id=application_id,
+                        adapter=result.adapter,
+                        adapter_version=result.adapter_version,
+                        destination_policy_sha256=result.destination_policy_sha256,
+                        form_pattern=result.form_pattern,
+                        form_fingerprint=result.form_fingerprint,
+                        package_sha256=package_sha256,
+                        browser_task_id=manifest.task_id,
+                        browser_attempt=manifest.attempt,
+                        evidence_manifest_sha256=manifest_artifact.sha256,
+                        passed=True,
+                        recorded_at=datetime.now(UTC),
+                    )
+                    session.add(acceptance)
+                    session.flush()
+                else:
+                    acceptance = existing
+                    if (
+                        not existing.passed
+                        or existing.application_id != application_id
+                        or existing.destination_policy_sha256 != result.destination_policy_sha256
+                        or existing.form_pattern != result.form_pattern
+                        or existing.package_sha256 != package_sha256
+                        or existing.evidence_manifest_sha256 != manifest_artifact.sha256
+                    ):
+                        raise ApplicationConflictError(
+                            "synthetic adapter acceptance evidence conflicts"
+                        )
+                self._append_admin_audit(
+                    session,
+                    candidate_id,
+                    "synthetic_adapter_acceptance_passed",
+                    {
+                        "acceptance_id": str(acceptance.id),
+                        "application_id": str(application_id),
+                        "adapter": result.adapter,
+                        "adapter_version": result.adapter_version,
+                        "destination_policy_sha256": result.destination_policy_sha256,
+                        "form_fingerprint": result.form_fingerprint,
+                        "browser_task_id": str(manifest.task_id),
+                        "browser_attempt": manifest.attempt,
+                        "evidence_manifest_sha256": manifest_artifact.sha256,
+                    },
+                )
+                view = self._settings_view(
+                    session, config, self._settings_record(session, candidate_id)
+                )
+                self._append_settings_receipt(
+                    session,
+                    candidate_id,
+                    "synthetic_adapter_acceptance_passed",
+                    key_sha256,
+                    request_sha256,
+                    view,
+                )
+                return view
 
     def emergency_stop(self, candidate_id: str, idempotency_key: str) -> SettingsView:
         with self._candidates.lifecycle_write(candidate_id):
@@ -3955,7 +4180,7 @@ class ApplicationService:
             self._append_admin_audit(
                 session, candidate_id, "emergency_stop_activated", {"automation_mode": "disabled"}
             )
-            view = self._settings_view(config, record)
+            view = self._settings_view(session, config, record)
             self._append_settings_receipt(
                 session,
                 candidate_id,
@@ -5145,6 +5370,25 @@ class ApplicationService:
             raise ApplicationConflictError("submitted answer archive is incomplete")
         return tuple(answers)
 
+    @classmethod
+    def _raw_job_html(cls, payload: object) -> bytes | None:
+        """Return only exact HTML found in provider evidence; never synthesize source capture."""
+        if isinstance(payload, dict):
+            for key in ("content", "descriptionHtml", "description_html", "description"):
+                value = payload.get(key)
+                if isinstance(value, str) and "<" in value and ">" in value:
+                    return value.encode("utf-8")
+            for value in payload.values():
+                found = cls._raw_job_html(value)
+                if found is not None:
+                    return found
+        elif isinstance(payload, list):
+            for value in payload:
+                found = cls._raw_job_html(value)
+                if found is not None:
+                    return found
+        return None
+
     def _create_archive(
         self,
         session: Session,
@@ -5177,6 +5421,21 @@ class ApplicationService:
         )
         if review is None:
             raise ApplicationConflictError("material review is missing")
+        job_version = (
+            session.scalar(
+                select(JobVersion)
+                .where(JobVersion.job_id == job.id)
+                .order_by(JobVersion.version.desc())
+                .limit(1)
+            )
+            if job is not None
+            else None
+        )
+        analysis_provenance = (
+            score.rationale.get("agent_analysis", {})
+            if score is not None and isinstance(score.rationale, dict)
+            else {}
+        )
         reviewed_materials = self._reviewed_materials(session, application, review)
         reviewed_documents = tuple(item[0] for item in reviewed_materials)
         rendered_artifacts = tuple(item[1] for item in reviewed_materials)
@@ -5281,8 +5540,25 @@ class ApplicationService:
                 required_document_kinds=(
                     ("cv", "cover_letter") if self._cover_letter_included(application) else ("cv",)
                 ),
+                job_post_raw_html=(
+                    self._raw_job_html(job_version.source_payload)
+                    if job_version is not None
+                    else None
+                ),
                 browser_pre_submit_screenshot=browser_screenshot,
                 browser_final_page_snapshot=browser_final_page,
+                model_versions={
+                    "job_analysis": str(
+                        analysis_provenance.get("model") or "deterministic-scoring-v1"
+                    ),
+                    "document_generation": "deterministic-material-v2",
+                    "independent_review": "deterministic-material-review-v1",
+                },
+                prompt_versions={
+                    "job_analysis": str(analysis_provenance.get("prompt_version") or "1.0"),
+                    "document_generation": "material-policy-v1",
+                    "independent_review": "material-review-v1",
+                },
             ),
         )
         exposed_files = {
@@ -6071,6 +6347,7 @@ class ApplicationService:
 
     def _validate_controlled_policy(
         self,
+        session: Session,
         config: CandidateConfig,
         settings: CandidateSettingsRecord,
         job: GlobalJob | None,
@@ -6089,12 +6366,10 @@ class ApplicationService:
             raise ApplicationConflictError("controlled submission approval is required")
         if "greenhouse" not in settings.allowed_ats_adapters:
             raise ApplicationConflictError("Greenhouse is not an allowed ATS adapter")
-        if "greenhouse" not in settings.tested_ats_adapters:
+        settings_view = self._settings_view(session, config, settings)
+        if "greenhouse" not in settings_view.tested_ats_adapters:
             raise ApplicationConflictError("Greenhouse has not passed candidate acceptance")
-        if (
-            settings.automation_mode == "autonomous"
-            and self._settings_view(config, settings).autonomy_blockers
-        ):
+        if settings.automation_mode == "autonomous" and settings_view.autonomy_blockers:
             raise ApplicationConflictError("candidate autonomous readiness is blocked")
         if (
             job is None
@@ -6590,13 +6865,15 @@ class ApplicationService:
     def _default_settings_record(candidate_id: str) -> CandidateSettingsRecord:
         return CandidateSettingsRecord(
             candidate_id=candidate_id,
-            automation_mode="dry_run",
+            automation_mode="approval_required",
             discovery_enabled=False,
             emergency_stopped=False,
             allowed_ats_adapters=[],
             tested_ats_adapters=[],
             dry_run_acceptance_passed=False,
             explicit_autonomy_confirmation=False,
+            autonomy_confirmation_scope_sha256=None,
+            autonomy_confirmed_at=None,
             maximum_applications_per_day=5,
             maximum_applications_per_week=20,
             maximum_applications_per_company_30_days=3,
@@ -6814,9 +7091,305 @@ class ApplicationService:
             )
         )
 
+    @staticmethod
+    def _dry_run_manifest_passed(manifest: BrowserAttemptManifest) -> bool:
+        return (
+            manifest.final_submit_present
+            and not manifest.final_submit_clicked
+            and manifest.allowed_network_requests == 1
+            and manifest.blocked_network_requests >= 2
+            and bool(manifest.upload_hashes)
+        )
+
+    @staticmethod
+    def _browser_manifest_artifact(
+        session: Session,
+        application: Application,
+        manifest: BrowserAttemptManifest,
+    ) -> ApplicationArtifact:
+        matching = tuple(
+            item
+            for item in session.scalars(
+                select(ApplicationArtifact).where(
+                    ApplicationArtifact.candidate_id == application.candidate_id,
+                    ApplicationArtifact.application_id == application.id,
+                    ApplicationArtifact.kind == "browser_attempt_manifest",
+                    ApplicationArtifact.immutable.is_(True),
+                )
+            ).all()
+            if item.artifact_metadata.get("task_id") == str(manifest.task_id)
+            and item.artifact_metadata.get("attempt") == manifest.attempt
+            and item.artifact_metadata.get("session_id") == str(manifest.session_id)
+        )
+        if len(matching) != 1:
+            raise ApplicationConflictError("browser manifest evidence is ambiguous")
+        return matching[0]
+
+    def _valid_dry_run_evidence(
+        self, session: Session, candidate_id: str
+    ) -> tuple[tuple[Application, BrowserAttemptManifest, ApplicationArtifact], ...]:
+        valid: list[tuple[Application, BrowserAttemptManifest, ApplicationArtifact]] = []
+        applications = session.scalars(
+            select(Application)
+            .where(Application.candidate_id == candidate_id)
+            .order_by(Application.updated_at.desc(), Application.id.desc())
+        ).all()
+        for application in applications:
+            try:
+                manifest, _screenshot, _final_page = self._verified_browser_evidence(
+                    session, application
+                )
+                artifact = self._browser_manifest_artifact(session, application, manifest)
+            except ApplicationConflictError:
+                continue
+            if self._dry_run_manifest_passed(manifest):
+                valid.append((application, manifest, artifact))
+        return tuple(valid)
+
+    @staticmethod
+    def _adapter_acceptance_package_sha256(
+        result: SyntheticAdapterAcceptanceResult,
+        manifest: BrowserAttemptManifest,
+        evidence_manifest_sha256: str,
+    ) -> str:
+        return hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "adapter_acceptance": result.model_dump(mode="json"),
+                    "candidate_id": manifest.candidate_id,
+                    "application_id": str(manifest.application_id),
+                    "browser_task_id": str(manifest.task_id),
+                    "browser_attempt": manifest.attempt,
+                    "dry_run_manifest_sha256": evidence_manifest_sha256,
+                    "upload_hashes": list(manifest.upload_hashes),
+                }
+            )
+        ).hexdigest()
+
+    def _valid_adapter_acceptances(
+        self, session: Session, candidate_id: str
+    ) -> tuple[AtsAdapterAcceptanceRecord, ...]:
+        valid: list[AtsAdapterAcceptanceRecord] = []
+        records = session.scalars(
+            select(AtsAdapterAcceptanceRecord)
+            .where(
+                AtsAdapterAcceptanceRecord.candidate_id == candidate_id,
+                AtsAdapterAcceptanceRecord.passed.is_(True),
+            )
+            .order_by(AtsAdapterAcceptanceRecord.recorded_at.desc())
+        ).all()
+        for record in records:
+            application = session.get(Application, record.application_id)
+            if application is None or application.candidate_id != candidate_id:
+                continue
+            try:
+                manifest, _screenshot, _final_page = self._verified_browser_evidence(
+                    session, application
+                )
+                manifest_artifact = self._browser_manifest_artifact(session, application, manifest)
+                review = session.scalar(
+                    select(AgentReview)
+                    .where(
+                        AgentReview.candidate_id == candidate_id,
+                        AgentReview.application_id == application.id,
+                    )
+                    .order_by(AgentReview.created_at.desc(), AgentReview.id.desc())
+                    .limit(1)
+                )
+                if review is None:
+                    continue
+                result = SyntheticGreenhouseAcceptanceRunner().run(
+                    self._controlled_form_payload(session, application, review)
+                )
+            except (ApplicationConflictError, ValueError):
+                continue
+            expected_package = self._adapter_acceptance_package_sha256(
+                result, manifest, manifest_artifact.sha256
+            )
+            if (
+                self._dry_run_manifest_passed(manifest)
+                and record.browser_task_id == manifest.task_id
+                and record.browser_attempt == manifest.attempt
+                and record.evidence_manifest_sha256 == manifest_artifact.sha256
+                and record.adapter == result.adapter
+                and record.adapter_version == result.adapter_version
+                and record.destination_policy_sha256 == result.destination_policy_sha256
+                and record.form_pattern == result.form_pattern
+                and record.form_fingerprint == result.form_fingerprint
+                and hmac.compare_digest(record.package_sha256, expected_package)
+            ):
+                valid.append(record)
+        return tuple(valid)
+
+    def _autonomy_scope_sha256(
+        self,
+        config: CandidateConfig,
+        record: CandidateSettingsRecord,
+        acceptances: tuple[AtsAdapterAcceptanceRecord, ...],
+        dry_run_evidence: tuple[
+            tuple[Application, BrowserAttemptManifest, ApplicationArtifact], ...
+        ] = (),
+    ) -> str:
+        return hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "candidate_id": record.candidate_id,
+                    "profile_version": config.manifest.profile_version,
+                    "automatic_submission_enabled": (
+                        config.manifest.workflow.automatic_submission_enabled
+                    ),
+                    "allowed_ats_adapters": sorted(record.allowed_ats_adapters),
+                    "acceptance_evidence": [
+                        {
+                            "id": str(item.id),
+                            "adapter": item.adapter,
+                            "adapter_version": item.adapter_version,
+                            "destination_policy_sha256": item.destination_policy_sha256,
+                            "form_fingerprint": item.form_fingerprint,
+                            "package_sha256": item.package_sha256,
+                        }
+                        for item in sorted(acceptances, key=lambda item: str(item.id))
+                    ],
+                    "dry_run_evidence": [
+                        {
+                            "application_id": str(application.id),
+                            "task_id": str(manifest.task_id),
+                            "attempt": manifest.attempt,
+                            "manifest_sha256": artifact.sha256,
+                        }
+                        for application, manifest, artifact in dry_run_evidence
+                    ],
+                    "limits": {
+                        "daily": record.maximum_applications_per_day,
+                        "weekly": record.maximum_applications_per_week,
+                        "per_company_30_days": (record.maximum_applications_per_company_30_days),
+                    },
+                    "consequence_version": self._AUTONOMY_CONSEQUENCE_VERSION,
+                    "emergency_stop_blocks_new_submissions": True,
+                }
+            )
+        ).hexdigest()
+
+    @staticmethod
+    def _autonomy_prerequisites(
+        candidate_id: str,
+        blockers: list[str],
+        acceptances: tuple[AtsAdapterAcceptanceRecord, ...],
+        dry_run_evidence: tuple[
+            tuple[Application, BrowserAttemptManifest, ApplicationArtifact], ...
+        ],
+        confirmed_at: datetime | None,
+    ) -> tuple[AutonomyPrerequisiteView, ...]:
+        blocked = set(blockers)
+        acceptance = acceptances[0] if acceptances else None
+        dry_run = dry_run_evidence[0] if dry_run_evidence else None
+        encoded_candidate = candidate_id
+        definitions = (
+            (
+                "no_tested_ats_adapter",
+                "Test one ATS adapter safely",
+                (
+                    "A network-free acceptance check must exercise the controlled adapter code "
+                    "for an exact form pattern."
+                ),
+                (
+                    "Complete a safe dry run, then run the synthetic adapter check for that "
+                    "application."
+                ),
+                f"/applications?candidate_id={encoded_candidate}",
+                acceptance.id if acceptance else None,
+                (
+                    f"{acceptance.adapter} {acceptance.adapter_version}; "
+                    f"form {acceptance.form_fingerprint[:12]}…"
+                    if acceptance
+                    else None
+                ),
+                acceptance.recorded_at if acceptance else None,
+            ),
+            (
+                "dry_run_acceptance_not_passed",
+                "Complete a safe browser dry run",
+                (
+                    "Career OS needs hash-verified candidate-scoped browser evidence showing the "
+                    "final page without a submit click."
+                ),
+                "Open a prepared application and run the isolated dry run.",
+                f"/applications?candidate_id={encoded_candidate}",
+                dry_run[0].id if dry_run else None,
+                (
+                    f"Application {dry_run[0].id}; task {dry_run[1].task_id}; submit clicked: no"
+                    if dry_run
+                    else None
+                ),
+                dry_run[1].completed_at if dry_run else None,
+            ),
+            (
+                "explicit_confirmation_missing",
+                "Confirm the autonomous scope yourself",
+                (
+                    "Only you can accept the displayed limits, tested adapter scope, and "
+                    "emergency-stop consequences."
+                ),
+                "After evidence passes, review the consequences and check the confirmation box.",
+                f"/settings?candidate_id={encoded_candidate}#autonomy-confirmation",
+                None,
+                "Audited user confirmation is current." if confirmed_at else None,
+                confirmed_at,
+            ),
+        )
+        return tuple(
+            AutonomyPrerequisiteView(
+                code=code,
+                title=title,
+                explanation=explanation,
+                passed=code not in blocked,
+                resolution=resolution,
+                action_href=action_href,
+                evidence_id=evidence_id,
+                evidence_summary=evidence_summary,
+                evidenced_at=evidenced_at,
+            )
+            for (
+                code,
+                title,
+                explanation,
+                resolution,
+                action_href,
+                evidence_id,
+                evidence_summary,
+                evidenced_at,
+            ) in definitions
+        )
+
     def _settings_view(
-        self, config: CandidateConfig, record: CandidateSettingsRecord
+        self,
+        session: Session,
+        config: CandidateConfig,
+        record: CandidateSettingsRecord,
+        *,
+        acceptances: tuple[AtsAdapterAcceptanceRecord, ...] | None = None,
+        ignore_confirmation: bool = False,
     ) -> SettingsView:
+        all_valid_acceptances = (
+            acceptances
+            if acceptances is not None
+            else self._valid_adapter_acceptances(session, record.candidate_id)
+        )
+        valid_acceptances = tuple(
+            item for item in all_valid_acceptances if item.adapter in record.allowed_ats_adapters
+        )
+        dry_run_evidence = self._valid_dry_run_evidence(session, record.candidate_id)
+        tested_adapters = tuple(sorted({item.adapter for item in valid_acceptances}))
+        dry_run_acceptance_passed = bool(dry_run_evidence)
+        expected_scope = self._autonomy_scope_sha256(
+            config, record, valid_acceptances, dry_run_evidence
+        )
+        explicit_confirmation = (
+            not ignore_confirmation
+            and record.explicit_autonomy_confirmation
+            and record.autonomy_confirmation_scope_sha256 is not None
+            and hmac.compare_digest(record.autonomy_confirmation_scope_sha256, expected_scope)
+        )
         blockers: list[str] = []
         if not config.manifest.validation.profile_approved:
             blockers.append("profile_not_approved")
@@ -6824,11 +7397,15 @@ class ApplicationService:
             blockers.append("legal_status_not_approved")
         if not config.manifest.validation.automatic_answers_approved:
             blockers.append("automatic_answers_not_approved")
-        if not record.tested_ats_adapters:
+        if not config.manifest.validation.cv_templates_approved:
+            blockers.append("cv_templates_not_approved")
+        if not config.manifest.workflow.automatic_submission_enabled:
+            blockers.append("automatic_submission_disabled")
+        if not tested_adapters:
             blockers.append("no_tested_ats_adapter")
-        if not record.dry_run_acceptance_passed:
+        if not dry_run_acceptance_passed:
             blockers.append("dry_run_acceptance_not_passed")
-        if not record.explicit_autonomy_confirmation:
+        if not explicit_confirmation:
             blockers.append("explicit_confirmation_missing")
         if record.emergency_stopped:
             blockers.append("emergency_stop_active")
@@ -6838,9 +7415,9 @@ class ApplicationService:
             discovery_enabled=record.discovery_enabled,
             emergency_stopped=record.emergency_stopped,
             allowed_ats_adapters=tuple(record.allowed_ats_adapters),
-            tested_ats_adapters=tuple(record.tested_ats_adapters),
-            dry_run_acceptance_passed=record.dry_run_acceptance_passed,
-            explicit_autonomy_confirmation=record.explicit_autonomy_confirmation,
+            tested_ats_adapters=tested_adapters,
+            dry_run_acceptance_passed=dry_run_acceptance_passed,
+            explicit_autonomy_confirmation=explicit_confirmation,
             maximum_applications_per_day=record.maximum_applications_per_day,
             maximum_applications_per_week=record.maximum_applications_per_week,
             maximum_applications_per_company_30_days=(
@@ -6848,5 +7425,12 @@ class ApplicationService:
             ),
             browser_session_retention_days=record.browser_session_retention_days,
             autonomy_blockers=tuple(blockers),
+            autonomy_prerequisites=self._autonomy_prerequisites(
+                record.candidate_id,
+                blockers,
+                valid_acceptances,
+                dry_run_evidence,
+                record.autonomy_confirmed_at if explicit_confirmation else None,
+            ),
             controlled_submission_enabled=self._controlled_submission_enabled,
         )

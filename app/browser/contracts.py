@@ -181,7 +181,7 @@ class PlaywrightDryRunResult(BrowserContract):
     final_page_snapshot_path: Path
     mapped_values: dict[str, str | bool]
     upload_hashes: tuple[str, ...]
-    human_action: Literal["captcha", "otp"] | None
+    human_action: Literal["captcha", "otp", "novel_required_field"] | None
     final_submit_present: bool
     final_submit_clicked: Literal[False] = False
     allowed_network_requests: int = Field(ge=0)

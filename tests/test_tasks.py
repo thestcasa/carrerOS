@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -9,7 +10,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.lifecycle import CandidateLifecycleService
-from app.candidates.service import CandidateService
+from app.candidates.service import CandidateSectionUpdate, CandidateService
 from app.db import build_session_factory
 from app.discovery.scheduled import ScheduledDiscoveryService
 from app.domain.models import Base, WorkflowTask
@@ -220,6 +221,55 @@ def test_scheduler_and_worker_process_candidate_readiness_durably(
     assert completed is not None and completed.status == "completed"
     with sessions() as session:
         assert session.scalar(select(func.count(WorkflowTask.id))) == 1
+
+
+def test_scheduler_readiness_key_survives_legacy_task_with_different_payload(
+    copied_candidates_root: Path,
+) -> None:
+    queue, sessions = _queue()
+    candidates = CandidateService(copied_candidates_root)
+    now = datetime(2026, 8, 5, 10, tzinfo=UTC)
+    queue.enqueue(
+        candidate_id="example_candidate",
+        kind="candidate_readiness_check",
+        idempotency_key="readiness:20260805T1000",
+        payload={"profile_version": "0.9.0"},
+        scheduled_for=now,
+    )
+
+    scheduled = run_scheduler_once(queue, candidates, now=now)
+
+    assert len(scheduled) == 1
+    assert scheduled[0].payload == {"profile_version": "1.0.0"}
+    with sessions() as session:
+        assert session.scalar(select(func.count(WorkflowTask.id))) == 2
+
+
+def test_scheduler_readiness_key_changes_with_profile_in_same_bucket(
+    copied_candidates_root: Path,
+) -> None:
+    queue, sessions = _queue()
+    candidates = CandidateService(copied_candidates_root)
+    now = datetime(2026, 8, 5, 10, tzinfo=UTC)
+    first = run_scheduler_once(queue, candidates, now=now)[0]
+    identity_path = copied_candidates_root / "example_candidate" / "identity.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity["preferred_name"] = "Avery Updated"
+    candidates.update_section(
+        "example_candidate",
+        CandidateSectionUpdate(section="identity", data=identity),
+        "scheduler-profile-update",
+    )
+
+    second = run_scheduler_once(queue, candidates, now=now)[0]
+    replay = run_scheduler_once(queue, candidates, now=now)[0]
+
+    assert first.task_id != second.task_id
+    assert first.payload == {"profile_version": "1.0.0"}
+    assert second.payload == {"profile_version": "1.0.1"}
+    assert replay.task_id == second.task_id
+    with sessions() as session:
+        assert session.scalar(select(func.count(WorkflowTask.id))) == 2
 
 
 def test_worker_does_not_mutate_or_crash_after_task_lease_is_reclaimed(

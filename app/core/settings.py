@@ -13,6 +13,7 @@ class Settings:
     redis_url: str
     candidates_root: Path
     cors_origins: tuple[str, ...]
+    candidate_fixtures_root: Path | None = None
     runtime_root: Path = Path.cwd() / "runtime"
     auth_required: bool = False
     local_token_secret: str | None = None
@@ -25,6 +26,9 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             candidates_root=Path(os.getenv("CANDIDATES_ROOT", Path.cwd() / "candidates")),
+            candidate_fixtures_root=(
+                Path(value) if (value := os.getenv("CANDIDATE_FIXTURES_ROOT")) else None
+            ),
             cors_origins=tuple(origin.strip() for origin in origins.split(",") if origin.strip()),
             runtime_root=Path(os.getenv("RUNTIME_ROOT", Path.cwd() / "runtime")),
             auth_required=os.getenv("AUTH_REQUIRED", "true").casefold() == "true",

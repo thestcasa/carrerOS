@@ -26,6 +26,7 @@ from app.applications import (
     ApplicationSummary,
     ArtifactView,
     AuthorizationView,
+    AutonomyConfirmationRequest,
     ControlledAuthorizationRequest,
     ControlledSubmissionCommand,
     ControlledSubmissionExecutionView,
@@ -766,6 +767,26 @@ def _operations_router() -> APIRouter:
     ) -> SettingsView:
         return service.update_settings(update, idempotency_key)
 
+    @router.post("/automation/adapter-acceptance", response_model=SettingsView)
+    def run_adapter_acceptance(
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        application_id: UUID,
+        idempotency_key: IdempotencyKey,
+    ) -> SettingsView:
+        return service.run_synthetic_adapter_acceptance(
+            candidate_id, application_id, idempotency_key
+        )
+
+    @router.post("/automation/confirm", response_model=SettingsView)
+    def confirm_autonomy(
+        confirmation: AutonomyConfirmationRequest,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> SettingsView:
+        return service.confirm_autonomy(candidate_id, confirmation, idempotency_key)
+
     @router.post("/automation/emergency-stop", response_model=SettingsView)
     def emergency_stop(
         service: ApplicationServiceDependency,
@@ -809,7 +830,8 @@ def create_app(
     resolved_settings = settings or Settings.from_environment()
     application = FastAPI(title="Career OS", version="0.2.0")
     resolved_candidate_service = candidate_service or CandidateService(
-        resolved_settings.candidates_root
+        resolved_settings.candidates_root,
+        resolved_settings.candidate_fixtures_root,
     )
     engine = build_engine(resolved_settings.database_url)
     session_factory = build_session_factory(engine)

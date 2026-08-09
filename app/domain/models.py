@@ -818,7 +818,9 @@ class CandidateSettingsRecord(Base, TimestampMixin, CandidateScopedMixin):
     __table_args__ = (UniqueConstraint("candidate_id", name="uq_candidate_settings"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    automation_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="dry_run")
+    automation_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="approval_required"
+    )
     discovery_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     emergency_stopped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     allowed_ats_adapters: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -827,12 +829,53 @@ class CandidateSettingsRecord(Base, TimestampMixin, CandidateScopedMixin):
     explicit_autonomy_confirmation: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    autonomy_confirmation_scope_sha256: Mapped[str | None] = mapped_column(String(64))
+    autonomy_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     maximum_applications_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     maximum_applications_per_week: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
     maximum_applications_per_company_30_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=3
     )
     browser_session_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+
+
+class AtsAdapterAcceptanceRecord(Base, CandidateScopedMixin):
+    """Append-only proof that one synthetic ATS adapter pattern passed safely."""
+
+    __tablename__ = "ats_adapter_acceptance_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id",
+            "adapter",
+            "adapter_version",
+            "form_fingerprint",
+            "browser_task_id",
+            "browser_attempt",
+            name="uq_ats_adapter_acceptance_evidence",
+        ),
+        ForeignKeyConstraint(
+            ["candidate_id", "application_id"],
+            ["applications.candidate_id", "applications.id"],
+            name="fk_ats_adapter_acceptance_application_scope",
+        ),
+        CheckConstraint("browser_attempt >= 1", name="ck_ats_adapter_acceptance_attempt"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id"), nullable=False, index=True
+    )
+    adapter: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    destination_policy_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    form_pattern: Mapped[str] = mapped_column(String(64), nullable=False)
+    form_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    package_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    browser_task_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    browser_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class NotificationRecord(Base, CandidateScopedMixin):

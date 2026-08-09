@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 import os
+import zipfile
+from html import escape
 from pathlib import Path
 
 import pytest
@@ -16,6 +20,9 @@ from app.candidates.service import (
     CandidateService,
     CandidateUpdateError,
 )
+from app.domain.enums import DocumentKind
+from app.materials.contracts import Claim, GeneratedDocument
+from app.materials.rendering import DeterministicPdfRenderer
 
 FICTIONAL_CV = """Fictional Candidate
 
@@ -34,6 +41,60 @@ def _request(text: str = FICTIONAL_CV) -> CVImportRequest:
         filename="fictional-cv.txt",
         content_base64=base64.b64encode(text.encode()).decode(),
     )
+
+
+def _docx(text: str) -> bytes:
+    paragraphs = "".join(
+        f'<w:p><w:r><w:t xml:space="preserve">{escape(line)}</w:t></w:r></w:p>'
+        for line in text.splitlines()
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{paragraphs}</w:body></w:document>"
+    )
+    result = io.BytesIO()
+    with zipfile.ZipFile(result, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", xml)
+    return result.getvalue()
+
+
+def _pdf(text: str) -> bytes:
+    document = GeneratedDocument(
+        kind=DocumentKind.CV,
+        company="Fictional Company",
+        content=text,
+        claims=(Claim(text="Fictional CV", evidence_ids=("fictional_fact",)),),
+        content_sha256=hashlib.sha256(text.encode()).hexdigest(),
+    )
+    return (
+        DeterministicPdfRenderer()
+        .render(
+            document,
+            template_id="technical_two_page",
+            template_version="1.0",
+            maximum_pages=2,
+            document_version=1,
+        )
+        .pdf_bytes
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [("fictional-cv.pdf", _pdf(FICTIONAL_CV)), ("fictional-cv.docx", _docx(FICTIONAL_CV))],
+)
+def test_cv_import_extracts_pdf_and_docx_as_unapproved_drafts(
+    filename: str, content: bytes
+) -> None:
+    draft = extract_cv_draft(
+        "example_candidate",
+        CVImportRequest(filename=filename, content_base64=base64.b64encode(content).decode()),
+    )
+
+    assert len(draft.education.items) == 1
+    assert len(draft.experience.items) == 1
+    assert draft.approval_required is True
 
 
 def test_cv_import_persists_only_unapproved_extraction_and_applies_idempotently(

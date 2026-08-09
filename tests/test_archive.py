@@ -68,6 +68,8 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
         answers=[{"key": "authorization", "answer": "Yes", "supported": True}],
         validation_report={"passed": True},
         event_log=[{"event": "review_passed"}],
+        job_post_raw_html=b"<section>Exact fictional provider HTML</section>",
+        job_post_screenshot_png=_BROWSER_PNG,
         browser_pre_submit_screenshot=_BROWSER_PNG,
         browser_final_page_snapshot=_BROWSER_HTML,
     )
@@ -84,6 +86,11 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
     manifest = json.loads((archive_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["cv"]["sha256"] == cv_sha256
     assert manifest["cv"]["template"] == "technical_single_page@1.0"
+    assert manifest["model_versions"]
+    assert manifest["prompt_versions"]
+    assert (archive_path / "job_post" / "raw.html").read_bytes() == (
+        b"<section>Exact fictional provider HTML</section>"
+    )
     assert {
         "candidate_snapshot/profile.json",
         "job_post/raw.html",
@@ -117,6 +124,44 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
 
     (archive_path / "answers" / "final_answers.json").write_text("[]\n", encoding="utf-8")
     assert builder.verify(archive_path) is False
+
+
+def test_archive_omits_unavailable_job_capture_instead_of_fabricating_it(
+    tmp_path: Path,
+) -> None:
+    builder = ApplicationArchiveBuilder(tmp_path / "archives")
+    application_id = uuid4()
+    cv_source, cv_sha256 = _rendered_cv(tmp_path / "fictional-cv.pdf")
+    archive = builder.create(
+        candidate_id="candidate_alpha",
+        application_id=application_id,
+        data=ApplicationArchiveData(
+            candidate_snapshot={"candidate_id": "candidate_alpha", "version": 1},
+            job_snapshot={"job_id": "plain-source-job"},
+            scoring_results={"score": 90},
+            generated_document_references=[
+                {
+                    "kind": "cv",
+                    "sha256": cv_sha256,
+                    "storage_uri": str(cv_source),
+                    "content_type": "application/pdf",
+                    "template_id": "technical_single_page",
+                    "template_version": "1.0",
+                }
+            ],
+            answers=[],
+            validation_report={"passed": True},
+            event_log=[],
+            browser_pre_submit_screenshot=_BROWSER_PNG,
+            browser_final_page_snapshot=_BROWSER_HTML,
+        ),
+    )
+
+    assert not (archive / "job_post" / "raw.html").exists()
+    assert not (archive / "job_post" / "screenshot.png").exists()
+    manifest = json.loads((archive / "manifest.json").read_text(encoding="utf-8"))
+    assert "job_post/raw.html" not in manifest["files"]
+    assert "job_post/screenshot.png" not in manifest["files"]
 
 
 def test_confirmed_archive_is_copy_on_write_and_contains_final_receipt(tmp_path: Path) -> None:

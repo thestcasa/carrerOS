@@ -214,8 +214,9 @@ def _next_patch_version(version: str) -> str:
 
 
 class CandidateService:
-    def __init__(self, candidates_root: Path) -> None:
+    def __init__(self, candidates_root: Path, fixture_root: Path | None = None) -> None:
         self._root = candidates_root.resolve()
+        self._fixture_root = (fixture_root or candidates_root).resolve()
         self._loader = CandidateLoader(self._root)
         self._write_lock = threading.RLock()
         self._held_lifecycle_locks = threading.local()
@@ -253,7 +254,7 @@ class CandidateService:
             return detail
 
     def _create_unlocked(self, request: CandidateCreateRequest) -> CandidateDetail:
-        source = self._root / "example_candidate"
+        source = self._fixture_root / "example_candidate"
         destination = self._root / request.candidate_id
         staging = self._root / f".{request.candidate_id}.create-staging"
         if destination.exists():

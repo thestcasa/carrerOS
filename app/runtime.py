@@ -44,7 +44,9 @@ def run_scheduler_once(
                 queue.enqueue(
                     candidate_id=candidate.candidate_id,
                     kind="candidate_readiness_check",
-                    idempotency_key=f"readiness:{bucket}",
+                    idempotency_key=(
+                        f"readiness:{bucket}:profile:{candidate.profile_version or 'invalid'}"
+                    ),
                     payload={"profile_version": candidate.profile_version},
                     scheduled_for=current,
                 )
@@ -163,7 +165,7 @@ def run_process(role: str) -> NoReturn:
     settings = Settings.from_environment()
     sessions = build_session_factory(build_engine(settings.database_url))
     queue = TaskQueue(sessions)
-    candidates = CandidateService(settings.candidates_root)
+    candidates = CandidateService(settings.candidates_root, settings.candidate_fixtures_root)
     source_verifier = ProviderJobSourceVerifier()
     discovery = ScheduledDiscoveryService(
         sessions,

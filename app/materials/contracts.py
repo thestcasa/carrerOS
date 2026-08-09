@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -153,3 +153,20 @@ class DraftArtifactManifest(MaterialModel):
     version: int = Field(ge=1)
     created_at: datetime
     payload_sha256: Sha256
+
+
+class DocumentGenerationAgent(Protocol):
+    """Runtime material boundary; implementations have no browser or submission capability."""
+
+    def generate(self, request: GenerationRequest) -> GenerationResult: ...
+
+
+class IndependentReviewAgent(Protocol):
+    """Independent fail-closed review boundary over generated content and render evidence."""
+
+    def review(
+        self,
+        request: GenerationRequest,
+        result: GenerationResult,
+        render_reports: tuple[RenderValidationReport, ...] = (),
+    ) -> MaterialReview: ...

@@ -54,7 +54,11 @@ def test_playwright_fixture_pauses_and_resumes_same_persistent_profile(
         candidate_id=candidate_id,
         session_id=session_id,
         fixture_url=synthetic_ats_url,
-        answers={"first_name": "Morgan", "email": "morgan@example.invalid"},
+        answers={
+            "first_name": "Morgan",
+            "last_name": "Example",
+            "email": "morgan@example.invalid",
+        },
         uploads=(UploadArtifact(field_key="cv", path=cv_path, sha256=cv_hash),),
         allowed_upload_sha256=frozenset({cv_hash}),
     )
@@ -129,6 +133,119 @@ def test_fixture_exposes_only_exact_allowlisted_challenge_variants(
     with pytest.raises(HTTPError) as caught:
         urlopen(f"{synthetic_ats_url}?challenge=unknown", timeout=2)
     assert caught.value.code == 404
+
+
+@pytest.mark.parametrize(
+    ("variant", "marker"),
+    [
+        ("optional-cover-letter", "Cover letter (optional)"),
+        ("multi-step", "data-next-step"),
+        ("novel-field", "clearance_declaration"),
+        ("changed-labels", "Given name"),
+        ("closed-job", "data-job-closed"),
+        ("submit-timeout", "data-submit-timeout"),
+        ("duplicate-retry", "data-final-submit"),
+    ],
+)
+def test_fixture_matrix_is_explicit_and_network_free(
+    synthetic_ats_url: str, variant: str, marker: str
+) -> None:
+    with urlopen(f"{synthetic_ats_url}?challenge=none&variant={variant}", timeout=2) as response:
+        content = response.read().decode()
+
+    assert marker in content
+    assert "network-must-be-blocked.invalid" in content
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected_human_action"),
+    [
+        ("optional-cover-letter", None),
+        ("multi-step", None),
+        ("novel-field", "novel_required_field"),
+        ("changed-labels", None),
+        ("submit-timeout", None),
+        ("duplicate-retry", None),
+    ],
+)
+def test_playwright_fixture_matrix_never_clicks_final_submit(
+    tmp_path: Path,
+    synthetic_ats_url: str,
+    variant: str,
+    expected_human_action: str | None,
+) -> None:
+    fixture_url = f"{synthetic_ats_url}?challenge=none&variant={variant}"
+    runtime_root = tmp_path / variant
+    candidate_id = "example_candidate"
+    artifact_directory = (
+        runtime_root / "candidates" / candidate_id / "application_archive" / "fixture"
+    )
+    artifact_directory.mkdir(parents=True)
+    cv_path = artifact_directory / "fictional-cv.pdf"
+    cv_path.write_bytes(b"%PDF-1.4\n% fictional browser matrix fixture\n")
+    cv_hash = hashlib.sha256(cv_path.read_bytes()).hexdigest()
+    request = PlaywrightDryRunRequest(
+        application_id=uuid4(),
+        candidate_id=candidate_id,
+        session_id=uuid4(),
+        fixture_url=fixture_url,
+        answers={
+            "first_name": "Morgan",
+            "last_name": "Example",
+            "email": "morgan@example.invalid",
+        },
+        uploads=(UploadArtifact(field_key="cv", path=cv_path, sha256=cv_hash),),
+        allowed_upload_sha256=frozenset({cv_hash}),
+    )
+
+    try:
+        result = RestrictedPlaywrightWorker(runtime_root, frozenset({fixture_url})).run(request)
+    except BrowserWorkerFailure as exc:
+        cause = exc.__cause__
+        if (
+            exc.category is BrowserFailureCategory.BROWSER_CRASH
+            and isinstance(cause, PlaywrightError)
+            and any(
+                marker in str(cause)
+                for marker in ("Executable doesn't exist", "error while loading shared libraries")
+            )
+        ):
+            pytest.skip(f"Playwright Chromium runtime unavailable: {cause}")
+        raise
+
+    assert result.human_action == expected_human_action
+    assert result.final_submit_present
+    assert result.final_submit_clicked is False
+    assert result.ready_for_human_review is (expected_human_action is None)
+
+
+def test_playwright_closed_job_is_terminal_and_never_retried(
+    tmp_path: Path, synthetic_ats_url: str
+) -> None:
+    fixture_url = f"{synthetic_ats_url}?challenge=none&variant=closed-job"
+    request = PlaywrightDryRunRequest(
+        application_id=uuid4(),
+        candidate_id="example_candidate",
+        session_id=uuid4(),
+        fixture_url=fixture_url,
+        answers={},
+    )
+
+    with pytest.raises(BrowserWorkerFailure) as caught:
+        RestrictedPlaywrightWorker(tmp_path, frozenset({fixture_url})).run(request)
+    browser_cause = caught.value.__cause__
+    if (
+        caught.value.category is BrowserFailureCategory.BROWSER_CRASH
+        and isinstance(browser_cause, PlaywrightError)
+        and any(
+            marker in str(browser_cause)
+            for marker in ("Executable doesn't exist", "error while loading shared libraries")
+        )
+    ):
+        pytest.skip(f"Playwright Chromium runtime unavailable: {browser_cause}")
+
+    assert caught.value.category is BrowserFailureCategory.CLOSED_JOB
+    assert caught.value.retryable is False
 
 
 def test_playwright_worker_rejects_unapproved_loopback_origin(tmp_path: Path) -> None:

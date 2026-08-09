@@ -5,6 +5,7 @@ services:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
       RUNTIME_ROOT: /app/runtime
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     ports:
@@ -66,11 +67,12 @@ services:
 
   worker:
     build: .
-    command: ["python", "-m", "app", "run-worker"]
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
       RUNTIME_ROOT: /app/runtime
     volumes:
       - candidate_data:/app/candidates
@@ -83,11 +85,12 @@ services:
 
   browser-worker:
     build: .
-    command: ["python", "-m", "app", "run-browser-worker"]
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-browser-worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
       RUNTIME_ROOT: /app/runtime
     volumes:
       - candidate_data:/app/candidates
@@ -100,11 +103,12 @@ services:
 
   scheduler:
     build: .
-    command: ["python", "-m", "app", "run-scheduler"]
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-scheduler"]
     environment:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
       RUNTIME_ROOT: /app/runtime
     volumes:
       - candidate_data:/app/candidates

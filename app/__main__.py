@@ -17,6 +17,7 @@ from app.candidates.service import (
     CandidateCreateRequest,
     CandidateService,
 )
+from app.candidates.volume_safety import inspect_candidate_volume, stage_candidate_recovery
 from app.core.settings import Settings
 from app.db import build_engine, build_session_factory
 from app.job_service import DiscoveryRequest, JobService
@@ -26,6 +27,11 @@ from app.runtime import run_process
 def _candidates_root() -> Path:
     configured = os.getenv("CANDIDATES_ROOT")
     return Path(configured) if configured else Path.cwd() / "candidates"
+
+
+def _candidate_fixtures_root() -> Path:
+    configured = os.getenv("CANDIDATE_FIXTURES_ROOT")
+    return Path(configured) if configured else _candidates_root()
 
 
 def _idempotency_key(value: str) -> str:
@@ -74,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON fixture with platform, company, company_domain, and payloads.",
     )
     discover.add_argument("--idempotency-key", required=True, type=_idempotency_key)
+    inspect_volume = subparsers.add_parser("inspect-candidate-volume")
+    inspect_volume.add_argument("--candidate", default="example_candidate")
+    stage_recovery = subparsers.add_parser("stage-candidate-recovery")
+    stage_recovery.add_argument("--candidate", default="example_candidate")
+    stage_recovery.add_argument("--destination-root", type=Path, required=True)
     subparsers.add_parser("run-worker")
     subparsers.add_parser("run-browser-worker")
     subparsers.add_parser("run-controlled-submission-worker")
@@ -91,7 +102,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     }:
         run_process(args.command.removeprefix("run-"))
 
-    candidate_service = CandidateService(_candidates_root())
+    if args.command == "inspect-candidate-volume":
+        inspection = inspect_candidate_volume(
+            _candidates_root(),
+            _candidate_fixtures_root(),
+            args.candidate,
+        )
+        print(inspection.model_dump_json())
+        return 0 if inspection.status in {"match", "different", "mounted_missing"} else 1
+    if args.command == "stage-candidate-recovery":
+        try:
+            recovery_report = stage_candidate_recovery(
+                _candidate_fixtures_root(),
+                args.destination_root,
+                args.candidate,
+            )
+        except (FileExistsError, ValueError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "candidate_id": args.candidate,
+                        "status": "not_staged",
+                        "error": str(exc),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        print(recovery_report.model_dump_json())
+        return 0
+
+    candidate_service = CandidateService(_candidates_root(), _candidate_fixtures_root())
     if args.command == "onboard":
         detail = candidate_service.create(
             CandidateCreateRequest(
@@ -191,7 +232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "import-cv":
         if (
             not args.file.is_file()
-            or args.file.suffix.lower() != ".txt"
+            or args.file.suffix.lower() not in {".txt", ".pdf", ".docx"}
             or args.file.stat().st_size > 2 * 1024 * 1024
         ):
             print(
@@ -199,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "candidate_id": args.candidate,
                         "status": "invalid",
-                        "error": "CV file must be UTF-8 text and no larger than 2 MiB",
+                        "error": "CV file must be TXT, PDF, or DOCX and no larger than 2 MiB",
                     },
                     sort_keys=True,
                 )

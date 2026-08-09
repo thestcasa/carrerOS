@@ -8,12 +8,16 @@ from typing import Literal
 from uuid import UUID
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.applications import (
     ApplicationConflictError,
     ApplicationService,
+    AutonomyConfirmationRequest,
     DryRunCommand,
     SettingsUpdate,
 )
@@ -43,6 +47,7 @@ from app.submission import (
     ControlledSubmissionUncertainError,
     GreenhouseFormInspection,
     PreparedControlledSubmission,
+    SyntheticGreenhouseAcceptanceRunner,
 )
 from app.submission_gate import FinalClickPermit
 from app.tasks import TaskQueue, TaskView
@@ -76,12 +81,13 @@ class _ControlledExecutor:
             self.after_prepare()
         if self.prepare_error is not None:
             raise self.prepare_error
+        acceptance = SyntheticGreenhouseAcceptanceRunner().run(request.form)
         return PreparedControlledSubmission(
             attempt_id=request.attempt_id,
             inspection=GreenhouseFormInspection(
                 target_url=request.target_url,
                 form_action=f"{request.target_url}/applications",
-                form_fingerprint="b" * 64,
+                form_fingerprint=acceptance.form_fingerprint,
                 required_selectors=("form#application_form #first_name",),
                 submit_selector="form#application_form #submit_app",
                 submit_control_count=1,
@@ -178,6 +184,7 @@ def _ready_application(
     runtime_root: Path,
     *,
     external_id: int,
+    accept_adapter: bool = True,
 ) -> UUID:
     discovered = jobs.discover(
         DiscoveryRequest(
@@ -235,16 +242,143 @@ def _ready_application(
             candidate_id=_CANDIDATE_ID,
             automation_mode="approval_required",
             allowed_ats_adapters=("greenhouse",),
-            tested_ats_adapters=("greenhouse",),
-            dry_run_acceptance_passed=True,
         ),
         f"controlled-settings-{external_id}",
     )
+    if accept_adapter:
+        applications.run_synthetic_adapter_acceptance(
+            _CANDIDATE_ID,
+            generated.application_id,
+            f"controlled-adapter-acceptance-{external_id}",
+        )
     assert (
         applications.get_application(_CANDIDATE_ID, generated.application_id).state
         is ApplicationState.READY_TO_SUBMIT
     )
     return generated.application_id
+
+
+def test_autonomy_evidence_is_derived_and_confirmation_is_scope_bound(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _enable_candidate_submission(copied_candidates_root)
+    jobs, applications, queue, _sessions = _services(
+        copied_candidates_root, tmp_path / "runtime", controlled_enabled=False
+    )
+    application_id = _ready_application(
+        jobs,
+        applications,
+        queue,
+        tmp_path / "runtime",
+        external_id=801,
+        accept_adapter=False,
+    )
+
+    dry_run_only = applications.get_settings(_CANDIDATE_ID)
+    assert dry_run_only.dry_run_acceptance_passed
+    assert dry_run_only.tested_ats_adapters == ()
+    assert "no_tested_ats_adapter" in dry_run_only.autonomy_blockers
+
+    accepted = applications.run_synthetic_adapter_acceptance(
+        _CANDIDATE_ID, application_id, "accept-greenhouse-pattern-801"
+    )
+    assert accepted.tested_ats_adapters == ("greenhouse",)
+    assert "no_tested_ats_adapter" not in accepted.autonomy_blockers
+    assert "explicit_confirmation_missing" in accepted.autonomy_blockers
+
+    confirmed = applications.confirm_autonomy(
+        _CANDIDATE_ID,
+        AutonomyConfirmationRequest(
+            acknowledged=True,
+            consequence_version="autonomy-consequences-v1",
+        ),
+        "confirm-autonomy-scope-801",
+    )
+    assert confirmed.explicit_autonomy_confirmation
+    assert "explicit_confirmation_missing" not in confirmed.autonomy_blockers
+
+    drifted = applications.update_settings(
+        SettingsUpdate(candidate_id=_CANDIDATE_ID, maximum_applications_per_day=4),
+        "change-confirmed-autonomy-scope-801",
+    )
+    assert not drifted.explicit_autonomy_confirmation
+    assert "explicit_confirmation_missing" in drifted.autonomy_blockers
+
+
+def test_legacy_settings_flags_cannot_fabricate_autonomy_evidence(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _enable_candidate_submission(copied_candidates_root)
+    _jobs, applications, _queue, sessions = _services(
+        copied_candidates_root, tmp_path / "runtime", controlled_enabled=False
+    )
+    with sessions.begin() as session:
+        session.add(
+            CandidateSettingsRecord(
+                candidate_id=_CANDIDATE_ID,
+                automation_mode="approval_required",
+                allowed_ats_adapters=["greenhouse"],
+                tested_ats_adapters=["greenhouse"],
+                dry_run_acceptance_passed=True,
+                explicit_autonomy_confirmation=True,
+            )
+        )
+
+    settings = applications.get_settings(_CANDIDATE_ID)
+
+    assert settings.tested_ats_adapters == ()
+    assert not settings.dry_run_acceptance_passed
+    assert not settings.explicit_autonomy_confirmation
+    assert {
+        "no_tested_ats_adapter",
+        "dry_run_acceptance_not_passed",
+        "explicit_confirmation_missing",
+    }.issubset(settings.autonomy_blockers)
+
+
+def test_migrated_adapter_acceptance_records_reject_updates(
+    tmp_path: Path, project_root: Path
+) -> None:
+    database_path = tmp_path / "adapter-acceptance.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = Config(project_root / "alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    record_id = "00000000000000000000000000000001"
+    application_id = "00000000000000000000000000000002"
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            INSERT INTO ats_adapter_acceptance_records (
+                id, application_id, adapter, adapter_version,
+                destination_policy_sha256, form_pattern, form_fingerprint,
+                package_sha256, browser_task_id, browser_attempt,
+                evidence_manifest_sha256, passed, recorded_at, candidate_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record_id,
+                application_id,
+                "greenhouse",
+                "greenhouse_controlled_v1",
+                "a" * 64,
+                "basic_identity_resume_v1",
+                "b" * 64,
+                "c" * 64,
+                "00000000000000000000000000000003",
+                1,
+                "d" * 64,
+                1,
+                "2026-08-09 12:00:00",
+                _CANDIDATE_ID,
+            ),
+        )
+    with pytest.raises(IntegrityError, match="immutable"), engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE ats_adapter_acceptance_records SET passed = 0 WHERE id = ?",
+            (record_id,),
+        )
 
 
 def _authorize_and_queue(
@@ -305,12 +439,16 @@ def test_autonomous_controlled_confirmation_queues_once_clicks_once_and_archives
     application_id = _ready_application(
         jobs, applications, queue, tmp_path / "runtime", external_id=802
     )
-    applications.update_settings(
-        SettingsUpdate(
-            candidate_id=_CANDIDATE_ID,
-            automation_mode="autonomous",
-            explicit_autonomy_confirmation=True,
+    applications.confirm_autonomy(
+        _CANDIDATE_ID,
+        AutonomyConfirmationRequest(
+            acknowledged=True,
+            consequence_version="autonomy-consequences-v1",
         ),
+        "confirm-controlled-autonomy-802",
+    )
+    applications.update_settings(
+        SettingsUpdate(candidate_id=_CANDIDATE_ID, automation_mode="autonomous"),
         "enable-controlled-autonomy-802",
     )
     queued = applications.enqueue_autonomous_controlled_submissions(_CANDIDATE_ID)
@@ -414,7 +552,7 @@ def test_policy_change_after_prepare_denies_before_click_without_consuming_autho
         with sessions.begin() as session:
             settings = session.scalar(select(CandidateSettingsRecord))
             assert settings is not None
-            settings.tested_ats_adapters = []
+            settings.allowed_ats_adapters = []
 
     executor = _ControlledExecutor(after_prepare=stop_after_prepare)
     failed = applications.execute_controlled_submission_task(
@@ -437,7 +575,7 @@ def test_policy_change_after_prepare_denies_before_click_without_consuming_autho
         assert attempt is not None and attempt.status == "denied"
 
     applications.update_settings(
-        SettingsUpdate(candidate_id=_CANDIDATE_ID, tested_ats_adapters=("greenhouse",)),
+        SettingsUpdate(candidate_id=_CANDIDATE_ID, allowed_ats_adapters=("greenhouse",)),
         "resume-controlled-after-policy-drift",
     )
     _retry_authorization, retry_task = _authorize_and_queue(

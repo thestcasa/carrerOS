@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
 
 
@@ -60,14 +60,25 @@ class ApplicationArchiveData(BaseModel):
     security_event_log: Any = ()
     error_log: Any = ()
     required_document_kinds: tuple[str, ...] = ("cv",)
+    job_post_raw_html: bytes | None = None
+    job_post_screenshot_png: bytes | None = None
     browser_pre_submit_screenshot: bytes | None = None
     browser_final_page_snapshot: bytes | None = None
-
-
-_PNG_1PX = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-    "0000000d49444154789c63606060f80f0001040100c89f17d90000000049454e44ae426082"
-)
+    agent_version: str = "career-os-agent-contracts-v1"
+    model_versions: dict[str, str] = Field(
+        default_factory=lambda: {
+            "job_analysis": "deterministic-scoring-v1",
+            "document_generation": "deterministic-material-v2",
+            "independent_review": "deterministic-material-review-v1",
+        }
+    )
+    prompt_versions: dict[str, str] = Field(
+        default_factory=lambda: {
+            "job_analysis": "1.0",
+            "document_generation": "material-policy-v1",
+            "independent_review": "material-review-v1",
+        }
+    )
 
 
 def _json_default(value: Any) -> Any:
@@ -173,19 +184,19 @@ class ApplicationArchiveBuilder:
             write("candidate_snapshot/profile.json", candidate_bytes)
             raw_description = str(job.get("description_raw") or job.get("description") or "")
             normalized_description = str(job.get("description_normalized") or raw_description)
-            write(
-                "job_post/raw.html",
-                (
-                    "<!doctype html><html><body><pre>"
-                    f"{html.escape(raw_description)}</pre></body></html>\n"
-                ).encode(),
-            )
+            if data.job_post_raw_html is not None:
+                if not data.job_post_raw_html.strip():
+                    raise ValueError("raw job-post HTML evidence is empty")
+                write("job_post/raw.html", data.job_post_raw_html)
             write("job_post/extracted.txt", (raw_description + "\n").encode())
             write(
                 "job_post/normalized.json",
                 canonical_json_bytes({**job, "description_normalized": normalized_description}),
             )
-            write("job_post/screenshot.png", _PNG_1PX)
+            if data.job_post_screenshot_png is not None:
+                if not data.job_post_screenshot_png.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError("job-post screenshot evidence is not a PNG")
+                write("job_post/screenshot.png", data.job_post_screenshot_png)
 
             scoring = data.scoring_results if isinstance(data.scoring_results, dict) else {}
             write(
@@ -352,9 +363,9 @@ class ApplicationArchiveBuilder:
                 match_score=score_value if isinstance(score_value, (int, float)) else None,
                 validation_status="passed" if validation_passed else "failed",
                 submission_confirmation={"detected": False, "confirmation_id": None},
-                agent_version="deterministic-fixture-v1",
-                model_versions={},
-                prompt_versions={},
+                agent_version=data.agent_version,
+                model_versions=data.model_versions,
+                prompt_versions=data.prompt_versions,
                 application_version=1,
                 files=hashes,
             )

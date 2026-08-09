@@ -41,6 +41,8 @@ class SubmissionPage(Protocol):
 class GreenhouseControlledAdapter:
     """Narrow final-click adapter for one explicitly fingerprinted Greenhouse form pattern."""
 
+    VERSION = "greenhouse_controlled_v1"
+    FORM_PATTERN = "basic_identity_resume_v1"
     _FORM_SELECTOR = "form#application_form"
     _SUBMIT_SELECTOR = "form#application_form #submit_app"
     _REQUIRED_SELECTORS = (
@@ -77,6 +79,21 @@ class GreenhouseControlledAdapter:
             raise ValueError("controlled Greenhouse hosts must be explicit hostnames")
         self._enabled = enabled
         self._allowed_hosts = allowed_hosts
+
+    @property
+    def destination_policy_sha256(self) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "adapter": self.VERSION,
+                    "allowed_hosts": sorted(self._allowed_hosts),
+                    "https_required": True,
+                    "same_origin_form_action": True,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
 
     def inspect(self, page: SubmissionPage, target_url: str) -> GreenhouseFormInspection:
         target = self._validated_url(target_url)
@@ -116,8 +133,8 @@ class GreenhouseControlledAdapter:
         fingerprint = hashlib.sha256(
             json.dumps(
                 {
-                    "adapter": "greenhouse_controlled_v1",
-                    "form_action": form_action,
+                    "adapter": self.VERSION,
+                    "form_pattern": self.FORM_PATTERN,
                     "required_selectors": self._REQUIRED_SELECTORS,
                     "unsupported_control_selector": self._UNSUPPORTED_CONTROL_SELECTOR,
                     "submit_selector": self._SUBMIT_SELECTOR,
