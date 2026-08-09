@@ -8,6 +8,8 @@
   require external state or authorization
 - Branch baseline: `autonomous-build`; CORS and reliable Docker health fixes are published through
   `90cfb31`
+- Current local milestone commits: `c0bf6e9` (durable autonomy/scheduler/browser/volume safety) and
+  `5257f2d` (guided web workflow and durable verification documentation).
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved pre-existing workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, the
   untracked root file `how d8c72b0`, and `docs/GUIDA_UTENTE_SITO.md`; these are not staged unless
