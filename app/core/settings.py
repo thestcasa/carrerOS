@@ -20,7 +20,7 @@ class Settings:
 
     @classmethod
     def from_environment(cls) -> Settings:
-        origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+        origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
         return cls(
             database_url=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),

@@ -28,7 +28,7 @@ def _client(candidates_root: Path, *, auth_required: bool = False) -> TestClient
         database_url=database_url,
         redis_url="redis://unused:6379/0",
         candidates_root=candidates_root,
-        cors_origins=("http://localhost:3000",),
+        cors_origins=("http://localhost:3000", "http://127.0.0.1:3000"),
         auth_required=auth_required,
         local_token_secret="fictional-local-token-secret-at-least-32-bytes",
     )
@@ -59,6 +59,25 @@ def test_candidate_list_and_health_are_available(copied_candidates_root: Path) -
             "automation_status": "disabled",
         }
     ]
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:3000", "http://127.0.0.1:3000"])
+def test_authenticated_cors_preflight_does_not_require_a_session(
+    copied_candidates_root: Path, origin: str
+) -> None:
+    with _client(copied_candidates_root, auth_required=True) as client:
+        response = client.options(
+            "/api/candidates",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "GET" in response.headers["access-control-allow-methods"]
 
 
 def test_readiness_reports_domains_and_disabled_autonomy(

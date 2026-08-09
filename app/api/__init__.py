@@ -869,6 +869,8 @@ def create_app(
 
     @application.middleware("http")
     async def candidate_authorization(request: Request, call_next: Any) -> Any:
+        if request.method == "OPTIONS":
+            return await call_next(request)
         destructive_deletion = request.method == "DELETE" and request.url.path.startswith(
             "/api/candidates/"
         )
