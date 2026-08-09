@@ -596,7 +596,20 @@ export interface SettingsView {
   maximum_applications_per_company_30_days: number;
   browser_session_retention_days: number;
   autonomy_blockers: string[];
+  autonomy_prerequisites: AutonomyPrerequisiteView[];
   controlled_submission_enabled?: boolean;
+}
+
+export interface AutonomyPrerequisiteView {
+  code: string;
+  title: string;
+  explanation: string;
+  passed: boolean;
+  resolution: string;
+  action_href: string;
+  evidence_id: string | null;
+  evidence_summary: string | null;
+  evidenced_at: string | null;
 }
 
 export interface SettingsUpdate {
@@ -604,9 +617,6 @@ export interface SettingsUpdate {
   automation_mode?: SettingsView["automation_mode"];
   discovery_enabled?: boolean;
   allowed_ats_adapters?: AtsPlatform[];
-  tested_ats_adapters?: AtsPlatform[];
-  dry_run_acceptance_passed?: boolean;
-  explicit_autonomy_confirmation?: boolean;
   maximum_applications_per_day?: number;
   maximum_applications_per_week?: number;
   maximum_applications_per_company_30_days?: number;

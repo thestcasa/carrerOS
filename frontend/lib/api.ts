@@ -29,6 +29,7 @@ import type {
   JobDetail,
   JobSummary,
   MaterialRevisionInput,
+  NotificationView,
   ReadinessReport,
   SecurityEventView,
   SettingsView,
@@ -262,6 +263,11 @@ export const api = {
     ),
   jobs: (candidateId: string) =>
     request<JobSummary[]>(`/api/jobs?candidate_id=${encodeURIComponent(candidateId)}`),
+  analyzeJob: (candidateId: string, jobId: string, idempotencyKey: string) =>
+    request<JobDetail>(
+      `/api/jobs/${encodeURIComponent(jobId)}/analyze?candidate_id=${encodeURIComponent(candidateId)}`,
+      { method: "POST", headers: commandHeaders(idempotencyKey) },
+    ),
   job: (candidateId: string, jobId: string) =>
     request<JobDetail>(
       `/api/jobs/${encodeURIComponent(jobId)}?candidate_id=${encodeURIComponent(candidateId)}`,
@@ -367,6 +373,8 @@ export const api = {
     ),
   humanActions: (candidateId: string) =>
     request<HumanActionView[]>(`/api/human-actions?candidate_id=${encodeURIComponent(candidateId)}`),
+  notifications: (candidateId: string) =>
+    request<NotificationView[]>(`/api/notifications?candidate_id=${encodeURIComponent(candidateId)}`),
   openHumanSession: (candidateId: string, actionId: string, idempotencyKey: string) =>
     request<HumanActionView>(`/api/human-actions/${encodeURIComponent(actionId)}/open-session?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   completeHumanAction: (candidateId: string, actionId: string, idempotencyKey: string) =>
@@ -394,6 +402,10 @@ export const api = {
     request<DiscoverySourceView>(`/api/jobs/sources/${encodeURIComponent(sourceId)}?candidate_id=${encodeURIComponent(candidateId)}`, { method: "PATCH", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
   updateSettings: (input: SettingsUpdate, idempotencyKey: string) =>
     request<SettingsView>("/api/settings", { method: "PATCH", headers: commandHeaders(idempotencyKey), body: JSON.stringify(input) }),
+  runAdapterAcceptance: (candidateId: string, applicationId: string, idempotencyKey: string) =>
+    request<SettingsView>(`/api/automation/adapter-acceptance?candidate_id=${encodeURIComponent(candidateId)}&application_id=${encodeURIComponent(applicationId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
+  confirmAutonomy: (candidateId: string, idempotencyKey: string) =>
+    request<SettingsView>(`/api/automation/confirm?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ acknowledged: true, consequence_version: "autonomy-consequences-v1" }) }),
   emergencyStop: (candidateId: string, idempotencyKey: string) =>
     request<SettingsView>(`/api/automation/emergency-stop?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
   analytics: (candidateId: string) =>

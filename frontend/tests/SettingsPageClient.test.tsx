@@ -7,8 +7,11 @@ vi.mock("@/lib/api", () => ({
   api: {
     settings: vi.fn(),
     updateSettings: vi.fn(),
+    confirmAutonomy: vi.fn(),
     emergencyStop: vi.fn(),
     candidate: vi.fn(),
+    discoverySources: vi.fn(),
+    humanActions: vi.fn(),
     deletionStatus: vi.fn(),
     exportCandidate: vi.fn(),
     exportCandidateConfiguration: vi.fn(),
@@ -35,6 +38,8 @@ describe("SettingsPageClient", () => {
         capabilities: [],
       },
     });
+    vi.mocked(api.discoverySources).mockResolvedValue([]);
+    vi.mocked(api.humanActions).mockResolvedValue([]);
     vi.mocked(api.settings).mockResolvedValue({
       candidate_id: "example_candidate",
       automation_mode: "approval_required",
@@ -52,6 +57,7 @@ describe("SettingsPageClient", () => {
         "no_tested_ats_adapter",
         "dry_run_acceptance_not_passed",
       ],
+      autonomy_prerequisites: [],
     });
   });
 
@@ -61,8 +67,53 @@ describe("SettingsPageClient", () => {
     expect(
       await screen.findByRole("button", { name: "autonomous" }),
     ).toBeDisabled();
-    expect(screen.getByText("no tested ats adapter")).toBeInTheDocument();
+    expect(
+      screen.getByText("Run a passing safe adapter check for an allowed ATS."),
+    ).toBeInTheDocument();
     expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("records autonomy only after an unchecked consequence-aware confirmation", async () => {
+    const scoped = {
+      ...(await api.settings("example_candidate")),
+      tested_ats_adapters: ["greenhouse" as const],
+      dry_run_acceptance_passed: true,
+      autonomy_blockers: ["explicit_confirmation_missing"],
+      autonomy_prerequisites: [{
+        code: "explicit_confirmation_missing",
+        title: "Explicit controlled-autonomy confirmation",
+        passed: false,
+        explanation: "No confirmation exists for this exact tested scope.",
+        resolution: "Read the consequences and confirm the exact scope yourself.",
+        action_href: "#autonomy-confirmation",
+        evidence_id: null,
+        evidence_summary: null,
+        evidenced_at: null,
+      }],
+    };
+    vi.mocked(api.settings).mockResolvedValue(scoped);
+    vi.mocked(api.confirmAutonomy).mockResolvedValue({
+      ...scoped,
+      explicit_autonomy_confirmation: true,
+      autonomy_blockers: [],
+      autonomy_prerequisites: scoped.autonomy_prerequisites.map((item) => ({
+        ...item,
+        passed: true,
+        evidence_summary: "Audited confirmation for the current scope",
+      })),
+    });
+    render(<SettingsPageClient candidateId="example_candidate" />);
+
+    const record = await screen.findByRole("button", { name: "Record my confirmation" });
+    expect(record).toBeDisabled();
+    expect(api.confirmAutonomy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /understand these consequences/i }));
+    fireEvent.click(record);
+
+    await waitFor(() => expect(api.confirmAutonomy).toHaveBeenCalledWith(
+      "example_candidate",
+      expect.stringMatching(/^autonomy-confirmation-/),
+    ));
   });
 
   it("persists discovery policy through the backend contract", async () => {
@@ -80,6 +131,7 @@ describe("SettingsPageClient", () => {
       maximum_applications_per_company_30_days: 1,
       browser_session_retention_days: 30,
       autonomy_blockers: ["no_tested_ats_adapter"],
+      autonomy_prerequisites: [],
     });
     render(<SettingsPageClient candidateId="example_candidate" />);
 
@@ -115,6 +167,7 @@ describe("SettingsPageClient", () => {
       maximum_applications_per_company_30_days: 1,
       browser_session_retention_days: 90,
       autonomy_blockers: ["no_tested_ats_adapter"],
+      autonomy_prerequisites: [],
     });
     render(<SettingsPageClient candidateId="example_candidate" />);
 

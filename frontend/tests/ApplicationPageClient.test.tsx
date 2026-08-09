@@ -13,6 +13,7 @@ vi.mock("@/lib/api", () => ({
     queueControlledSubmission: vi.fn(),
     submitSynthetic: vi.fn(),
     settings: vi.fn(),
+    runAdapterAcceptance: vi.fn(),
     dryRun: vi.fn(),
     applicationCommand: vi.fn(),
     reviseMaterial: vi.fn(),
@@ -168,6 +169,7 @@ describe("ApplicationPageClient", () => {
       maximum_applications_per_company_30_days: 3,
       browser_session_retention_days: 30,
       autonomy_blockers: ["explicit_confirmation_missing"],
+      autonomy_prerequisites: [],
       controlled_submission_enabled: false,
     });
     vi.mocked(api.artifacts).mockResolvedValue([]);
@@ -203,7 +205,14 @@ describe("ApplicationPageClient", () => {
         applicationId={ready.application_id}
       />,
     );
-    fireEvent.click(await screen.findByRole("button", { name: "authorize submit" }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: /reviewed the materials and understand the consequence/i,
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /run fictional submission demo/i }),
+    );
 
     await waitFor(() => expect(screen.getByText("Inspect and retry")).toBeInTheDocument());
     expect(screen.getByText("No backend confirmation yet")).toBeInTheDocument();
@@ -226,7 +235,12 @@ describe("ApplicationPageClient", () => {
         applicationId={ready.application_id}
       />,
     );
-    const button = await screen.findByRole("button", { name: "authorize submit" });
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: /reviewed the materials and understand the consequence/i,
+      }),
+    );
+    const button = await screen.findByRole("button", { name: /run fictional submission demo/i });
 
     fireEvent.click(button);
     await screen.findByRole("alert");
@@ -284,7 +298,12 @@ describe("ApplicationPageClient", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "approve controlled submission" }),
+      await screen.findByRole("checkbox", {
+        name: /reviewed the materials and understand the consequence/i,
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /approve one controlled submission/i }),
     );
 
     await waitFor(() => expect(api.queueControlledSubmission).toHaveBeenCalledOnce());

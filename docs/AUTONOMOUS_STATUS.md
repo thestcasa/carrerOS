@@ -2,35 +2,45 @@
 
 ## Current state
 
-- Build status: **IN PROGRESS - FIRST-VERSION UX AND AUTONOMY READINESS**
-- Active phase: local Docker demo stabilization and guided user-pipeline simplification; external
-  pilot, secure takeover transport, and Gmail/OAuth work remain separate blockers
+- Build status: **LOCALLY COMPLETE - EXTERNAL DEFINITION-OF-DONE BLOCKERS REMAIN**
+- Active phase: all safe, locally implementable work and quality gates are complete; fresh Compose
+  health, the private pilot, secure takeover transport, hosted hardening, and live-provider review
+  require external state or authorization
 - Branch baseline: `autonomous-build`; CORS and reliable Docker health fixes are published through
   `90cfb31`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
-- Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
-  later untracked root file `how d8c72b0`
+- Preserved pre-existing workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, the
+  untracked root file `how d8c72b0`, and `docs/GUIDA_UTENTE_SITO.md`; these are not staged unless
+  their ownership and intended scope become clear.
+- Current autonomous run began on 2026-08-09 at `37e0d74`. The full specification and applicable
+  architecture, implementation, milestone, operations, security, onboarding, adapter, plan, and
+  status documents were reread before implementation.
+- The immediate local milestone is complete: scheduler identity is payload-stable, autonomy
+  prerequisites are durable evidence rather than mutable assertions, the user-only confirmation is
+  separately audited, the six-stage website path exposes one next action, stale fictional volumes
+  are detected without mutation, and both committed browser suites pass on the host. Manual approval
+  remains the default and controlled live execution remains disabled.
 
-## Immediate local TODO - first-version UX and autonomy readiness
+## Completed local milestone - first-version UX and autonomy readiness
 
-- Simplify the normal website journey into one guided pipeline: candidate readiness, job selection,
+- [x] Simplify the normal website journey into one guided pipeline: candidate readiness, job selection,
   material generation/review, safe dry run, human-action resolution, and explicit controlled approval.
   Each page should expose one primary next action and link directly to the blocker it can resolve.
-- Use progressive disclosure: show plain-language status, consequences, and next actions by default;
+- [x] Use progressive disclosure: show plain-language status, consequences, and next actions by default;
   keep hashes, internal IDs, raw policy fields, and advanced controls in expandable detail.
-- Replace raw autonomy blocker identifiers with user-facing explanations, current evidence, and a
+- [x] Replace raw autonomy blocker identifiers with user-facing explanations, current evidence, and a
   concrete action. Preserve backend authority and fail-closed behavior.
-- Resolve `no_tested_ats_adapter` only from a recorded passing synthetic acceptance run for the exact
+- [x] Resolve `no_tested_ats_adapter` only from a recorded passing synthetic acceptance run for the exact
   adapter/form pattern. Do not provide a manual checkbox that can claim untested evidence.
-- Resolve `dry_run_acceptance_not_passed` only from candidate-scoped passing dry-run evidence and the
+- [x] Resolve `dry_run_acceptance_not_passed` only from candidate-scoped passing dry-run evidence and the
   committed browser acceptance suite. Do not let the user self-declare the test passed.
-- Add an explicit, unchecked autonomy confirmation step only after all evidence prerequisites pass.
+- [x] Add an explicit, unchecked autonomy confirmation step only after all evidence prerequisites pass.
   Explain scope, rate limits, emergency stop, and consequences; persist an administrative audit event.
   The agent must not confirm autonomy on the user's behalf.
-- Keep `approval_required` as the first-version default and keep live controlled submission disabled at
+- [x] Keep `approval_required` as the first-version default and keep live controlled submission disabled at
   the process boundary during development and automated verification.
-- Add component, route, accessibility, and backend tests for the guided path and every blocker action.
-- Repair the scheduler's durable task idempotency collision
+- [x] Add component, route, accessibility, and backend tests for the guided path and every blocker action.
+- [x] Repair the scheduler's durable task idempotency collision
   (`idempotency key was used for a different task`) and prove it remains running across repeated
   scheduling cycles.
 
@@ -93,11 +103,11 @@
 - Human-action completion requires a prior explicit session-open handshake and a separate
   browser-owned same-session verifier. The verifier defaults to denial; a database handshake alone
   cannot advance an application to final validation.
-- Candidate onboarding now includes bounded local UTF-8 CV extraction through API, CLI, and the
-  profile UI. Raw documents are not retained; deterministic education/experience drafts carry the
-  source hash, restricted confidentiality, and false approvals. Applying a draft creates one
-  version atomically and blocks readiness until explicit review.
-- PDF parsing remains denied until it can execute in a CPU/memory/time-constrained worker.
+- Candidate onboarding now includes bounded local TXT, PDF, and DOCX CV extraction through API,
+  CLI, and the profile UI. PDF page counts and DOCX ZIP/XML expansion are strictly bounded. Raw
+  documents are not retained; deterministic education/experience drafts carry the source hash,
+  restricted confidentiality, and false approvals. Applying a draft creates one version atomically
+  and blocks readiness until explicit review.
 - Candidate selection now persists as a validated same-site cookie. The dashboard, navigation,
   operational list routes, and job/application detail routes consistently use the query override or
   active candidate instead of silently hardcoding the fictional example profile.
@@ -200,10 +210,9 @@
   immutable submitted CV, cover letter, answers, and the v2+ final receipt. Each card exposes its
   exact ID, version, SHA-256, content type, and backend confirmation. PDF bytes download by exact
   artifact ID; JSON/HTML is shown only as escaped inert text, and drafts are never promoted.
-- The frontend now has host-runnable axe checks plus an 11-test Playwright route/safety/accessibility
-  suite with deterministic API interception. Suite discovery passes and fixtures use only
-  fictional data. Chromium downloaded successfully under `/tmp`, but the minimal host cannot
-  launch it because `libnspr4.so` is unavailable.
+- The frontend has host-runnable axe checks plus a 13-test Chromium route/safety/accessibility suite
+  with deterministic API interception and fictional fixtures. Isolated browser libraries allow the
+  suite to execute on the minimal host without mutating system packages.
 - Human actions now expose the exact immutable screenshot artifact ID/hash, validated browser
   session health, normalized safe loopback origin, expiry, fixed consequences, local handshake
   state, verifier state, and explicit cancellation. The API is `no-store`, and the UI downloads
@@ -214,33 +223,51 @@
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **303 pytest tests pass**, with one
-  explicit Chromium skip and five non-failing warnings, on Python 3.14.4. Controlled-path tests
-  prove disabled-by-default behavior, exact-once autonomous confirmation, pre-click policy drift,
-  CAPTCHA/OTP/form/URL denial, human-action escalation, permit-before-POST ordering, explicit safe
-  retry after pre-click denial, ambiguous-click no-retry behavior, and crash-after-boundary stale
-  reconciliation.
-- Frontend: ESLint, strict TypeScript, **72 Vitest tests**, the Next.js production build, and
-  discovery of all **11 Playwright tests** pass for this checkpoint. The component suite covers
-  controlled approval/queue state and the terminal unknown-outcome warning.
-- Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
-  pass through `2a4d7e9f1b30`. The new controlled-attempt table and authorization bindings are
-  present, and models and Alembic report no missing operations.
-- WSL Docker verification on 2026-08-09: API, PostgreSQL, Redis, and frontend report healthy; the
-  homepage and main authenticated fictional-candidate views return HTTP 200.
-- CORS preflight returns HTTP 200 with the exact allowed origin for both `localhost:3000` and
-  `127.0.0.1:3000`. The committed Playwright route suite still needs an actual Docker-backed run.
-- The general and browser workers are running, but the scheduler exited with code 1 after a durable
-  idempotency key collided with a different task payload. Full default-stack health remains unproven
-  until this is repaired and exercised across repeated cycles.
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **333 pytest tests pass** with six
+  non-failing dependency deprecation warnings on Python 3.14.4. With isolated Chromium and extracted
+  libraries, the real synthetic browser matrix passes **20/20** across standard, optional-cover,
+  multi-step, changed-label, closed-job, timeout, retry, and fail-closed novel-field cases.
+- Frontend: ESLint, strict TypeScript, **78 Vitest tests**, and the Next.js production build pass.
+  The committed Chromium route/safety/accessibility suite passes **13/13** with deterministic API
+  interception and no provider traffic.
+- Migrations: fresh SQLite upgrade, `alembic check`, newest-revision downgrade, and re-upgrade pass
+  through `6a9d4e2f7b10`. Models and Alembic report no missing operations.
+- Scheduler: the profile-version-bound readiness key and retained-task regressions pass in the full
+  suite; a changed task payload no longer reuses the historical key that caused the reported crash.
+- Candidate volume safety: the live repository inspection reports `match`, identical tree hashes,
+  no changed paths, and `mutation_performed=false`; stale, symlinked, and occupied-destination cases
+  pass deterministic tests. The Compose YAML parses as seven services.
+- Docker/Compose: **not executed for this revision**. `/usr/bin/docker` points to the absent
+  `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`; `/mnt/wsl` does not exist and
+  `docker compose version` returns `docker: command not found`. Older health observations are stale.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
-The 2026-08-06 non-Docker host audit remains the source for the complete quality-gate totals above.
-On 2026-08-09, WSL Docker built the API image with Chromium dependencies and started the full stack.
-A stale named candidate volume exposed an older fictional `experience.json`; the file was backed up,
-replaced with the validated repository fixture, and validated from both API and worker containers.
-This was persisted demo-data schema drift, not an incomplete project-spec implementation.
+All totals above were executed during the current 2026-08-09 run. The earlier manual stale-fixture
+procedure is superseded: backend containers compare the mounted fictional candidate to an immutable
+image fixture and report hashes/changed paths without mutation. A review copy can be staged only at
+an absent destination, and Docker onboarding uses the immutable fixture rather than the mount.
+
+## Acceptance-criteria audit
+
+| Spec criterion | Result | Current evidence or blocker |
+| --- | --- | --- |
+| 1 | Pass | Fictional candidates onboard through API, CLI, and web as unapproved drafts. |
+| 2–3 | External blocker | Alessandro's private profile and AI/ML strategy are not available and cannot be committed. |
+| 4 | Pass | Candidate-scoped scoring produces different results from different configurations. |
+| 5–6 | Pass | Agent contracts have no submit authority; missing facts make `SubmissionGate` deny. |
+| 7 | Pass locally | CAPTCHA/OTP creates a human action and is never bypassed. Secure interactive transport is separately blocked under criterion 22. |
+| 8–11 | Pass | Confirmed synthetic submissions have immutable exact artifacts, provenance, and target validation. |
+| 12–15 | Pass | Duplicate identity, candidate isolation, prompt quarantine, and per-candidate disable controls are deterministic and tested. |
+| 16 | Pass locally | Manual approval is the default; autonomy is scoped per tested ATS evidence and user confirmation. No user confirmation was fabricated. |
+| 17 | External blocker | Current Docker CLI bridge is absent, so this revision's one-command stack health cannot be observed. |
+| 18–21 | Pass | All routine web routes exist; success/readiness stay backend-owned; exact submitted artifacts are available by ID. |
+| 22 | External blocker | Evidence, expiry, handshake, and browser-owned verification exist, but no deployment-specific secure interactive takeover broker is supplied. |
+| 23 | External blocker | All locally executable backend/frontend/browser/accessibility/security gates pass; fresh Compose integration cannot run without Docker. |
+| 24 | Pass | Committed candidate data and test identities are fictional; no real candidate data was added. |
+
+All mandatory zero-tolerance targets remain zero in deterministic coverage. No live submission was
+attempted, so this run does not claim a production observation against a real ATS.
 
 ## Remaining definition-of-done gaps
 
@@ -254,9 +281,9 @@ This was persisted demo-data schema drift, not an incomplete project-spec implem
   same-session verifier, expiry, cancellation, and fail-closed UI are complete and truthfully label
   interactive transport unavailable; inventing or exposing a local profile/CDP secret would weaken
   the boundary.
-- Acceptance criterion 23 still requires execution of the committed Playwright browser suite.
-  PostgreSQL, Redis, Compose startup, local HTTP, and container health are now verified on WSL Docker.
-  The image contains Chromium and its dependencies; run and repair the actual route suite next.
+- Acceptance criteria 17 and 23 still require fresh Compose startup and health verification for this
+  revision. Both committed browser suites pass on the host, but Docker Desktop's WSL bridge is absent;
+  YAML parsing is not a substitute for running the seven-service stack.
 - The real controlled adapter must receive a security review in its deployment environment before
   its process flag and per-candidate policy are enabled. This build deliberately made no live ATS
   request or final click; doing so would violate the repository safety boundary rather than close
@@ -266,17 +293,17 @@ This was persisted demo-data schema drift, not an incomplete project-spec implem
   client, OS-keychain/managed-secret integration, and account authorization not present in this
   workspace. No automatic reply capability exists.
 
-External conditions still block the named pilot and final production claims. Independent local work
-remains: simplify the web pipeline, make autonomy prerequisites actionable and evidence-backed, run
-the committed Playwright suite in Docker, and harden persisted candidate-volume schema handling.
+External conditions now block every remaining definition-of-done item. The local guided pipeline,
+evidence-backed autonomy path, committed browser suites, scheduler repair, and non-destructive
+candidate-volume handling are complete and verified.
 
 ## Resume instructions
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Implement the immediate local UX/autonomy-readiness TODO before expanding production scope.
-4. Run the committed Playwright suite in Docker, repair failures, and record exact evidence without
-   enabling a live final click.
+3. Restore Docker Desktop's WSL integration, rerun the seven-service Compose stack, and record fresh
+   scheduler and route health without enabling a live final click.
+4. Retain the passing host Playwright result and repeat it in the restored container runtime.
 5. Resolve tested-adapter and dry-run blockers only from passing synthetic evidence; add the explicit
    user confirmation flow but do not confirm autonomy on the user's behalf.
 6. Supply and security-review a deployment-specific interactive takeover broker before claiming the

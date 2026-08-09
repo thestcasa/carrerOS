@@ -5,6 +5,17 @@ test.beforeEach(async ({ page }) => {
   await installApiFixtures(page);
 });
 
+test("overview exposes one plain-language next action from backend readiness", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Your next safe action" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Resolve readiness blockers" })).toHaveAttribute(
+    "href",
+    `/candidates/${fixtureIds.candidateId}/readiness`,
+  );
+  await expect(page.getByRole("link", { name: "Start or check the safe dry run" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Review the final controlled approval" })).toHaveCount(0);
+});
+
 test("active candidate follows navigation and readiness blockers link to editing", async ({ page }) => {
   await page.goto(`/candidates/${fixtureIds.candidateId}/readiness`);
   await expect(page.getByRole("heading", { name: "Readiness by capability" })).toBeVisible();
@@ -37,5 +48,5 @@ test("confirmed application identifies every exact submitted artifact", async ({
     await expect(card.getByRole("heading", { name: label })).toBeVisible();
     await expect(card.getByRole("button", { name: /Download exact PDF|Preview escaped text/ })).toBeEnabled();
   }
-  await expect(page.getByText("SYNTHETIC-CONFIRMATION-001")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SYNTHETIC-CONFIRMATION-001" })).toBeVisible();
 });

@@ -19,10 +19,10 @@ controlled-submission worker.
 
 ## First-version review path
 
-Use only the fictional `example_candidate` for the first review. Follow the existing navigation in
-this order: candidate/readiness, jobs, application materials, synthetic dry run, human actions,
-then settings and analytics. The next product milestone consolidates these surfaces into one
-guided, plain-language pipeline with a single recommended next action.
+Use only the fictional `example_candidate` for the first review. The dashboard presents one guided,
+plain-language path through readiness, job selection, materials review, synthetic dry run, human
+action, and explicit controlled approval. Only the first incomplete stage exposes the recommended
+primary action; technical evidence remains available on the linked detail page.
 
 Autonomous mode remains fail-closed. `no_tested_ats_adapter` and
 `dry_run_acceptance_not_passed` must be cleared by backend evidence from synthetic acceptance
@@ -61,7 +61,7 @@ application materials, synthetic dry runs, controlled-approval queuing, human ac
 events, settings, analytics, and a labelled viewer for each exact immutable submitted artifact.
 The deterministic Playwright suite
 intercepts every API request and never contacts or mutates a real provider. The CLI also provides
-`onboard`, local `import-cv`, deterministic
+`onboard`, bounded local TXT/PDF/DOCX `import-cv`, deterministic
 JSON/YAML `export-configuration`/`import-configuration`, fixture-safe `discover`, bounded
 `export-candidate`, and recoverable `delete-candidate`/`deletion-status` commands. Configuration
 transfer, lifecycle export, and irreversible deletion are distinct controls in settings; the

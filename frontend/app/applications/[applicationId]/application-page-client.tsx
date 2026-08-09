@@ -14,6 +14,7 @@ import type {
   ArtifactView,
   MaterialPolicy,
   MaterialRevisionInput,
+  SettingsView,
 } from "@/lib/types";
 
 function groupedAnswers(answers: ApplicationAnswerView[]): ApplicationAnswerView[][] {
@@ -292,6 +293,8 @@ export function ApplicationPageClient({
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([]);
   const [controlledSubmissionEnabled, setControlledSubmissionEnabled] = useState(false);
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [approvalAcknowledged, setApprovalAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const commandKeys = useRef(new Map<string, string>());
@@ -314,6 +317,7 @@ export function ApplicationPageClient({
     ]);
     setApplication(detail);
     setArtifacts(stored);
+    setSettings(settings);
     setControlledSubmissionEnabled(settings.controlled_submission_enabled === true);
   }, [candidateId, applicationId]);
 
@@ -328,6 +332,7 @@ export function ApplicationPageClient({
         if (!active) return;
         setApplication(detail);
         setArtifacts(stored);
+        setSettings(settings);
         setControlledSubmissionEnabled(settings.controlled_submission_enabled === true);
       })
       .catch((reason: unknown) => {
@@ -408,8 +413,31 @@ export function ApplicationPageClient({
       }
       if (kind !== "authorize-submit") clearCommand(kind);
       await load();
+      if (kind === "authorize-submit") setApprovalAcknowledged(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The operation failed safely.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptAdapter() {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.runAdapterAcceptance(
+        candidateId,
+        applicationId,
+        commandKey("adapter-acceptance"),
+      );
+      clearCommand("adapter-acceptance");
+      setSettings(updated);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The synthetic adapter check failed safely.",
+      );
     } finally {
       setBusy(false);
     }
@@ -557,6 +585,21 @@ export function ApplicationPageClient({
           </p>
         </section>
       ) : null}
+      {application.state === "human_action_required" ? (
+        <section className="panel action-panel">
+          <div>
+            <p className="eyebrow">Human-only step</p>
+            <h2>Review the evidence and resolve the pending action</h2>
+            <p>Career OS has paused this application. It will not bypass verification.</p>
+          </div>
+          <Link
+            className="button primary"
+            href={`/actions?candidate_id=${encodeURIComponent(candidateId)}`}
+          >
+            Open human actions
+          </Link>
+        </section>
+      ) : null}
       <section className="panel action-panel">
         <div>
           <p className="eyebrow">Authoritative backend state</p>
@@ -569,16 +612,47 @@ export function ApplicationPageClient({
               : "The interface updates only from the persisted API response."}
           </p>
         </div>
+        {nextAction === "authorize-submit" ? (
+          <div className="approval-confirmation">
+            <p>
+              {controlledSubmissionEnabled
+                ? "This can arm one irreversible controlled final click after every backend check passes."
+                : "This runs the fictional backend-confirmed submission only. Live controlled submission is disabled."}
+            </p>
+            <label className="boolean-field">
+              <input
+                type="checkbox"
+                checked={approvalAcknowledged}
+                disabled={busy}
+                onChange={(event) => setApprovalAcknowledged(event.target.checked)}
+              />
+              I reviewed the materials and understand the consequence of continuing.
+            </label>
+          </div>
+        ) : null}
+        {application.state === "ready_to_submit" &&
+        settings &&
+        !settings.tested_ats_adapters.includes("greenhouse") ? (
+          <button
+            className="button secondary"
+            disabled={busy}
+            onClick={() => void acceptAdapter()}
+          >
+            Run safe Greenhouse adapter check
+          </button>
+        ) : null}
         {nextAction ? (
           <button
             className="button primary"
-            disabled={busy}
+            disabled={busy || (nextAction === "authorize-submit" && !approvalAcknowledged)}
             onClick={() => void action(nextAction)}
           >
             {busy
               ? "Working…"
               : nextAction === "authorize-submit" && controlledSubmissionEnabled
-                ? "approve controlled submission"
+                ? "Approve one controlled submission"
+                : nextAction === "authorize-submit"
+                  ? "Run fictional submission demo"
                 : nextAction.replaceAll("-", " ")}
           </button>
         ) : null}

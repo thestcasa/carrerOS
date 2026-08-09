@@ -115,9 +115,11 @@ The Next.js/React/TypeScript frontend is a typed API client; it never reads cand
 persistence directly. It provides candidate onboarding and readiness, jobs and analysis,
 application materials, synthetic dry runs, human actions, security, settings, analytics, and exact
 submitted-artifact views. Backend state remains authoritative and submission controls remain
-visibly fail-closed. The immediate UX milestone reorganizes these existing capabilities into one
-guided pipeline with plain-language blocker explanations, a recommended next action, and explicit
-separation between evidence-backed checks and user-only confirmation.
+visibly fail-closed. The home page organizes these capabilities into a six-stage guided pipeline
+with plain-language blocker explanations and exactly one recommended next action. Structured
+profile lists expose add, edit, archive/restore, and reorder controls while retaining stable IDs.
+Adapter and dry-run prerequisites come only from immutable browser evidence; the final consequence
+acknowledgement is a separate, unchecked, audited user command.
 
 ## Persistence
 
@@ -266,13 +268,13 @@ external ports bind to localhost by default.
 
 ## Trust and privacy decisions
 
-Candidate CV import is a local, deterministic staging boundary. It accepts bounded UTF-8
-text, extracts only explicitly structured education and experience rows, records a source hash, and
-discards the raw bytes. Draft files are mode `0600`; imported facts are restricted, unverified, and
-unapproved. Applying a draft merges stable IDs into both candidate sections under one profile
-version and one history snapshot. Readiness treats any active unapproved imported record as a
-blocker, so extraction cannot silently authorize outward use.
-PDF input is rejected until a resource-isolated parser worker is available.
+Candidate CV import is a local, deterministic staging boundary. It accepts bounded UTF-8 text,
+bounded PDF input through a strict page-limited parser, and bounded DOCX ZIP/XML input with path,
+expansion, and element limits. It extracts only explicitly structured education and experience
+rows, records a source hash, and discards the raw bytes. Draft files are mode `0600`; imported facts
+are restricted, unverified, and unapproved. Applying a draft merges stable IDs into both candidate
+sections under one profile version and one history snapshot. Readiness treats any active unapproved
+imported record as a blocker, so extraction cannot silently authorize outward use.
 
 Generated document revision is append-only and snapshot-bound. The client supplies a base document
 identity/version and edited canonical content, but the service reconstructs the approved fact
@@ -337,7 +339,9 @@ content-hash verification.
 The browser dry-run boundary accepts a finalized structured package, maps only known synthetic
 fields, validates uploads against candidate-owned paths and allowlisted SHA-256 hashes, re-reads
 filled values from the DOM, and extracts the final page without a submit operation. The separate
-Playwright fixture harness is hard-limited to an exact allowlisted loopback URL and stores each
+Playwright fixture harness covers standard, optional-cover-letter, multi-step, label-drift,
+closed-job, timeout, duplicate-retry, and novel-required-field forms. It is hard-limited to an exact
+allowlisted loopback URL and stores each
 candidate/session in a symlink-checked persistent browser profile. Each run permits one GET document
 request; all subresources, later navigation, redirects, WebSockets, and form submissions are
 blocked and counted. The worker only detects the final-submit control and has no click operation.
@@ -423,10 +427,11 @@ substitute for hosted multi-user identity and encrypted storage.
 
 ## Durable operations and correspondence
 
-The scheduler creates candidate-scoped SQL tasks with deterministic bucket keys. General and
-browser workers claim disjoint task-kind allowlists under a lease, recover expired work, retry with
-a bound, and reject keys reused for different payloads. Redis publishes process health; SQL remains
-the task source of truth.
+The scheduler creates candidate-scoped SQL tasks with deterministic bucket keys. Readiness keys
+include the candidate profile version, so a retained schedule bucket cannot collide after its task
+payload changes. General and browser workers claim disjoint task-kind allowlists under a lease,
+recover expired work, retry with a bound, and reject keys reused for different payloads. Redis
+publishes process health; SQL remains the task source of truth.
 
 Correspondence ingestion stores message hashes rather than raw bodies, associates only on unique
 deterministic evidence, and permits unmatched candidate-owned records. Valid interview, rejection,

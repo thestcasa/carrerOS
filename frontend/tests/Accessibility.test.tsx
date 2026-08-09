@@ -20,6 +20,7 @@ import type {
 vi.mock("@/lib/api", () => ({
   api: {
     candidate: vi.fn(),
+    discoverySources: vi.fn(),
     deletionStatus: vi.fn(),
     humanActions: vi.fn(),
     settings: vi.fn(),
@@ -266,6 +267,7 @@ describe("accessibility-critical component checks", () => {
 
   it("has no serious or critical violations in human-action evidence", async () => {
     vi.mocked(api.humanActions).mockResolvedValue([humanAction]);
+    vi.mocked(api.discoverySources).mockResolvedValue([]);
     const view = render(<ActionsPageClient candidateId="example_candidate" />);
     await view.findByText("Fictional Labs · ML Engineer");
     await expectNoBlockingViolations(view);
@@ -286,6 +288,7 @@ describe("accessibility-critical component checks", () => {
       maximum_applications_per_company_30_days: 1,
       browser_session_retention_days: 30,
       autonomy_blockers: ["no_tested_ats_adapter"],
+      autonomy_prerequisites: [],
     });
     vi.mocked(api.candidate).mockResolvedValue({
       candidate_id: "example_candidate",

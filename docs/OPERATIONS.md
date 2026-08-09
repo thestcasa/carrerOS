@@ -121,25 +121,32 @@ immutable archives are retained until intentional candidate deletion.
 ### Recover stale fictional candidate data
 
 The persistent candidate volume can mask a newer repository fixture after a schema change. Do not
-use `docker compose down -v`: it deletes unrelated persistent state. For the committed fictional
-`example_candidate` only, preserve the stale file, copy the validated repository version, and
-validate it inside the running API container:
+use `docker compose down -v`: it deletes unrelated persistent state. Every backend container now
+compares the mounted `example_candidate` with the immutable image fixture before starting. The
+report contains tree hashes and changed paths, never candidate field values, and a difference does
+not mutate or block a customized but structurally safe volume:
 
 ```bash
-docker compose cp \
-  api:/app/candidates/example_candidate/experience.json \
-  /tmp/carreros-example-experience-before-repair.json
-docker compose cp \
-  candidates/example_candidate/experience.json \
-  api:/app/candidates/example_candidate/experience.json
-docker compose exec -T api \
-  python -m app validate-candidate --candidate example_candidate
+docker compose exec -T api python -m app inspect-candidate-volume
 ```
 
-Inspect the backup before removing it. Never overwrite a private or unknown candidate this way:
-export it, back up its database and runtime volumes, then apply an explicit schema migration or
-reviewed manual correction. An experience item without `end_date` is valid only when
-`current: true`.
+To review the pristine fixture without touching the candidate volume, stage an absent recovery copy
+under the runtime volume. The command fails if the destination already exists:
+
+```bash
+docker compose exec -T api python -m app stage-candidate-recovery \
+  --destination-root /app/runtime/recovery-review
+docker compose exec -T \
+  -e CANDIDATES_ROOT=/app/runtime/recovery-review \
+  api python -m app validate-candidate --candidate example_candidate
+```
+
+The staged copy is for explicit diff and migration review. For a clean new draft, use
+`python -m app onboard` with a new candidate ID. Docker
+onboarding reads the immutable image fixture, so stale mounted example data cannot seed the new
+candidate. Export and back up any private or unknown candidate before an explicit schema migration
+or reviewed manual correction. Never copy the fixture over a mounted candidate. An experience item
+without `end_date` is valid only when `current: true`.
 
 Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts and browser
 attempt evidence are immutable and hash verified. A failed hash check is a security incident: stop
@@ -151,11 +158,16 @@ Controlled confirmation stores exact pre-click and confirmation PNG/HTML evidenc
 copy-on-write v2 archive, and a backend-confirmed receipt. If confirmation is absent, the
 application is visibly `UNKNOWN_AFTER_CLICK` and the UI says “do not retry.”
 
-WSL Docker verification on 2026-08-09 built the API image and started the health-ordered stack.
-PostgreSQL, Redis, API, and frontend are healthy, and both workers are running; the main
-authenticated fictional candidate views returned HTTP 200. The scheduler started but later exited
-with `idempotency key was used for a different task`; repair and exercise repeated scheduling
-cycles before claiming full default-stack health. CORS preflight passed for both local origins.
-The committed Playwright route/accessibility suite is still pending an actual Docker-backed run;
-keep all provider traffic intercepted and the controlled-submission worker disabled while running
-it.
+The scheduler collision `idempotency key was used for a different task` is repaired and covered by
+regression tests for retained historical tasks and profile-version changes. On 2026-08-09 the full
+backend suite passed 333 tests, including the 20-case real Chromium synthetic-form matrix. The
+committed frontend Playwright route/safety/accessibility suite passed 13/13 with every provider
+request intercepted.
+
+Fresh Compose verification could not be executed in the current WSL session. `/usr/bin/docker` is
+a dangling link to `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`, while `/mnt/wsl` is absent;
+`docker compose version` therefore returns `docker: command not found`. The Compose YAML parses as
+seven services, but that is not a health result. The older successful stack observation above must
+not be treated as verification of this revision. Reconnect Docker Desktop's WSL integration, then
+run `docker compose up --build`, wait for every default service (including scheduler) to remain
+healthy across repeated cycles, and rerun `npm run test:e2e` without enabling the controlled worker.

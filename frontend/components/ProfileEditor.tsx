@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { CandidateDetail, EditableSection, JsonObject, JsonValue } from "@/lib/types";
 
@@ -28,6 +28,24 @@ const sectionMeta: Record<EditableSection, { label: string; description: string 
 
 const sections = Object.keys(sectionMeta) as EditableSection[];
 
+const structuredTemplates: Partial<Record<EditableSection, Record<string, JsonObject>>> = {
+  education: { items: { id: "new_education", institution: "", qualification: "", field_of_study: "", location: "", start_date: "", end_date: null, completed: false, grade: null, coursework: [], cv_eligible: true, approved: false, archived: false } },
+  experience: {
+    items: { id: "new_experience", organization: "", title: "", location: "", start_date: "", end_date: null, current: true, achievements: [], skills: [], employment_type: null, remote_policy: "unknown", summary: null, responsibilities: [], domains: [], role_categories: [], confidentiality: "restricted", cv_eligible: true, cover_letter_eligible: true, approved: false, archived: false },
+    achievements: { id: "new_claim", statement: "", verified: false, source: null, publicly_usable: false, confidentiality: "restricted", approved: false, archived: false },
+  },
+  projects: {
+    items: { id: "new_project", name: "", description: "", start_date: "", end_date: null, outcomes: [], skills: [], url: null, project_type: null, status: "completed", domains: [], role_categories: [], evidence: [], confidentiality: "restricted", public_summary: null, cv_eligible: true, cover_letter_eligible: true, interview_eligible: true, approved: false, archived: false },
+    outcomes: { id: "new_claim", statement: "", verified: false, source: null, publicly_usable: false, confidentiality: "restricted", approved: false, archived: false },
+  },
+  languages: { items: { language: "", level: "B2", professional_use: false, approved: false, archived: false } },
+  career_strategy: { role_tiers: { tier: 1, name: "", roles: [], application_share_target: 0 } },
+  approved_answers: { items: { key: "new_answer", question_pattern: "", answer: "", evidence_ids: [], question_categories: [], approved: false, sensitive: false, auto_submit_allowed: false, valid_from: null, valid_until: null, archived: false } },
+  cover_letter_rules: { motivations: { motivation_id: "new_motivation", text: "", companies: [], roles: [], approved: false } },
+  certifications: { items: { id: "new_certification", name: "", issuer: "", issued_date: null, expiration_date: null, credential_url: null, cv_eligible: true, approved: false, archived: false } },
+  publications: { items: { id: "new_publication", title: "", publisher: null, published_date: null, url: null, summary: null, cv_eligible: true, approved: false, archived: false } },
+};
+
 function titleFor(key: string) {
   return key.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
@@ -45,13 +63,13 @@ function Field({
   path,
   value,
   onChange,
-  onValidity,
+  arrayTemplate,
 }: {
   fieldKey: string;
   path: string[];
   value: JsonValue;
   onChange: (path: string[], value: JsonValue) => void;
-  onValidity: (path: string[], valid: boolean) => void;
+  arrayTemplate: (path: string[]) => JsonObject | undefined;
 }) {
   const id = path.join("-");
   const label = titleFor(fieldKey);
@@ -62,7 +80,7 @@ function Field({
         <legend>{label}</legend>
         <div className="field-grid">
           {Object.entries(value).map(([nestedKey, nestedValue]) => (
-            <Field key={nestedKey} fieldKey={nestedKey} path={[...path, nestedKey]} value={nestedValue} onChange={onChange} onValidity={onValidity} />
+            <Field key={nestedKey} fieldKey={nestedKey} path={[...path, nestedKey]} value={nestedValue} onChange={onChange} arrayTemplate={arrayTemplate} />
           ))}
         </div>
       </fieldset>
@@ -79,8 +97,9 @@ function Field({
   }
 
   if (Array.isArray(value)) {
-    const structured = value.some((item) => item !== null && typeof item === "object");
-    if (structured) return <StructuredArrayField id={id} label={label} path={path} value={value} onChange={onChange} onValidity={onValidity} />;
+    const template = arrayTemplate(path);
+    const structured = Boolean(template) || value.some((item) => item !== null && typeof item === "object");
+    if (structured) return <StructuredArrayField label={label} path={path} value={value} onChange={onChange} emptyTemplate={template} arrayTemplate={arrayTemplate} />;
     return (
       <label className="form-field" htmlFor={id}>
         <span>{label}</span>
@@ -116,41 +135,94 @@ function Field({
   );
 }
 
-function StructuredArrayField({ id, label, path, value, onChange, onValidity }: {
-  id: string;
+function blankFromTemplate(value: JsonValue, key = ""): JsonValue {
+  if (Array.isArray(value)) return [];
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([nestedKey, nestedValue]) => [
+        nestedKey,
+        blankFromTemplate(nestedValue, nestedKey),
+      ]),
+    );
+  }
+  if (key === "id" || key === "key" || key.endsWith("_id")) return `new_${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+  if (typeof value === "boolean") return false;
+  if (typeof value === "number") return 0;
+  if (typeof value === "string") return "";
+  return null;
+}
+
+function StructuredArrayField({ label, path, value, onChange, emptyTemplate, arrayTemplate }: {
   label: string;
   path: string[];
   value: JsonValue[];
   onChange: (path: string[], value: JsonValue) => void;
-  onValidity: (path: string[], valid: boolean) => void;
+  emptyTemplate: JsonObject | undefined;
+  arrayTemplate: (path: string[]) => JsonObject | undefined;
 }) {
-  const canonical = JSON.stringify(value, null, 2);
-  const lastEmitted = useRef(canonical);
-  const [draft, setDraft] = useState(canonical);
-  useEffect(() => {
-    if (canonical !== lastEmitted.current) setDraft(canonical);
-  }, [canonical]);
+  const template = value.find(
+    (item): item is JsonObject => item !== null && typeof item === "object" && !Array.isArray(item),
+  ) ?? emptyTemplate;
+
+  function replace(index: number, item: JsonValue) {
+    onChange(path, value.map((current, itemIndex) => itemIndex === index ? item : current));
+  }
+
+  function move(index: number, offset: number) {
+    const destination = index + offset;
+    if (destination < 0 || destination >= value.length) return;
+    const next = [...value];
+    [next[index], next[destination]] = [next[destination], next[index]];
+    onChange(path, next);
+  }
+
   return (
-    <label className="form-field" htmlFor={id}>
-      <span>{label}</span>
-      <textarea id={id} rows={Math.max(8, value.length * 8)} value={draft} onChange={(event) => {
-        const next = event.target.value;
-        setDraft(next);
-        try {
-          const parsed: unknown = JSON.parse(next);
-          if (!Array.isArray(parsed)) throw new Error("Expected an array");
-          event.target.setCustomValidity("");
-          const normalized = JSON.stringify(parsed, null, 2);
-          lastEmitted.current = normalized;
-          onValidity(path, true);
-          onChange(path, parsed as JsonValue);
-        } catch {
-          event.target.setCustomValidity("Enter a valid JSON array. Existing structured data has not been changed.");
-          onValidity(path, false);
-        }
-      }} />
-      <small>Structured entries use JSON so stable IDs and nested evidence cannot be flattened.</small>
-    </label>
+    <fieldset className="structured-list">
+      <legend>{label}</legend>
+      {value.length === 0 ? <p className="muted">No entries yet.</p> : null}
+      {value.map((item, index) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
+        const itemName = String(item.name ?? item.title ?? item.organization ?? item.language ?? item.id ?? `Entry ${index + 1}`);
+        return (
+          <article className="structured-entry" key={String(item.id ?? `${path.join("-")}-${index}`)} aria-label={`${label}: ${itemName}`}>
+            <div className="structured-entry-header">
+              <div><strong>{itemName || `Entry ${index + 1}`}</strong><small>Entry {index + 1} of {value.length}</small></div>
+              <div className="inline-actions">
+                <button type="button" className="button subtle" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${itemName} up`}>Move up</button>
+                <button type="button" className="button subtle" disabled={index === value.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${itemName} down`}>Move down</button>
+                {typeof item.archived === "boolean" ? (
+                  <button type="button" className="button secondary" onClick={() => replace(index, { ...item, archived: !item.archived })}>
+                    {item.archived ? "Restore entry" : "Archive entry"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="field-grid compact">
+              {Object.entries(item).map(([nestedKey, nestedValue]) => (
+                <Field
+                  key={nestedKey}
+                  fieldKey={nestedKey}
+                  path={[nestedKey]}
+                  value={nestedValue}
+                  arrayTemplate={arrayTemplate}
+                  onChange={(nestedPath, nestedValueNext) => replace(
+                    index,
+                    updateAtPath(item, nestedPath, nestedValueNext),
+                  )}
+                />
+              ))}
+            </div>
+          </article>
+        );
+      })}
+      {template ? (
+        <button type="button" className="button secondary" onClick={() => onChange(path, [...value, blankFromTemplate(template)])}>
+          Add {label.toLowerCase().replace(/s$/, "")}
+        </button>
+      ) : (
+        <small>Add the first entry through an import or fixture so its schema can be preserved safely.</small>
+      )}
+    </fieldset>
   );
 }
 
@@ -162,7 +234,6 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   const [data, setData] = useState<Record<string, JsonObject>>(sourceData);
   const [version, setVersion] = useState(detail.profile_version);
   const [saving, setSaving] = useState(false);
-  const [invalidPaths, setInvalidPaths] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const saveCommand = useRef<{ identity: string; key: string } | null>(null);
 
@@ -174,13 +245,9 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
     setMessage(null);
   }
 
-  function setValidity(path: string[], valid: boolean) {
-    setInvalidPaths((previous) => {
-      const next = new Set(previous);
-      const key = `${activeSection}:${path.join(".")}`;
-      if (valid) next.delete(key); else next.add(key);
-      return next;
-    });
+  function arrayTemplate(path: string[]): JsonObject | undefined {
+    const templates = structuredTemplates[activeSection];
+    return templates?.[path.at(-1) ?? ""];
   }
 
   async function save() {
@@ -241,11 +308,11 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
           </div>
         ) : null}
         <div className="field-grid">
-          {Object.entries(current).map(([key, value]) => <Field key={key} fieldKey={key} path={[key]} value={value} onChange={change} onValidity={setValidity} />)}
+          {Object.entries(current).map(([key, value]) => <Field key={key} fieldKey={key} path={[key]} value={value} onChange={change} arrayTemplate={arrayTemplate} />)}
         </div>
         {message ? <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p> : null}
         <div className="editor-actions">
-          <button className="button primary" disabled={!dirty || saving || invalidPaths.size > 0} onClick={save}>{saving ? "Saving…" : "Save new version"}</button>
+          <button className="button primary" disabled={!dirty || saving} onClick={save}>{saving ? "Saving…" : "Save new version"}</button>
           <button className="button secondary" disabled={!dirty || saving} onClick={() => setData((previous) => ({ ...previous, [activeSection]: structuredClone(baseline[activeSection]) }))}>Discard changes</button>
         </div>
       </section>

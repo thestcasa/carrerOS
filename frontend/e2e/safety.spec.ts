@@ -19,6 +19,6 @@ test("CAPTCHA remains an explicit same-session human action", async ({ page }) =
 test("backend blockers keep autonomous mode disabled", async ({ page }) => {
   await page.goto(`/settings?candidate_id=${fixtureIds.candidateId}`);
   await expect(page.getByRole("button", { name: "autonomous" })).toBeDisabled();
-  await expect(page.getByText("no tested ats adapter")).toBeVisible();
-  await expect(page.getByText("dry run acceptance not passed")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tested ATS adapter" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Candidate-scoped dry run" })).toBeVisible();
 });

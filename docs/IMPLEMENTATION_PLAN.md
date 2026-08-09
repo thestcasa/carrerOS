@@ -87,9 +87,10 @@ any browser or submission capability.
 - [ ] Complete hosted identity, encrypted secret storage, and deployment-specific interactive
   human-takeover transport.
 - [x] Verify PostgreSQL/Redis/Compose startup and service health on WSL Docker.
-- [ ] Execute and repair the committed Playwright browser E2E and automated accessibility suite in
-  the Docker runtime.
-- [ ] Simplify the first-version website into a guided pipeline and make every autonomy blocker
+- [x] Execute and repair the committed Playwright browser E2E and automated accessibility suite on
+  the host with isolated Chromium libraries (13/13). Docker-backed repetition remains environment
+  blocked because the current WSL Docker CLI target is absent.
+- [x] Simplify the first-version website into a guided pipeline and make every autonomy blocker
   actionable while preserving evidence-backed, fail-closed authorization.
 
 ## Acceptance criteria for Milestone 1

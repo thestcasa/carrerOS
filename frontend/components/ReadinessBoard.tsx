@@ -5,9 +5,23 @@ import { StatusPill } from "./StatusPill";
 const editorSections = new Set([
   "identity",
   "biography",
+  "education",
+  "experience",
+  "projects",
+  "skills",
+  "languages",
   "career_strategy",
+  "scoring_rules",
   "preferences",
   "legal_status",
+  "approved_answers",
+  "cv_rules",
+  "cover_letter_rules",
+  "companies",
+  "roles",
+  "certifications",
+  "publications",
+  "notification_rules",
 ]);
 
 function blockerLabel(blocker: string) {
@@ -78,6 +92,32 @@ export function ReadinessBoard({
             );
           })}
         </div>
+      </section>
+      <section className="panel action-panel" aria-label="Readiness next action">
+        <div>
+          <p className="eyebrow">Next safe action</p>
+          <h2>{report.status === "ready" ? "Choose a job to review" : "Resolve the first blocker"}</h2>
+          <p>
+            {report.status === "ready"
+              ? "Your candidate package is ready for discovery, scoring, and material preparation."
+              : "Open the first blocked profile domain. Career OS will recalculate readiness after the saved version is validated."}
+          </p>
+        </div>
+        {report.status === "ready" ? (
+          <Link
+            className="button primary"
+            href={`/jobs?candidate_id=${encodeURIComponent(candidateId)}`}
+          >
+            Browse jobs
+          </Link>
+        ) : (
+          <Link
+            className="button primary"
+            href={`/candidates/${candidateId}/profile`}
+          >
+            Edit candidate profile
+          </Link>
+        )}
       </section>
     </div>
   );

@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { GuidedPipeline } from "@/components/GuidedPipeline";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
 import { useActiveCandidateId } from "@/lib/active-candidate";
-import type { AnalyticsOverview, CandidateSummary, HealthReport, HumanActionView, SettingsView } from "@/lib/types";
+import type { AnalyticsOverview, ApplicationSummary, CandidateSummary, HealthReport, HumanActionView, JobSummary, NotificationView, ReadinessReport, SettingsView } from "@/lib/types";
 
 export default function OverviewPage() {
   const [health, setHealth] = useState<HealthReport | null>(null);
@@ -15,22 +16,28 @@ export default function OverviewPage() {
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [actions, setActions] = useState<HumanActionView[] | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  const [jobs, setJobs] = useState<JobSummary[] | null>(null);
+  const [applications, setApplications] = useState<ApplicationSummary[] | null>(null);
+  const [notifications, setNotifications] = useState<NotificationView[] | null>(null);
   const [loadedCandidateId, setLoadedCandidateId] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const activeCandidate = useActiveCandidateId();
 
   const load = useCallback(async (candidateId: string, generation: number) => {
     try {
-      const [healthReport, candidateList, analyticsReport, settingsReport, humanActions] = await Promise.all([api.health(), api.candidates(), api.analytics(candidateId), api.settings(candidateId), api.humanActions(candidateId)]);
+      const [healthReport, candidateList, analyticsReport, settingsReport, humanActions, readinessReport, jobList, applicationList, notificationList] = await Promise.all([api.health(), api.candidates(), api.analytics(candidateId), api.settings(candidateId), api.humanActions(candidateId), api.readiness(candidateId), api.jobs(candidateId), api.applications(candidateId), api.notifications(candidateId)]);
       if (generation !== requestGeneration.current) return;
       setError(null);
       setHealth(healthReport);
       setCandidates(candidateList);
       setAnalytics(analyticsReport); setSettings(settingsReport); setActions(humanActions);
+      setReadiness(readinessReport); setJobs(jobList); setApplications(applicationList);
+      setNotifications(notificationList);
       setLoadedCandidateId(candidateId);
     } catch (requestError) {
       if (generation !== requestGeneration.current) return;
-      setAnalytics(null); setSettings(null); setActions(null); setLoadedCandidateId(null);
+      setAnalytics(null); setSettings(null); setActions(null); setReadiness(null); setJobs(null); setApplications(null); setNotifications(null); setLoadedCandidateId(null);
       setError({ candidateId, message: requestError instanceof Error ? requestError.message : "The control plane is unavailable." });
     }
   }, []);
@@ -42,6 +49,14 @@ export default function OverviewPage() {
     return () => {
       if (requestGeneration.current === generation) requestGeneration.current += 1;
     };
+  }, [activeCandidate, load]);
+
+  useEffect(() => {
+    if (!activeCandidate) return;
+    const interval = globalThis.setInterval(() => {
+      void load(activeCandidate, ++requestGeneration.current);
+    }, 15_000);
+    return () => globalThis.clearInterval(interval);
   }, [activeCandidate, load]);
 
   if (!activeCandidate) return null;
@@ -74,9 +89,11 @@ export default function OverviewPage() {
       </section>
 
       {error?.candidateId === activeCandidate ? <ErrorState message={error.message} retry={() => void load(activeCandidate, ++requestGeneration.current)} /> : null}
-      {error?.candidateId !== activeCandidate && (!health || !candidates || loadedCandidateId !== activeCandidate || !analytics || !settings || !actions) ? <LoadingState label="Checking the control plane" /> : null}
+      {error?.candidateId !== activeCandidate && (!health || !candidates || loadedCandidateId !== activeCandidate || !analytics || !settings || !actions || !readiness || !jobs || !applications || !notifications) ? <LoadingState label="Checking the control plane" /> : null}
 
-      {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions ? (
+      {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions && readiness && jobs && applications && notifications ? (
+        <>
+        <GuidedPipeline candidateId={activeCandidate} readiness={readiness} jobs={jobs} applications={applications} actions={actions} />
         <section id="system-status" className="overview-grid">
           <article className="panel status-panel">
             <div className="panel-title"><div><p className="eyebrow">Runtime</p><h2>System status</h2></div><StatusPill status={health.status} /></div>
@@ -102,7 +119,23 @@ export default function OverviewPage() {
           <article className="panel metric-panel"><span className="large-metric">{analytics.applications}</span><h2>Applications</h2><p>{analytics.confirmations} backend-confirmed.</p></article>
           <article className="panel metric-panel"><span className="large-metric">{actions.filter((action) => action.status === "pending").length}</span><h2>Human actions</h2><Link href={`/actions?candidate_id=${encodeURIComponent(activeCandidate)}`}>Open intervention queue →</Link></article>
           <article className="panel metric-panel"><span className="large-metric">{analytics.security_events_unresolved}</span><h2>Security findings</h2><Link href={`/security?candidate_id=${encodeURIComponent(activeCandidate)}`}>Review security ledger →</Link></article>
+          <article className="panel activity-panel">
+            <p className="eyebrow">Near-real-time activity</p>
+            <h2>Recent events</h2>
+            {[...notifications]
+              .sort((left, right) => right.created_at.localeCompare(left.created_at))
+              .slice(0, 5)
+              .map((notification) => (
+                <div className="activity-row" key={notification.notification_id}>
+                  <strong>{notification.event_type.replaceAll("_", " ")}</strong>
+                  <span>{notification.message}</span>
+                  <small>{new Date(notification.created_at).toLocaleString()}</small>
+                </div>
+              ))}
+            {!notifications.length ? <p className="muted">No recent notifications. This view refreshes every 15 seconds.</p> : null}
+          </article>
         </section>
+        </>
       ) : null}
     </div>
   );

@@ -72,6 +72,60 @@ Acceptance for this milestone:
 - Docker Compose reports all default services healthy and primary demo routes load successfully.
 - No live final click, employer contact, real candidate data, or fabricated readiness evidence occurs.
 
+### 2026-08-09 execution plan
+
+This run resumes at commit `37e0d74` with only the documented user-owned `artifacts/`,
+`scripts/run-autonomous-build.sh`, and `how d8c72b0` untracked. It will not restart completed
+milestones or stage those paths.
+
+1. Repair scheduler command identity so a recurring schedule bucket has a stable payload-bound key
+   and distinct scheduled operations cannot collide. Add regression coverage for repeated cycles
+   and retained historical tasks.
+2. Add durable, candidate-scoped synthetic adapter-acceptance evidence and derive
+   `no_tested_ats_adapter` exclusively from a currently passing record bound to adapter version and
+   form fingerprint.
+3. Derive `dry_run_acceptance_not_passed` exclusively from immutable successful browser-attempt
+   evidence for the candidate and supported form pattern.
+4. Add a separate explicit, unchecked, consequence-aware autonomy confirmation command that is
+   unavailable until the two evidence prerequisites pass and records the authenticated user action
+   in the administrative ledger. Keep `approval_required` as the default and never exercise a live
+   click.
+5. Turn the existing routes into a plain-language guided pipeline with one recommended action per
+   stage and advanced evidence under progressive disclosure. Cover it with backend, component,
+   accessibility, and Playwright route tests.
+6. Replace destructive stale-volume repair instructions with startup detection, an exact report,
+   and copy-to-new-candidate or reviewed migration guidance. Never overwrite or delete an unknown
+   persisted candidate package.
+7. Rebuild the default Compose stack, exercise repeated scheduler cycles, and execute the committed
+   Playwright suite inside the browser-capable container. Record exact current results.
+8. Audit the remaining specification acceptance criteria, run every repository quality gate,
+   review for secrets/real data/scope regressions, update durable status, and commit each coherent
+   passing milestone.
+
+Execution result: steps 1–6 are complete with deterministic regression coverage. The host browser
+matrix passes 20/20 and the committed frontend Playwright suite passes 13/13. Step 7 is complete for
+the scheduler logic but externally blocked for fresh Compose health because the WSL Docker bridge is
+absent. Step 8 is complete for all locally executable gates. The only remaining definition-of-done
+work requires external private pilot data and human review, deployment identity/encryption and
+secure interactive takeover infrastructure, live-provider credentials/security review, or a
+restored Docker runtime; none may be fabricated or weakened in repository code.
+
+Reconciled implementation decisions:
+
+- Generic settings updates will no longer accept tested-adapter, dry-run-acceptance, or explicit
+  confirmation assertions. Passing adapter acceptance will be an append-only candidate-scoped
+  record bound to a synthetic browser attempt, adapter implementation version, form fingerprint,
+  and immutable evidence hash. Dry-run acceptance will be derived from the same verified attempt
+  evidence rather than a mutable settings flag.
+- Autonomy confirmation will be a separate authenticated command. It requires an explicit checked
+  acknowledgement, the current consequence-text version, and both evidence prerequisites. Its
+  scope digest will include the evidence and active limits so later scope drift fails closed.
+- The overview will carry the six-stage guided path. Existing detail pages remain authoritative and
+  gain direct next-action links; technical evidence stays available under progressive disclosure.
+- Container startup will compare the mounted fictional package with the image-bundled validated
+  fixture and emit a body-free, hash-based diagnostic. Recovery will preserve the mounted package
+  and guide copy/export plus reviewed migration; startup code will never replace it.
+
 ## Execution order
 
 ### Phase 1 — Milestone 2: discovery, analysis, and jobs inbox
@@ -198,11 +252,10 @@ hosted encryption, and separate Playwright worker ownership remain.
 5. Add deterministic CV-import draft extraction and explicit approval workflow without storing
    or committing real candidate documents.
 
-Status: all five steps are implemented. CV import accepts bounded UTF-8 text, stores only a
-hash and structured extraction draft, applies education/experience atomically as restricted and
-unapproved facts, and blocks readiness pending explicit review. API, CLI, profile UI, idempotency,
-and failure-path tests are included. PDF parsing is deferred until a resource-isolated document
-worker exists.
+Status: all five steps are implemented. CV import accepts bounded TXT, page-limited PDF, and
+ZIP/XML-limited DOCX input, stores only a hash and structured extraction draft, applies
+education/experience atomically as restricted and unapproved facts, and blocks readiness pending
+explicit review. API, CLI, profile UI, idempotency, and failure-path tests are included.
 
 ### Phase 5B — active candidate propagation
 
@@ -367,10 +420,9 @@ corresponding acceptance criterion can be claimed complete.
 3. [Complete] Implement the remaining Milestone 3 policy surface as small end-to-end slices:
    role-specific template/content selection, configuration-driven cover-letter inclusion, and
    append-only free-text answer revision with backend-derived provenance and review.
-4. [Complete, browser execution externally limited] Add the missing browser
-   route/accessibility-critical test layer using deterministic local fixtures. Eleven Playwright
-   checks are discovered; the host can download Chromium but cannot launch it because its minimal
-   runtime lacks `libnspr4.so`. Component-level axe coverage remains host-runnable under Vitest.
+4. [Complete] Add the browser route/accessibility-critical test layer using deterministic local
+   fixtures. Isolated Chromium and extracted system libraries run the 20-test backend browser
+   matrix and the 13-test committed frontend suite without changing the host system.
 5. [Complete] Add a fail-closed exact submitted-package viewer that distinctly identifies the
    immutable submitted CV, cover letter, answers, and final receipt and downloads/previews by exact
    backend artifact ID without rendering HTML.
@@ -381,10 +433,10 @@ corresponding acceptance criterion can be claimed complete.
    adapter, one-use gate permit, durable irreversible-click evidence, no-retry unknown outcome,
    approval/autonomous queueing, exact confirmation archive, API/UI, migration, and regression
    tests without making a live submission.
-8. [Next local verification] Execute and repair the committed browser suite in Docker with all
-   provider requests intercepted; Compose startup itself is verified.
-9. [Next local product slice] Implement the simple guided website pipeline and evidence-backed
-   autonomy blocker actions defined in the immediate milestone.
+8. [Complete locally; Docker externally blocked] Execute and repair both committed browser suites
+   with all provider requests intercepted. Fresh Compose health awaits a restored WSL Docker bridge.
+9. [Complete] Implement the simple guided website pipeline and evidence-backed autonomy blocker
+   actions defined in the immediate milestone.
 10. [External] Supply and review the deployment-specific secure interactive takeover transport.
 
 Runtime agent routing and the normalized job expansion are complete. The deterministic provider

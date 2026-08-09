@@ -109,7 +109,7 @@ export function CVImportPanel({
         <span>CV file</span>
         <input
           aria-label="CV file"
-          accept=".txt,text/plain"
+          accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           type="file"
           onChange={(event) => {
             setFile(event.target.files?.[0] ?? null);

@@ -7,6 +7,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const route of [
+  "/",
   `/candidates/${fixtureIds.candidateId}/readiness`,
   `/jobs?candidate_id=${fixtureIds.candidateId}`,
   `/jobs/${fixtureIds.jobId}?candidate_id=${fixtureIds.candidateId}`,

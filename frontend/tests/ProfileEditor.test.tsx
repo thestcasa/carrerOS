@@ -40,9 +40,8 @@ describe("ProfileEditor", () => {
     });
   });
 
-  it("saves the latest structured facts without flattening stable IDs", async () => {
+  it("edits structured facts without exposing raw JSON or flattening stable IDs", async () => {
     render(<ProfileEditor detail={detail} initialSection="certifications" />);
-    const textarea = screen.getByRole("textbox", { name: /^Items/ });
     const updated = [
       {
         id: "fictional_certificate",
@@ -53,7 +52,11 @@ describe("ProfileEditor", () => {
       },
     ];
 
-    fireEvent.change(textarea, { target: { value: JSON.stringify(updated, null, 2) } });
+    expect(screen.queryByText(/structured entries use JSON/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Updated Fictional Certificate" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Approved/ }));
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
 
     await waitFor(() =>
@@ -77,17 +80,7 @@ describe("ProfileEditor", () => {
         readiness: detail.readiness,
       });
     render(<ProfileEditor detail={detail} initialSection="certifications" />);
-    const textarea = screen.getByRole("textbox", { name: /^Items/ });
-    const updated = [
-      {
-        id: "fictional_certificate",
-        name: "Fictional Certificate",
-        issuer: "Example Institute",
-        approved: false,
-        archived: false,
-      },
-    ];
-    fireEvent.change(textarea, { target: { value: JSON.stringify(updated, null, 2) } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Approved/ }));
 
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     await screen.findByRole("alert");
@@ -99,13 +92,28 @@ describe("ProfileEditor", () => {
     );
   });
 
-  it("disables saving while structured JSON is invalid", () => {
+  it("adds, archives, and reorders structured entries with stable generated IDs", () => {
     render(<ProfileEditor detail={detail} initialSection="certifications" />);
-    fireEvent.change(screen.getByRole("textbox", { name: /^Items/ }), {
-      target: { value: "[{not-json}]" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
 
-    expect(screen.getByRole("button", { name: "Save new version" })).toBeDisabled();
-    expect(api.updateSection).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("article", { name: /^Items:/ })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Move Fictional Certificate down/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Move Fictional Certificate down/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Archive entry" })[0]);
+
+    expect(screen.getByRole("button", { name: "Save new version" })).toBeEnabled();
+  });
+
+  it("can add the first item to an empty structured section", () => {
+    const empty = {
+      ...detail,
+      config: { publications: { items: [] } },
+    } as CandidateDetail;
+    render(<ProfileEditor detail={empty} initialSection="publications" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+
+    expect(screen.getByRole("textbox", { name: "Title" })).toBeVisible();
+    expect((screen.getByRole("textbox", { name: "Id" }) as HTMLInputElement).value).toMatch(/^new_/);
   });
 });

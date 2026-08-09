@@ -55,13 +55,13 @@ const artifacts = [
 
 const readiness = {
   candidate_id: candidateId,
-  status: "blocked",
+  status: "not_ready",
   issues: [],
   capabilities: [
     {
       capability: "submission",
       label: "Controlled submission",
-      status: "blocked",
+      status: "BLOCKED",
       blockers: ["legal_status_not_approved"],
     },
   ],
@@ -70,12 +70,14 @@ const readiness = {
       domain: "legal_status",
       label: "Legal status",
       field_path: "legal_status",
-      status: "blocked",
+      status: "BLOCKED",
       issues: [
         {
           code: "approval_required",
           message: "Legal answers require explicit approval.",
+          domain: "legal_status",
           field_path: "legal_status",
+          severity: "blocking",
         },
       ],
     },
@@ -164,6 +166,30 @@ const settings = {
   maximum_applications_per_company_30_days: 1,
   browser_session_retention_days: 30,
   autonomy_blockers: ["no_tested_ats_adapter", "dry_run_acceptance_not_passed"],
+  autonomy_prerequisites: [
+    {
+      code: "no_tested_ats_adapter",
+      title: "Tested ATS adapter",
+      explanation: "No durable passing synthetic adapter record exists yet.",
+      passed: false,
+      resolution: "Run the safe adapter check from a reviewed application.",
+      action_href: `/applications/${applicationId}?candidate_id=${candidateId}`,
+      evidence_id: null,
+      evidence_summary: null,
+      evidenced_at: null,
+    },
+    {
+      code: "dry_run_acceptance_not_passed",
+      title: "Candidate-scoped dry run",
+      explanation: "No passing browser evidence is recorded for this candidate.",
+      passed: false,
+      resolution: "Complete the isolated dry run without clicking submit.",
+      action_href: `/applications/${applicationId}?candidate_id=${candidateId}`,
+      evidence_id: null,
+      evidence_summary: null,
+      evidenced_at: null,
+    },
+  ],
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -174,6 +200,14 @@ export async function installApiFixtures(page: Page): Promise<void> {
   await page.route("http://localhost:8000/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    if (path === "/api/health") {
+      return json(route, {
+        status: "ok",
+        api: { status: "available", detail: null },
+        database: { status: "available", detail: null },
+        redis: { status: "available", detail: null },
+      });
+    }
     if (path === "/api/auth/local-session") {
       return json(route, {
         session_token: "fixture-session",
@@ -182,6 +216,16 @@ export async function installApiFixtures(page: Page): Promise<void> {
       });
     }
     if (path === `/api/candidates/${candidateId}/readiness`) return json(route, readiness);
+    if (path === "/api/candidates") {
+      return json(route, [{
+        candidate_id: candidateId,
+        display_name: "Example Candidate",
+        profile_version: "fixture-v1",
+        configuration_status: "valid",
+        readiness_status: "not_ready",
+        automation_status: "disabled",
+      }]);
+    }
     if (path === `/api/candidates/${candidateId}`) {
       return json(route, { candidate_id: candidateId, profile_version: "fixture-v1", config: {}, readiness });
     }
@@ -230,6 +274,31 @@ export async function installApiFixtures(page: Page): Promise<void> {
       ]);
     }
     if (path === "/api/settings") return json(route, settings);
+    if (path === "/api/notifications") {
+      return json(route, [{
+        notification_id: "00000000-0000-0000-0000-000000000501",
+        candidate_id: candidateId,
+        application_id: applicationId,
+        event_type: "human_action_required",
+        channel: "dashboard",
+        message: "A fictional CAPTCHA needs human action.",
+        immediate: true,
+        status: "pending",
+        created_at: "2026-08-05T10:00:00Z",
+      }]);
+    }
+    if (path === "/api/analytics/overview") {
+      return json(route, {
+        candidate_id: candidateId,
+        applications: 1,
+        average_score: 88,
+        by_state: { confirmed: 1 },
+        by_role_category: { target: 1 },
+        human_actions_pending: 1,
+        security_events_unresolved: 0,
+        confirmations: 1,
+      });
+    }
     if (path === `/api/candidates/${candidateId}/deletion`) {
       return json(route, { error: { code: "deletion_not_found", message: "No deletion." } }, 404);
     }

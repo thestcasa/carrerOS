@@ -5,10 +5,35 @@ import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { CandidateDataControls } from "@/components/CandidateDataControls";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
-import type { AtsPlatform, SettingsUpdate, SettingsView } from "@/lib/types";
+import type { AtsPlatform, CandidateDetail, DiscoverySourceView, HumanActionView, JsonValue, SettingsUpdate, SettingsView } from "@/lib/types";
 
 function commandKey(prefix: string) {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+}
+
+const blockerLabels: Record<string, string> = {
+  candidate_profile_not_approved: "Approve the candidate profile before enabling autonomy.",
+  legal_status_not_approved: "Review and approve the legal and work-authorization answers.",
+  automatic_answers_not_approved: "Approve the reusable application answers.",
+  cv_templates_not_approved: "Approve the CV templates used for applications.",
+  automatic_submission_disabled: "Enable automatic submission in the candidate workflow first.",
+  no_allowed_ats_adapter: "Choose at least one ATS adapter that may be used.",
+  no_tested_ats_adapter: "Run a passing safe adapter check for an allowed ATS.",
+  dry_run_acceptance_not_passed: "Complete a passing candidate-scoped browser dry run.",
+  explicit_confirmation_missing: "Read the consequences and record your own confirmation.",
+  emergency_stop_active: "Review the emergency stop before enabling any automation.",
+};
+
+function blockerLabel(code: string): string {
+  return blockerLabels[code] ?? "Resolve this backend readiness requirement before continuing.";
+}
+
+function stringList(value: JsonValue | undefined): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function configList(candidate: CandidateDetail | null, section: string, key: string): string[] {
+  return stringList(candidate?.config[section]?.[key]);
 }
 
 export function SettingsPageClient({ candidateId }: { candidateId: string }) {
@@ -18,9 +43,13 @@ export function SettingsPageClient({ candidateId }: { candidateId: string }) {
 function CandidateSettings({ candidateId }: { candidateId: string }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [profileVersion, setProfileVersion] = useState<string | null>(null);
+  const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
+  const [sources, setSources] = useState<DiscoverySourceView[]>([]);
+  const [humanActions, setHumanActions] = useState<HumanActionView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
+  const [confirmationChecked, setConfirmationChecked] = useState(false);
   const mutationKeys = useRef(new Map<string, string>());
 
   function replayKey(operation: string, payload: object): string {
@@ -56,10 +85,18 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
   }, [candidateId]);
   useEffect(() => {
     let cancelled = false;
-    api
-      .candidate(candidateId)
-      .then((candidate) => {
-        if (!cancelled) setProfileVersion(candidate.profile_version);
+    Promise.all([
+      api.candidate(candidateId),
+      api.discoverySources(candidateId),
+      api.humanActions(candidateId),
+    ])
+      .then(([loadedCandidate, loadedSources, loadedActions]) => {
+        if (!cancelled) {
+          setCandidate(loadedCandidate);
+          setProfileVersion(loadedCandidate.profile_version);
+          setSources(loadedSources);
+          setHumanActions(loadedActions);
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
@@ -75,13 +112,6 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
     };
   }, [candidateId]);
   async function mode(automation_mode: SettingsView["automation_mode"]) {
-    if (
-      automation_mode === "autonomous" &&
-      !globalThis.confirm(
-        "Enable autonomous mode only after all displayed blockers are resolved?",
-      )
-    )
-      return;
     setSaving(true);
     setError(null);
     const payload = { candidate_id: candidateId, automation_mode };
@@ -99,6 +129,30 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
         reason instanceof Error
           ? reason.message
           : "The backend denied this setting.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function confirmAutonomy() {
+    if (!confirmationChecked) return;
+    setSaving(true);
+    setError(null);
+    const payload = { candidate_id: candidateId, consequence_version: "autonomy-consequences-v1" };
+    const identity = `${candidateId}:autonomy-confirmation:${JSON.stringify(payload)}`;
+    try {
+      const updated = await api.confirmAutonomy(
+        candidateId,
+        replayKey("autonomy-confirmation", payload),
+      );
+      mutationKeys.current.delete(identity);
+      setSettings(updated);
+      setConfirmationChecked(false);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The backend could not record this confirmation.",
       );
     } finally {
       setSaving(false);
@@ -219,20 +273,85 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
                 ? "Live controlled submission is available only to the isolated submission worker and remains gate-authorized."
                 : "Live controlled submission is disabled at the process boundary."}
             </p>
-            {settings.autonomy_blockers.length ? (
+            {settings.autonomy_prerequisites.length ? (
               <>
-                <h3>Autonomy blockers</h3>
-                <ul className="blocker-list">
-                  {settings.autonomy_blockers.map((blocker) => (
-                    <li key={blocker}>{blocker.replaceAll("_", " ")}</li>
+                <h3>Safe autonomy checklist</h3>
+                <div className="autonomy-checklist">
+                  {settings.autonomy_prerequisites.map((prerequisite) => (
+                    <article className="autonomy-prerequisite" key={prerequisite.code}>
+                      <StatusPill status={prerequisite.passed ? "READY" : "BLOCKED"} />
+                      <h4>{prerequisite.title}</h4>
+                      <p>{prerequisite.explanation}</p>
+                      {prerequisite.evidence_summary ? (
+                        <p className="form-message success">Evidence: {prerequisite.evidence_summary}</p>
+                      ) : (
+                        <p className="muted">Next: {prerequisite.resolution}</p>
+                      )}
+                      {!prerequisite.passed && prerequisite.code !== "explicit_confirmation_missing" ? (
+                        <a href={prerequisite.action_href}>Open the safe next step →</a>
+                      ) : null}
+                    </article>
                   ))}
-                </ul>
+                </div>
               </>
             ) : (
               <p className="form-message success">
                 All autonomous-mode prerequisites are recorded.
               </p>
             )}
+            {settings.autonomy_blockers.filter((blocker) =>
+              !settings.autonomy_prerequisites.some((item) => item.code === blocker),
+            ).length ? (
+              <div className="form-message warning">
+                <strong>Candidate configuration still needs attention.</strong>
+                <ul className="blocker-list">
+                  {settings.autonomy_blockers
+                    .filter((blocker) =>
+                      !settings.autonomy_prerequisites.some((item) => item.code === blocker),
+                    )
+                    .map((blocker) => (
+                      <li key={blocker}>{blockerLabel(blocker)}</li>
+                    ))}
+                </ul>
+              </div>
+            ) : null}
+            <div id="autonomy-confirmation" className="confirmation-panel">
+              <h3>Explicit autonomy confirmation</h3>
+              <p>
+                Autonomous mode may queue controlled submissions only for the tested adapter
+                pattern, within the displayed daily, weekly, and company limits. The emergency
+                stop prevents new authorizations, but it cannot undo an already armed final click.
+              </p>
+              <label className="boolean-field">
+                <input
+                  type="checkbox"
+                  checked={confirmationChecked}
+                  disabled={
+                    saving ||
+                    !settings.tested_ats_adapters.length ||
+                    !settings.dry_run_acceptance_passed ||
+                    settings.explicit_autonomy_confirmation
+                  }
+                  onChange={(event) => setConfirmationChecked(event.target.checked)}
+                />
+                I understand these consequences and confirm this exact scope.
+              </label>
+              <button
+                className="button primary"
+                type="button"
+                disabled={
+                  saving ||
+                  !confirmationChecked ||
+                  settings.explicit_autonomy_confirmation
+                }
+                onClick={() => void confirmAutonomy()}
+              >
+                Record my confirmation
+              </button>
+              {settings.explicit_autonomy_confirmation ? (
+                <p className="form-message success">Your current scoped confirmation is audited.</p>
+              ) : null}
+            </div>
           </section>
           <section className="panel">
             <p className="eyebrow">Discovery policy</p>
@@ -268,6 +387,26 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
               Manual fixture import remains available from the jobs page for
               development only.
             </p>
+          </section>
+          <section className="panel">
+            <p className="eyebrow">Operational configuration</p>
+            <h2>Sources, targeting, and integrations</h2>
+            <dl className="compact-metadata">
+              <div><dt>Discovery cadence</dt><dd>{sources.length ? sources.map((source) => `${source.company}: ${source.cadence_minutes} min${source.enabled ? "" : " (paused)"}`).join(" · ") : "No scheduled sources"}</dd></div>
+              <div><dt>Target companies</dt><dd>{configList(candidate, "companies", "target").join(", ") || "Not configured"}</dd></div>
+              <div><dt>Target roles</dt><dd>{configList(candidate, "roles", "target").join(", ") || configList(candidate, "career_strategy", "target_roles").join(", ") || "Not configured"}</dd></div>
+              <div><dt>Salary policy</dt><dd>{candidate?.config.preferences?.salary && typeof candidate.config.preferences.salary === "object" && !Array.isArray(candidate.config.preferences.salary) ? `${candidate.config.preferences.salary.currency ?? "Currency unset"} ${candidate.config.preferences.salary.minimum ?? "minimum unset"}–${candidate.config.preferences.salary.maximum ?? "maximum unset"}` : "Not configured"}</dd></div>
+              <div><dt>Role threshold</dt><dd>{String(candidate?.config.scoring_rules?.application_threshold ?? "Not configured")}</dd></div>
+              <div><dt>Browser profiles</dt><dd>{humanActions.some((action) => action.browser_session_health !== "unavailable") ? humanActions.map((action) => action.browser_session_health.replaceAll("_", " ")).join(", ") : "No active browser session"}</dd></div>
+              <div><dt>Analysis model</dt><dd>Local deterministic scoring v1; provider credentials are never exposed to the browser.</dd></div>
+              <div><dt>Notification channels</dt><dd>{configList(candidate, "notification_rules", "channels").join(", ") || "Dashboard only"}</dd></div>
+              <div><dt>ATS integration</dt><dd>{settings.tested_ats_adapters.length ? `${settings.tested_ats_adapters.join(", ")} synthetic acceptance passed` : "No durable adapter acceptance yet"}</dd></div>
+            </dl>
+            <div className="inline-actions">
+              <a className="button secondary" href={`/jobs?candidate_id=${encodeURIComponent(candidateId)}`}>Manage sources</a>
+              <a className="button secondary" href={`/candidates/${encodeURIComponent(candidateId)}/profile?section=career_strategy`}>Edit targeting</a>
+              <a className="button secondary" href={`/candidates/${encodeURIComponent(candidateId)}/profile?section=notification_rules`}>Edit notifications</a>
+            </div>
           </section>
           <section className="panel">
             <p className="eyebrow">Rate limits</p>
