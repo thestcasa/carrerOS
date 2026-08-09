@@ -35,6 +35,11 @@ allowed and tested adapter, fresh source proof, exact package and destination ha
 and a gate-issued authorization. The API only queues the task. General and dry-run workers cannot
 claim it, and the controlled worker is absent from default Compose.
 
+Autonomy prerequisites are backend-derived. Tested-adapter status and dry-run acceptance require
+passing, immutable synthetic evidence; neither can be manually asserted. Explicit autonomy
+confirmation is a separate audited user action presented only after the evidence-backed
+prerequisites pass. Agents and workers cannot supply that confirmation for the user.
+
 The adapter repopulates and rechecks exact snapshot-derived first/last name and email values plus
 the hash-verified reviewed CV after reopening the browser profile. Every additional visible input,
 select, or textarea is unsupported and fails closed. CAPTCHA and OTP stop before authorization

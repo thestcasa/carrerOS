@@ -2,14 +2,37 @@
 
 ## Current state
 
-- Build status: **BLOCKED ON EXTERNAL VERIFICATION**
-- Active phase: final acceptance audit complete; all remaining work requires a capable deployment
-  environment or deployment-specific secure takeover transport
-- Branch baseline: `autonomous-build`; append-only answer revision is complete in `eda81f3`, and
-  this checkpoint completes the default-disabled controlled-submission architecture
+- Build status: **IN PROGRESS - FIRST-VERSION UX AND AUTONOMY READINESS**
+- Active phase: local Docker demo stabilization and guided user-pipeline simplification; external
+  pilot, secure takeover transport, and Gmail/OAuth work remain separate blockers
+- Branch baseline: `autonomous-build`; CORS and reliable Docker health fixes are published through
+  `90cfb31`
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
 - Preserved user-owned workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
   later untracked root file `how d8c72b0`
+
+## Immediate local TODO - first-version UX and autonomy readiness
+
+- Simplify the normal website journey into one guided pipeline: candidate readiness, job selection,
+  material generation/review, safe dry run, human-action resolution, and explicit controlled approval.
+  Each page should expose one primary next action and link directly to the blocker it can resolve.
+- Use progressive disclosure: show plain-language status, consequences, and next actions by default;
+  keep hashes, internal IDs, raw policy fields, and advanced controls in expandable detail.
+- Replace raw autonomy blocker identifiers with user-facing explanations, current evidence, and a
+  concrete action. Preserve backend authority and fail-closed behavior.
+- Resolve `no_tested_ats_adapter` only from a recorded passing synthetic acceptance run for the exact
+  adapter/form pattern. Do not provide a manual checkbox that can claim untested evidence.
+- Resolve `dry_run_acceptance_not_passed` only from candidate-scoped passing dry-run evidence and the
+  committed browser acceptance suite. Do not let the user self-declare the test passed.
+- Add an explicit, unchecked autonomy confirmation step only after all evidence prerequisites pass.
+  Explain scope, rate limits, emergency stop, and consequences; persist an administrative audit event.
+  The agent must not confirm autonomy on the user's behalf.
+- Keep `approval_required` as the first-version default and keep live controlled submission disabled at
+  the process boundary during development and automated verification.
+- Add component, route, accessibility, and backend tests for the guided path and every blocker action.
+- Repair the scheduler's durable task idempotency collision
+  (`idempotency key was used for a different task`) and prove it remains running across repeated
+  scheduling cycles.
 
 ## Implemented and integrated
 
@@ -203,17 +226,21 @@
 - Migrations: fresh SQLite upgrade, newest-revision downgrade/re-upgrade, and `alembic check`
   pass through `2a4d7e9f1b30`. The new controlled-attempt table and authorization bindings are
   present, and models and Alembic report no missing operations.
-- Docker is not installed in this environment. PostgreSQL/Redis/Compose startup and the container's
-  Playwright Chromium path remain externally unverified. The image installs Chromium and system
-  dependencies with `playwright install --with-deps chromium`.
+- WSL Docker verification on 2026-08-09: API, PostgreSQL, Redis, and frontend report healthy; the
+  homepage and main authenticated fictional-candidate views return HTTP 200.
+- CORS preflight returns HTTP 200 with the exact allowed origin for both `localhost:3000` and
+  `127.0.0.1:3000`. The committed Playwright route suite still needs an actual Docker-backed run.
+- The general and browser workers are running, but the scheduler exited with code 1 after a durable
+  idempotency key collided with a different task payload. Full default-stack health remains unproven
+  until this is repaired and exercised across repeated cycles.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
-The 2026-08-06 final host audit reran every available backend and frontend gate, the complete
-fictional deterministic workflow suite, fresh migration/check, and newest downgrade/re-upgrade.
-The controlled adapter was exercised only against fakes. Chromium downloaded under `/tmp`, but the
-minimal host cannot launch it because `libnspr4.so` is unavailable; its default Playwright cache is
-also empty. Docker Compose is unavailable.
+The 2026-08-06 non-Docker host audit remains the source for the complete quality-gate totals above.
+On 2026-08-09, WSL Docker built the API image with Chromium dependencies and started the full stack.
+A stale named candidate volume exposed an older fictional `experience.json`; the file was backed up,
+replaced with the validated repository fixture, and validated from both API and worker containers.
+This was persisted demo-data schema drift, not an incomplete project-spec implementation.
 
 ## Remaining definition-of-done gaps
 
@@ -227,10 +254,9 @@ also empty. Docker Compose is unavailable.
   same-session verifier, expiry, cancellation, and fail-closed UI are complete and truthfully label
   interactive transport unavailable; inventing or exposing a local profile/CDP secret would weaken
   the boundary.
-- Acceptance criterion 23 still requires execution of the committed Playwright browser suite and
-  PostgreSQL/Redis/Compose stack on a glibc/Docker-capable host. This host lacks Docker and the
-  shared libraries needed to launch downloaded Chromium. Deterministic browser-adapter tests,
-  Playwright suite discovery, host axe coverage, SQLite migrations, and all other gates pass.
+- Acceptance criterion 23 still requires execution of the committed Playwright browser suite.
+  PostgreSQL, Redis, Compose startup, local HTTP, and container health are now verified on WSL Docker.
+  The image contains Chromium and its dependencies; run and repair the actual route suite next.
 - The real controlled adapter must receive a security review in its deployment environment before
   its process flag and per-candidate policy are enabled. This build deliberately made no live ATS
   request or final click; doing so would violate the repository safety boundary rather than close
@@ -240,16 +266,20 @@ also empty. Docker Compose is unavailable.
   client, OS-keychain/managed-secret integration, and account authorization not present in this
   workspace. No automatic reply capability exists.
 
-These external conditions block the named pilot and final mandatory verification claims. All independent,
-safe repository implementation and host-runnable verification work is complete.
+External conditions still block the named pilot and final production claims. Independent local work
+remains: simplify the web pipeline, make autonomy prerequisites actionable and evidence-backed, run
+the committed Playwright suite in Docker, and harden persisted candidate-volume schema handling.
 
 ## Resume instructions
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. On a capable host, execute the Playwright suite and Docker Compose/PostgreSQL/Redis checks and
-   record exact results without enabling a live final click.
-4. Supply and security-review a deployment-specific interactive takeover broker, then run the
-   same-session takeover acceptance flow with fictional infrastructure.
-5. Privately onboard the pilot candidate, authorize a Gmail OAuth client through an approved secret
-   store, and execute the human-reviewed pilot acceptance set without committing personal data.
+3. Implement the immediate local UX/autonomy-readiness TODO before expanding production scope.
+4. Run the committed Playwright suite in Docker, repair failures, and record exact evidence without
+   enabling a live final click.
+5. Resolve tested-adapter and dry-run blockers only from passing synthetic evidence; add the explicit
+   user confirmation flow but do not confirm autonomy on the user's behalf.
+6. Supply and security-review a deployment-specific interactive takeover broker before claiming the
+   same-session takeover acceptance criterion.
+7. Privately onboard the pilot candidate and Gmail OAuth only through approved private secret and
+   data handling; never commit personal data.

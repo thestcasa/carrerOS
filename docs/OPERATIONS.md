@@ -118,6 +118,29 @@ sweep observes their deadline; their profile is removed only after its separate 
 Submitted
 immutable archives are retained until intentional candidate deletion.
 
+### Recover stale fictional candidate data
+
+The persistent candidate volume can mask a newer repository fixture after a schema change. Do not
+use `docker compose down -v`: it deletes unrelated persistent state. For the committed fictional
+`example_candidate` only, preserve the stale file, copy the validated repository version, and
+validate it inside the running API container:
+
+```bash
+docker compose cp \
+  api:/app/candidates/example_candidate/experience.json \
+  /tmp/carreros-example-experience-before-repair.json
+docker compose cp \
+  candidates/example_candidate/experience.json \
+  api:/app/candidates/example_candidate/experience.json
+docker compose exec -T api \
+  python -m app validate-candidate --candidate example_candidate
+```
+
+Inspect the backup before removing it. Never overwrite a private or unknown candidate this way:
+export it, back up its database and runtime volumes, then apply an explicit schema migration or
+reviewed manual correction. An experience item without `end_date` is valid only when
+`current: true`.
+
 Back up candidate, PostgreSQL, and runtime volumes together. Application artifacts and browser
 attempt evidence are immutable and hash verified. A failed hash check is a security incident: stop
 automation, preserve the files, and inspect event/security ledgers. Synthetic confirmation does
@@ -128,9 +151,11 @@ Controlled confirmation stores exact pre-click and confirmation PNG/HTML evidenc
 copy-on-write v2 archive, and a backend-confirmed receipt. If confirmation is absent, the
 application is visibly `UNKNOWN_AFTER_CLICK` and the UI says “do not retry.”
 
-The autonomous development environment has no Docker binary, so Compose startup and configuration
-parsing must be verified on a Docker-capable host. Its minimal musl runtime downloads Chromium but
-cannot launch the glibc binary because `libnspr4.so` and other required system libraries are
-absent. The Dockerfile installs the supported browser
-and dependencies; SQLite migrations and non-browser backend/frontend quality gates are the offline
-verification path here.
+WSL Docker verification on 2026-08-09 built the API image and started the health-ordered stack.
+PostgreSQL, Redis, API, and frontend are healthy, and both workers are running; the main
+authenticated fictional candidate views returned HTTP 200. The scheduler started but later exited
+with `idempotency key was used for a different task`; repair and exercise repeated scheduling
+cycles before claiming full default-stack health. CORS preflight passed for both local origins.
+The committed Playwright route/accessibility suite is still pending an actual Docker-backed run;
+keep all provider traffic intercepted and the controlled-submission worker disabled while running
+it.

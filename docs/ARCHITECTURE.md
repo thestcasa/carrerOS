@@ -111,11 +111,13 @@ under `.history/{profile_version}/`.
 
 ## Web control plane
 
-The Next.js/React/TypeScript frontend is a typed API client; it never reads candidate files
-or persistence directly. It provides the overview, candidate selector, structured core
-profile editor, and readiness report. Readiness is shown per domain and capability rather
-than as an aggregate percentage. Blockers link to editable fields, while legal and
-submission controls remain visibly fail-closed.
+The Next.js/React/TypeScript frontend is a typed API client; it never reads candidate files or
+persistence directly. It provides candidate onboarding and readiness, jobs and analysis,
+application materials, synthetic dry runs, human actions, security, settings, analytics, and exact
+submitted-artifact views. Backend state remains authoritative and submission controls remain
+visibly fail-closed. The immediate UX milestone reorganizes these existing capabilities into one
+guided pipeline with plain-language blocker explanations, a recommended next action, and explicit
+separation between evidence-backed checks and user-only confirmation.
 
 ## Persistence
 
@@ -206,10 +208,10 @@ cleared.
 
 ## Deployment foundation
 
-The backend targets Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, and
-PostgreSQL. Redis provides the future durable-work coordination boundary and is currently
-health-checked. Docker Compose starts PostgreSQL, Redis, the API, and the standalone
-Next.js frontend with health-ordered dependencies. The API applies Alembic migrations
+The backend targets Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, and PostgreSQL.
+SQL-backed workflow tasks are the durable queue truth; Redis supplies health-checked coordination
+and heartbeat support. Docker Compose starts PostgreSQL, Redis, the API, workers, scheduler, and
+standalone Next.js frontend with health-ordered dependencies. The API applies Alembic migrations
 before serving. Backend and frontend quality gates run independently.
 
 ## Discovery and job analysis

@@ -2,6 +2,27 @@ Build carrerOS autonomously from the current repository state until the complete
 
 `carreros_project_spec` is the authoritative product specification.
 
+Immediate priority for the next run:
+
+1. Treat the local first-version website as the next incomplete milestone. Simplify the normal user
+   pipeline from candidate readiness through job selection, materials review, safe dry run, human
+   action, and explicit controlled approval. Each stage needs one clear next action and plain language.
+2. Make autonomy blockers actionable but evidence-backed:
+   - `no_tested_ats_adapter` closes only from a durable passing synthetic adapter acceptance record;
+   - `dry_run_acceptance_not_passed` closes only from passing candidate-scoped dry-run/browser evidence;
+   - `explicit_confirmation_missing` gets an explicit unchecked, consequence-aware, audited user flow
+     after the first two prerequisites pass. Never confirm autonomy for the user.
+3. Docker is available in WSL. Repair the scheduler failure
+   `idempotency key was used for a different task`, then re-run Compose and the committed Playwright
+   suite. Record exact health and browser results instead of retaining stale environment claims.
+4. Add non-destructive detection/recovery for stale fictional candidate volumes. Never delete Docker
+   volumes or overwrite unknown candidate data to make validation pass.
+5. Keep manual approval as the first-version default. Do not enable live controlled submission, perform
+   a real final click, contact an employer, or weaken SubmissionGate/readiness checks.
+
+Do not restart completed milestones. Use `docs/AUTONOMOUS_STATUS.md` and
+`docs/AUTONOMOUS_BUILD_PLAN.md` for the exact current checkpoint and acceptance tests.
+
 Before making changes:
 
 1. Read `AGENTS.md`.

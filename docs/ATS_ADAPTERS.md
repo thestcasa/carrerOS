@@ -17,6 +17,11 @@ credentials do not belong in discovery adapters. Final submission uses a distinc
 default-disabled Greenhouse controlled adapter behind `SubmissionGate`; discovery adapters remain
 read-only and cannot obtain a click permit.
 
+An allowed adapter is not automatically a tested adapter. Autonomous readiness clears
+`no_tested_ats_adapter` only from a candidate-scoped, passing synthetic adapter acceptance record
+that binds the adapter version, destination policy, form fingerprint, package inputs, and recorded
+safe outcome. A settings checkbox or agent assertion is not evidence.
+
 Scheduled discovery uses only these public read endpoints:
 
 - `boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`

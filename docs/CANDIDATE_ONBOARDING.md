@@ -20,6 +20,12 @@ the fact itself are approved, active, verified, publicly usable, and non-interna
 projects require an explicitly approved public summary. Sensitive answers also require explicit
 auto-submit permission and a current validity window.
 
+Experience dates are fail-closed: an ongoing role must set `current: true` and omit or null
+`end_date`; a completed role must set `current: false` and provide `end_date`. A persisted candidate
+volume created with an older schema can therefore fail validation even when the repository fixture
+is current. Follow the non-destructive recovery procedure in `OPERATIONS.md`; do not weaken the
+schema or delete volumes blindly.
+
 The profile page and CLI can extract a UTF-8 text CV into a review draft:
 
 ```bash

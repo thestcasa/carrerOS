@@ -17,6 +17,19 @@ applies Alembic migrations. Candidate edits and runtime artifacts use separate p
 Services bind to localhost by default. The default stack intentionally does not start the
 controlled-submission worker.
 
+## First-version review path
+
+Use only the fictional `example_candidate` for the first review. Follow the existing navigation in
+this order: candidate/readiness, jobs, application materials, synthetic dry run, human actions,
+then settings and analytics. The next product milestone consolidates these surfaces into one
+guided, plain-language pipeline with a single recommended next action.
+
+Autonomous mode remains fail-closed. `no_tested_ats_adapter` and
+`dry_run_acceptance_not_passed` must be cleared by backend evidence from synthetic acceptance
+checks; they are not manual toggles. `explicit_confirmation_missing` can be cleared only by an
+audited user confirmation after the other prerequisites pass. No agent may confirm it for the
+user or enable a live final click.
+
 ## Local setup
 
 ```bash
@@ -45,8 +58,8 @@ npm run test:e2e
 
 The web interface covers candidate onboarding/CV import/readiness, discovery and analysis,
 application materials, synthetic dry runs, controlled-approval queuing, human actions, security
-events, settings, analytics, and a
-labelled viewer for each exact immutable submitted artifact. The deterministic Playwright suite
+events, settings, analytics, and a labelled viewer for each exact immutable submitted artifact.
+The deterministic Playwright suite
 intercepts every API request and never contacts or mutates a real provider. The CLI also provides
 `onboard`, local `import-cv`, deterministic
 JSON/YAML `export-configuration`/`import-configuration`, fixture-safe `discover`, bounded

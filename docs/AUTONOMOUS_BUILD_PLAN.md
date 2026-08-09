@@ -24,10 +24,10 @@ default-deny controls and must be verified without sending a live application.
   preserved and integrated instead of recreated.
 - The current runtime is Python 3.14.4. The previously recorded FastAPI `TestClient` hang no
   longer reproduces: the complete 87-test backend suite passes.
-- Docker is unavailable in this environment. The Python Playwright package is installed, but this
-  minimal host lacks a usable Chromium runtime and its shared libraries. The container image now
-  installs Chromium with its dependencies; that path requires verification on a Docker-capable
-  host.
+- WSL Docker is now available. On 2026-08-09 the API image built with Chromium dependencies and the
+  default Compose stack started with healthy API, PostgreSQL, Redis, and frontend services.
+- Live CORS preflight and the main fictional-candidate API views are verified. The committed
+  Playwright route suite still needs a full Docker-backed execution and repair pass.
 - The specification contains real pilot data, but repository safety rules prohibit committing
   it. Pilot behavior will be proven with fictional configuration and documented onboarding
   blockers rather than copying personal data into version control.
@@ -36,6 +36,41 @@ default-deny controls and must be verified without sending a live application.
   binding, a dedicated Compose worker, and regression coverage. Preserve it, run the complete
   quality and migration gates, review it for tenant/safety regressions, and commit it as the next
   coherent checkpoint before starting material-policy work.
+
+## Immediate next milestone - simple website pipeline and autonomy readiness
+
+This milestone is the first priority for the next autonomous run. It produces a usable local first
+version with `example_candidate`; it does not authorize live applications or claim the full external
+pilot definition of done.
+
+1. Map the existing web routes into one guided user journey: select or onboard a candidate, resolve
+   readiness, discover/select a job, generate and review materials, run a safe dry run, resolve human
+   actions, and explicitly approve a controlled action.
+2. Give each stage one obvious primary action, plain-language completion state, and a direct link to
+   the next unresolved prerequisite. Move technical metadata and advanced policy controls behind
+   progressive disclosure without removing auditability.
+3. Replace raw autonomy blocker codes with actionable cards that explain why each blocker exists,
+   what evidence is present, and what safe action can resolve it.
+4. Close `no_tested_ats_adapter` only through a durable passing synthetic adapter acceptance record
+   bound to the adapter and form pattern; never through a blind user toggle or live submission.
+5. Close `dry_run_acceptance_not_passed` only through successful candidate-scoped dry-run evidence
+   and the committed browser acceptance suite.
+6. Add an explicit unchecked confirmation flow after the evidence prerequisites pass. Show limits,
+   emergency-stop behavior, exact scope, and consequences; audit the decision. Never confirm on
+   behalf of the user.
+7. Keep `approval_required` as the demo default and preserve all SubmissionGate, CAPTCHA, isolation,
+   provenance, and immutable-archive boundaries.
+8. Add backend, component, route, accessibility, and Docker-backed browser tests for the guided flow.
+9. Add non-destructive detection and recovery guidance for persisted fictional candidate volumes
+   whose schema is older than the image fixture; never delete or overwrite unknown user candidates.
+
+Acceptance for this milestone:
+
+- A new user can identify the next safe action without reading internal policy codes.
+- The fictional pipeline can be demonstrated end to end through dry run and manual approval.
+- Each autonomy blocker is either backed by exact passing evidence or remains visibly blocked.
+- Docker Compose reports all default services healthy and primary demo routes load successfully.
+- No live final click, employer contact, real candidate data, or fabricated readiness evidence occurs.
 
 ## Execution order
 
@@ -85,7 +120,8 @@ Before expanding UI surface area, close the cross-cutting gaps exposed by the ba
    security events, settings, analytics, correspondence, artifacts, and audit history.
 
 Status: tenant constraints, durable authorization, local auth/CSRF, applications, human actions,
-security, settings, analytics, and artifacts are integrated. Correspondence remains the next item.
+security, settings, analytics, artifacts, correspondence, notifications, and interview packages
+are integrated.
 
 ### Phase 3 — Milestone 4: browser dry run and human action
 
@@ -314,10 +350,11 @@ import command key across uncertain failures.
 5. Commit only coherent passing milestones with Conventional Commit subjects and finish with a
    clean working tree apart from preserved pre-existing user changes.
 
-Status: all host-runnable backend, migration, frontend, security, and deterministic controlled
-submission gates pass. Browser execution and PostgreSQL/Redis/Compose verification require a
-glibc/Docker-capable host. A deployment-specific secure interactive takeover broker is also
-required before the corresponding acceptance criterion can be claimed complete.
+Status: all recorded backend, migration, frontend, security, and deterministic controlled
+submission gates pass. PostgreSQL/Redis/Compose startup and primary HTTP routes are verified on WSL
+Docker. The committed Playwright browser suite still requires an actual Docker-backed execution and
+repair pass. A deployment-specific secure interactive takeover broker is also required before the
+corresponding acceptance criterion can be claimed complete.
 
 ### Current execution checkpoint
 
@@ -344,9 +381,11 @@ required before the corresponding acceptance criterion can be claimed complete.
    adapter, one-use gate permit, durable irreversible-click evidence, no-retry unknown outcome,
    approval/autonomous queueing, exact confirmation archive, API/UI, migration, and regression
    tests without making a live submission.
-8. [Blocked only on external verification] Execute the committed browser suite and Compose stack
-   on a capable host and supply the deployment-specific secure interactive takeover transport.
-   No further safe local implementation can truthfully satisfy those environmental criteria.
+8. [Next local verification] Execute and repair the committed browser suite in Docker with all
+   provider requests intercepted; Compose startup itself is verified.
+9. [Next local product slice] Implement the simple guided website pipeline and evidence-backed
+   autonomy blocker actions defined in the immediate milestone.
+10. [External] Supply and review the deployment-specific secure interactive takeover transport.
 
 Runtime agent routing and the normalized job expansion are complete. The deterministic provider
 receives a minimal scoring-only candidate context, all identities are lifecycle/content/version

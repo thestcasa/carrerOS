@@ -20,13 +20,12 @@
 
 ## Milestone 2: discovery and analysis
 
-The exact next milestone is **Milestone 2 — Discovery, Analysis, and Jobs Inbox** from the
-master specification: Greenhouse, Lever, and Ashby discovery; normalized versioned jobs;
-duplicate detection; security scanning; the provider-backed `JobAnalysisAgent`;
-candidate-configured scoring; fictional pilot company seeds; discovery controls/status; a
-jobs inbox; and a job-detail view with evidence, score, blockers, salary, and source
-verification. It also introduces PostgreSQL repositories and durable scheduling. It does
-not add browser automation or live submission.
+Milestone 2 is complete. It delivered Greenhouse, Lever, and Ashby discovery; normalized
+versioned jobs; duplicate detection; security scanning; the provider-backed `JobAnalysisAgent`;
+candidate-configured scoring; fictional pilot company seeds; discovery controls/status; a jobs
+inbox; and a job-detail view with evidence, score, blockers, salary, and source verification. It
+also introduced PostgreSQL repositories and durable scheduling without granting discovery code
+any browser or submission capability.
 
 ### Milestone 2 progress
 
@@ -87,8 +86,11 @@ not add browser automation or live submission.
   evidence, and terminal no-retry handling for every ambiguous post-boundary outcome.
 - [ ] Complete hosted identity, encrypted secret storage, and deployment-specific interactive
   human-takeover transport.
-- [ ] Add PostgreSQL/Compose, browser E2E, and automated accessibility verification when those
-  external runtimes are available.
+- [x] Verify PostgreSQL/Redis/Compose startup and service health on WSL Docker.
+- [ ] Execute and repair the committed Playwright browser E2E and automated accessibility suite in
+  the Docker runtime.
+- [ ] Simplify the first-version website into a guided pipeline and make every autonomy blocker
+  actionable while preserving evidence-backed, fail-closed authorization.
 
 ## Acceptance criteria for Milestone 1
 
