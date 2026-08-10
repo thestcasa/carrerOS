@@ -3,17 +3,16 @@
 ## Current state
 
 - Build status: **LOCALLY COMPLETE - EXTERNAL DEFINITION-OF-DONE BLOCKERS REMAIN**
-- Active phase: all safe, locally implementable work and quality gates are complete; fresh Compose
-  health, the private pilot, secure takeover transport, hosted hardening, and live-provider review
-  require external state or authorization
-- Branch baseline: `autonomous-build`; CORS and reliable Docker health fixes are published through
-  `90cfb31`
+- Active phase: all safe, locally implementable work and quality gates are complete; the private
+  pilot, secure takeover transport, hosted hardening, and live-provider review require external
+  state or authorization
+- Branch baseline: `autonomous-build`; the guided workflow checkpoint is published through
+  `3fa4aff`.
 - Current local milestone commits: `c0bf6e9` (durable autonomy/scheduler/browser/volume safety) and
   `5257f2d` (guided web workflow and durable verification documentation).
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
-- Preserved pre-existing workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, the
-  untracked root file `how d8c72b0`, and `docs/GUIDA_UTENTE_SITO.md`; these are not staged unless
-  their ownership and intended scope become clear.
+- Preserved pre-existing workspace items: `scripts/run-autonomous-build.sh`, `artifacts/`, and the
+  untracked root file `how d8c72b0`; these are not staged.
 - Current autonomous run began on 2026-08-09 at `37e0d74`. The full specification and applicable
   architecture, implementation, milestone, operations, security, onboarding, adapter, plan, and
   status documents were reread before implementation.
@@ -225,7 +224,7 @@
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **333 pytest tests pass** with six
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **349 pytest tests pass** with six
   non-failing dependency deprecation warnings on Python 3.14.4. With isolated Chromium and extracted
   libraries, the real synthetic browser matrix passes **20/20** across standard, optional-cover,
   multi-step, changed-label, closed-job, timeout, retry, and fail-closed novel-field cases.
@@ -235,17 +234,20 @@
 - Migrations: fresh SQLite upgrade, `alembic check`, newest-revision downgrade, and re-upgrade pass
   through `6a9d4e2f7b10`. Models and Alembic report no missing operations.
 - Scheduler: the profile-version-bound readiness key and retained-task regressions pass in the full
-  suite; a changed task payload no longer reuses the historical key that caused the reported crash.
-- Candidate volume safety: the live repository inspection reports `match`, identical tree hashes,
-  no changed paths, and `mutation_performed=false`; stale, symlinked, and occupied-destination cases
-  pass deterministic tests. The Compose YAML parses as seven services.
-- Docker/Compose: **not executed for this revision**. `/usr/bin/docker` points to the absent
-  `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`; `/mnt/wsl` does not exist and
-  `docker compose version` returns `docker: command not found`. Older health observations are stale.
+  suite; rebuilt Compose cycles run without the historical idempotency crash.
+- Candidate volume safety: the mounted fictional candidate currently differs from the immutable
+  fixture and is preserved with `mutation_performed=false`. Traversal, symlink, excluded-directory,
+  nested-destination, stale, and occupied-destination cases pass deterministic tests.
+- Archive recovery now rejects raw-job-source or agent/model/prompt provenance drift. Injected
+  material agents must declare immutable provenance, and PDF import rejects active content,
+  excessive compressed streams, objects, and decompressed content before accepting extraction.
+- Docker/Compose: the final application images were rebuilt on 2026-08-10 without deleting volumes.
+  All seven services are running; API, frontend, PostgreSQL, and Redis are healthy, and `/`,
+  `/candidates`, and `/health` return HTTP 200.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
-All totals above were executed during the current 2026-08-09 run. The earlier manual stale-fixture
+All totals above were executed during the 2026-08-09 to 2026-08-10 run. The earlier manual stale-fixture
 procedure is superseded: backend containers compare the mounted fictional candidate to an immutable
 image fixture and report hashes/changed paths without mutation. A review copy can be staged only at
 an absent destination, and Docker onboarding uses the immutable fixture rather than the mount.
@@ -262,10 +264,10 @@ an absent destination, and Docker onboarding uses the immutable fixture rather t
 | 8–11 | Pass | Confirmed synthetic submissions have immutable exact artifacts, provenance, and target validation. |
 | 12–15 | Pass | Duplicate identity, candidate isolation, prompt quarantine, and per-candidate disable controls are deterministic and tested. |
 | 16 | Pass locally | Manual approval is the default; autonomy is scoped per tested ATS evidence and user confirmation. No user confirmation was fabricated. |
-| 17 | External blocker | Current Docker CLI bridge is absent, so this revision's one-command stack health cannot be observed. |
+| 17 | Pass locally | A fresh one-command Compose rebuild runs all seven services; health checks and primary routes pass without touching volumes. |
 | 18–21 | Pass | All routine web routes exist; success/readiness stay backend-owned; exact submitted artifacts are available by ID. |
 | 22 | External blocker | Evidence, expiry, handshake, and browser-owned verification exist, but no deployment-specific secure interactive takeover broker is supplied. |
-| 23 | External blocker | All locally executable backend/frontend/browser/accessibility/security gates pass; fresh Compose integration cannot run without Docker. |
+| 23 | Pass locally | Backend, frontend, browser, accessibility, security, migration, and fresh Compose integration gates pass. |
 | 24 | Pass | Committed candidate data and test identities are fictional; no real candidate data was added. |
 
 All mandatory zero-tolerance targets remain zero in deterministic coverage. No live submission was
@@ -283,9 +285,6 @@ attempted, so this run does not claim a production observation against a real AT
   same-session verifier, expiry, cancellation, and fail-closed UI are complete and truthfully label
   interactive transport unavailable; inventing or exposing a local profile/CDP secret would weaken
   the boundary.
-- Acceptance criteria 17 and 23 still require fresh Compose startup and health verification for this
-  revision. Both committed browser suites pass on the host, but Docker Desktop's WSL bridge is absent;
-  YAML parsing is not a substitute for running the seven-service stack.
 - The real controlled adapter must receive a security review in its deployment environment before
   its process flag and per-candidate policy are enabled. This build deliberately made no live ATS
   request or final click; doing so would violate the repository safety boundary rather than close
@@ -303,12 +302,10 @@ candidate-volume handling are complete and verified.
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Restore Docker Desktop's WSL integration, rerun the seven-service Compose stack, and record fresh
-   scheduler and route health without enabling a live final click.
-4. Retain the passing host Playwright result and repeat it in the restored container runtime.
-5. Resolve tested-adapter and dry-run blockers only from passing synthetic evidence; add the explicit
-   user confirmation flow but do not confirm autonomy on the user's behalf.
-6. Supply and security-review a deployment-specific interactive takeover broker before claiming the
+3. Retain the passing Docker and Playwright evidence; do not enable a live final click.
+4. Resolve tested-adapter and dry-run blockers only from passing synthetic evidence; never confirm
+   autonomy on the user's behalf.
+5. Supply and security-review a deployment-specific interactive takeover broker before claiming the
    same-session takeover acceptance criterion.
-7. Privately onboard the pilot candidate and Gmail OAuth only through approved private secret and
+6. Privately onboard the pilot candidate and Gmail OAuth only through approved private secret and
    data handling; never commit personal data.

@@ -4,6 +4,7 @@ from app.domain.enums import ReviewDecision
 from app.materials.contracts import (
     GenerationRequest,
     GenerationResult,
+    MaterialAgentProvenance,
     MaterialReview,
     RenderValidationReport,
     ValidationIssue,
@@ -12,6 +13,12 @@ from app.materials.validation import MaterialValidator
 
 
 class IndependentMaterialReviewer:
+    provenance = MaterialAgentProvenance(
+        agent_version="independent-material-reviewer-v1",
+        model_version="deterministic-material-review-v1",
+        prompt_version="material-review-v1",
+    )
+
     def __init__(self, validator: MaterialValidator | None = None) -> None:
         self._validator = validator or MaterialValidator()
 

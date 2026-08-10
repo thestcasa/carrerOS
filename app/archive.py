@@ -531,9 +531,16 @@ class ApplicationArchiveBuilder:
             if not isinstance(kind, str) or not isinstance(digest, str) or kind in expected:
                 return False
             expected[kind] = digest
+        expected_raw_html_sha256 = (
+            sha256_bytes(data.job_post_raw_html) if data.job_post_raw_html is not None else None
+        )
         return (
             manifest.cv.get("sha256") == expected.get("cv")
             and manifest.cover_letter.get("sha256") == expected.get("cover_letter")
+            and manifest.files.get("job_post/raw.html") == expected_raw_html_sha256
+            and manifest.agent_version == data.agent_version
+            and manifest.model_versions == data.model_versions
+            and manifest.prompt_versions == data.prompt_versions
             and data.browser_pre_submit_screenshot is not None
             and data.browser_final_page_snapshot is not None
             and archived_screenshot == data.browser_pre_submit_screenshot

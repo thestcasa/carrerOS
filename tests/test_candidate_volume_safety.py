@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.candidates.service import CandidateCreateRequest, CandidateService
-from app.candidates.volume_safety import inspect_candidate_volume, stage_candidate_recovery
+from app.candidates.volume_safety import (
+    UnsafeCandidateTreeError,
+    inspect_candidate_volume,
+    stage_candidate_recovery,
+)
 
 
 def test_inspection_reports_difference_without_changing_mounted_data(
@@ -59,6 +63,64 @@ def test_recovery_is_staged_outside_candidate_volume_and_never_overwrites(
     assert staged_profile.is_file()
     with pytest.raises(FileExistsError, match="nothing was overwritten"):
         stage_candidate_recovery(example_candidates_root, destination_root)
+
+
+@pytest.mark.parametrize("candidate_id", ("../example_candidate", "/tmp/example", "UPPER"))
+def test_volume_operations_reject_unsafe_candidate_identifiers(
+    tmp_path: Path, example_candidates_root: Path, candidate_id: str
+) -> None:
+    destination_root = tmp_path / "review-only-recovery"
+    inspection = inspect_candidate_volume(
+        example_candidates_root, example_candidates_root, candidate_id
+    )
+    assert inspection.status == "unsafe"
+    assert inspection.mutation_performed is False
+    with pytest.raises(UnsafeCandidateTreeError, match="safe lowercase identifier"):
+        stage_candidate_recovery(example_candidates_root, destination_root, candidate_id)
+    assert not destination_root.exists()
+
+
+def test_recovery_does_not_copy_ignored_unvalidated_directories(
+    tmp_path: Path, example_candidates_root: Path
+) -> None:
+    fixture_root = tmp_path / "fixtures"
+    shutil.copytree(example_candidates_root, fixture_root)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("fictional private import", encoding="utf-8")
+    imports = fixture_root / "example_candidate" / ".imports"
+    imports.mkdir()
+    (imports / "outside-link").symlink_to(outside)
+    destination_root = tmp_path / "review-only-recovery"
+
+    stage_candidate_recovery(fixture_root, destination_root)
+
+    assert not (destination_root / "example_candidate" / ".imports").exists()
+    assert outside.read_text(encoding="utf-8") == "fictional private import"
+
+
+def test_recovery_rejects_a_validated_tree_symlink_without_leaving_a_partial_copy(
+    tmp_path: Path, example_candidates_root: Path
+) -> None:
+    fixture_root = tmp_path / "fixtures"
+    shutil.copytree(example_candidates_root, fixture_root)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("fictional external content", encoding="utf-8")
+    (fixture_root / "example_candidate" / "unsafe-link").symlink_to(outside)
+    destination_root = tmp_path / "review-only-recovery"
+
+    with pytest.raises(UnsafeCandidateTreeError, match="symlink is not allowed"):
+        stage_candidate_recovery(fixture_root, destination_root)
+
+    assert not (destination_root / "example_candidate").exists()
+
+
+def test_recovery_rejects_a_destination_inside_the_source_tree(
+    example_candidates_root: Path,
+) -> None:
+    nested_destination = example_candidates_root / "example_candidate" / "recovery"
+    with pytest.raises(ValueError, match="outside the candidate source tree"):
+        stage_candidate_recovery(example_candidates_root, nested_destination)
+    assert not nested_destination.exists()
 
 
 def test_onboarding_uses_immutable_fixture_instead_of_stale_mounted_example(

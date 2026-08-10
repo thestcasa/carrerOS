@@ -126,6 +126,73 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
     assert builder.verify(archive_path) is False
 
 
+@pytest.mark.parametrize(
+    "changed_fields",
+    [
+        pytest.param(
+            {"job_post_raw_html": b"<section>Changed fictional provider HTML</section>"},
+            id="raw-job-html-content",
+        ),
+        pytest.param({"job_post_raw_html": None}, id="raw-job-html-presence"),
+        pytest.param({"agent_version": "career-os-agent-contracts-v2"}, id="agent-version"),
+        pytest.param(
+            {"model_versions": {"job_analysis": "changed-model-v2"}},
+            id="model-versions",
+        ),
+        pytest.param(
+            {"prompt_versions": {"job_analysis": "changed-prompt-v2"}},
+            id="prompt-versions",
+        ),
+    ],
+)
+def test_archive_recovery_rejects_changed_raw_source_or_provenance(
+    tmp_path: Path,
+    changed_fields: dict[str, object],
+) -> None:
+    builder = ApplicationArchiveBuilder(tmp_path / "archives")
+    application_id = uuid4()
+    cv_source, cv_sha256 = _rendered_cv(tmp_path / "fictional-cv.pdf")
+    data = ApplicationArchiveData(
+        candidate_snapshot={"candidate_id": "candidate_alpha", "version": 1},
+        job_snapshot={"job_id": "fictional-job-recovery"},
+        scoring_results={"score": 90},
+        generated_document_references=[
+            {
+                "kind": "cv",
+                "sha256": cv_sha256,
+                "storage_uri": str(cv_source),
+                "content_type": "application/pdf",
+                "template_id": "technical_single_page",
+                "template_version": "1.0",
+            }
+        ],
+        answers=[],
+        validation_report={"passed": True},
+        event_log=[],
+        job_post_raw_html=b"<section>Exact fictional provider HTML</section>",
+        browser_pre_submit_screenshot=_BROWSER_PNG,
+        browser_final_page_snapshot=_BROWSER_HTML,
+        agent_version="career-os-agent-contracts-v1",
+        model_versions={"job_analysis": "fictional-model-v1"},
+        prompt_versions={"job_analysis": "fictional-prompt-v1"},
+    )
+    archive_path = builder.create(
+        candidate_id="candidate_alpha",
+        application_id=application_id,
+        data=data,
+    )
+
+    with pytest.raises(ArchiveExistsError):
+        builder.create(
+            candidate_id="candidate_alpha",
+            application_id=application_id,
+            data=data.model_copy(update=changed_fields),
+            recover_existing=True,
+        )
+
+    assert builder.verify(archive_path) is True
+
+
 def test_archive_omits_unavailable_job_capture_instead_of_fabricating_it(
     tmp_path: Path,
 ) -> None:

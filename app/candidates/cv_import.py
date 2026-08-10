@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import io
 import re
+import threading
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -13,6 +14,9 @@ from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
+from pypdf import filters as pdf_filters
+from pypdf.errors import LimitReachedError
+from pypdf.generic import ArrayObject
 
 from app.candidates.models import ClaimFact, Education, EducationItem, Experience, ExperienceItem
 
@@ -25,7 +29,19 @@ MAX_ENTRY_FIELDS = 20
 MAX_FIELD_CHARACTERS = 500
 MAX_PDF_PAGES = 50
 MAX_DOCX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+MAX_PDF_OBJECTS = 10_000
+MAX_PDF_CONTENT_STREAMS_PER_PAGE = 16
+MAX_PDF_DECOMPRESSED_STREAM_BYTES = 1024 * 1024
+MAX_PDF_DECOMPRESSED_CONTENT_BYTES = 8 * 1024 * 1024
 MAX_DOCX_XML_BYTES = 4 * 1024 * 1024
+
+
+_PDF_OBJECT_PATTERN = re.compile(rb"(?m)^[ \t]*\d+[ \t]+\d+[ \t]+obj\b")
+_PDF_ACTIVE_CONTENT_PATTERN = re.compile(
+    rb"/(?:AA|EmbeddedFile|JavaScript|JS|Launch|OpenAction|RichMedia|XFA)\b"
+)
+_PDF_ALLOWED_CONTENT_FILTERS = frozenset({"/ASCII85Decode", "/ASCIIHexDecode", "/FlateDecode"})
+_PDF_EXTRACTION_LOCK = threading.Lock()
 
 
 class CVImportError(ValueError):
@@ -134,17 +150,83 @@ def _extract_text(filename: str, document: bytes) -> str:
 def _extract_pdf_text(document: bytes) -> str:
     if not document.startswith(b"%PDF-"):
         raise CVImportError("PDF CV has an invalid file signature")
+    if len(_PDF_OBJECT_PATTERN.findall(document)) > MAX_PDF_OBJECTS:
+        raise CVImportError("PDF CV exceeds the object safety limit")
+    if _PDF_ACTIVE_CONTENT_PATTERN.search(document):
+        raise CVImportError("PDF CV contains unsupported active content")
     try:
-        reader = PdfReader(io.BytesIO(document), strict=True)
-        if reader.is_encrypted:
-            raise CVImportError("encrypted PDF CVs are not supported")
-        if not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
-            raise CVImportError("PDF CV must contain 1 to 50 pages")
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        with _PDF_EXTRACTION_LOCK:
+            previous_zlib_limit = pdf_filters.ZLIB_MAX_OUTPUT_LENGTH
+            pdf_filters.ZLIB_MAX_OUTPUT_LENGTH = (
+                min(previous_zlib_limit, MAX_PDF_DECOMPRESSED_STREAM_BYTES)
+                if previous_zlib_limit > 0
+                else MAX_PDF_DECOMPRESSED_STREAM_BYTES
+            )
+            try:
+                return _extract_pdf_text_with_limits(document)
+            finally:
+                pdf_filters.ZLIB_MAX_OUTPUT_LENGTH = previous_zlib_limit
     except CVImportError:
         raise
+    except LimitReachedError as exc:
+        raise CVImportError("PDF CV compressed content exceeds the safety limit") from exc
     except Exception as exc:
         raise CVImportError("PDF CV could not be parsed safely") from exc
+
+
+def _extract_pdf_text_with_limits(document: bytes) -> str:
+    reader = PdfReader(io.BytesIO(document), strict=True)
+    if reader.is_encrypted:
+        raise CVImportError("encrypted PDF CVs are not supported")
+    if not 1 <= len(reader.pages) <= MAX_PDF_PAGES:
+        raise CVImportError("PDF CV must contain 1 to 50 pages")
+    trailer_size = reader.trailer.get("/Size")
+    if trailer_size is not None and int(trailer_size) > MAX_PDF_OBJECTS:
+        raise CVImportError("PDF CV exceeds the object safety limit")
+
+    extracted_pages: list[str] = []
+    extracted_characters = 0
+    decompressed_content_bytes = 0
+
+    def enforce_text_limit(text: str, *_args: object) -> None:
+        nonlocal extracted_characters
+        extracted_characters += len(text)
+        if extracted_characters > MAX_EXTRACTED_CHARACTERS:
+            raise CVImportError("CV extracted text exceeds the safety limit")
+
+    for page in reader.pages:
+        raw_contents = page.get("/Contents")
+        if raw_contents is not None:
+            contents = raw_contents.get_object()
+            streams = tuple(contents) if isinstance(contents, ArrayObject) else (contents,)
+            if len(streams) > MAX_PDF_CONTENT_STREAMS_PER_PAGE:
+                raise CVImportError("PDF CV page exceeds the content stream limit")
+            for stream_reference in streams:
+                stream = stream_reference.get_object()
+                filters = stream.get("/Filter")
+                resolved_filters = (
+                    filters.get_object() if hasattr(filters, "get_object") else filters
+                )
+                filter_values = (
+                    tuple(resolved_filters)
+                    if isinstance(resolved_filters, ArrayObject)
+                    else (() if resolved_filters is None else (resolved_filters,))
+                )
+                if any(str(value) not in _PDF_ALLOWED_CONTENT_FILTERS for value in filter_values):
+                    raise CVImportError("PDF CV uses an unsupported content stream filter")
+
+            content_stream = page.get_contents()
+            if content_stream is not None:
+                decompressed_content_bytes += len(content_stream.get_data())
+                if decompressed_content_bytes > MAX_PDF_DECOMPRESSED_CONTENT_BYTES:
+                    raise CVImportError("PDF CV decompressed content exceeds the safety limit")
+
+        page_text = page.extract_text(visitor_text=enforce_text_limit) or ""
+        if len(page_text) > MAX_EXTRACTED_CHARACTERS:
+            raise CVImportError("CV extracted text exceeds the safety limit")
+        extracted_pages.append(page_text)
+
+    return "\n".join(extracted_pages)
 
 
 def _extract_docx_text(document: bytes) -> str:

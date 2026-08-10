@@ -131,6 +131,7 @@ from app.materials.contracts import (
     GenerationResult,
     IndependentReviewAgent,
     JobTarget,
+    MaterialAgentProvenance,
     MaterialReview,
     RenderValidationReport,
 )
@@ -220,8 +221,14 @@ class ApplicationService:
         self._candidates = candidate_service
         self._runtime_root = runtime_root.resolve()
         self._generator = document_generation_agent or DeterministicMaterialGenerator()
+        self._generator_provenance = self._require_agent_provenance(
+            self._generator, "document generation"
+        )
         self._renderer = DeterministicPdfRenderer()
         self._reviewer = independent_review_agent or IndependentMaterialReviewer()
+        self._reviewer_provenance = self._require_agent_provenance(
+            self._reviewer, "independent review"
+        )
         self._tasks = TaskQueue(session_factory)
         self._browser_evidence = BrowserEvidenceStore(self._runtime_root)
         self._archives = ApplicationArchiveBuilder(self._runtime_root / "application_archive")
@@ -235,6 +242,16 @@ class ApplicationService:
         self._human_action_session_verifier = human_action_session_verifier or (
             lambda _candidate_id, _application_id, _session_id, _session_path: False
         )
+
+    @staticmethod
+    def _require_agent_provenance(
+        agent: DocumentGenerationAgent | IndependentReviewAgent,
+        role: str,
+    ) -> MaterialAgentProvenance:
+        try:
+            return MaterialAgentProvenance.model_validate(agent.provenance)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError(f"{role} agent must declare valid immutable provenance") from exc
 
     def list_applications(self, candidate_id: str) -> tuple[ApplicationSummary, ...]:
         self._candidates.get_config(candidate_id)
@@ -5547,17 +5564,22 @@ class ApplicationService:
                 ),
                 browser_pre_submit_screenshot=browser_screenshot,
                 browser_final_page_snapshot=browser_final_page,
+                agent_version=(
+                    "career-os-agent-contracts-v1;"
+                    f"document_generation:{self._generator_provenance.agent_version};"
+                    f"independent_review:{self._reviewer_provenance.agent_version}"
+                ),
                 model_versions={
                     "job_analysis": str(
                         analysis_provenance.get("model") or "deterministic-scoring-v1"
                     ),
-                    "document_generation": "deterministic-material-v2",
-                    "independent_review": "deterministic-material-review-v1",
+                    "document_generation": self._generator_provenance.model_version,
+                    "independent_review": self._reviewer_provenance.model_version,
                 },
                 prompt_versions={
                     "job_analysis": str(analysis_provenance.get("prompt_version") or "1.0"),
-                    "document_generation": "material-policy-v1",
-                    "independent_review": "material-review-v1",
+                    "document_generation": self._generator_provenance.prompt_version,
+                    "independent_review": self._reviewer_provenance.prompt_version,
                 },
             ),
         )

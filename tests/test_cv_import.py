@@ -10,8 +10,15 @@ from html import escape
 from pathlib import Path
 
 import pytest
+from pypdf import PdfWriter
+from pypdf.generic import ArrayObject, DecodedStreamObject, NameObject
 
-from app.candidates.cv_import import CVImportRequest, extract_cv_draft
+from app.candidates.cv_import import (
+    MAX_PDF_CONTENT_STREAMS_PER_PAGE,
+    CVImportError,
+    CVImportRequest,
+    extract_cv_draft,
+)
 from app.candidates.models import ClaimFact
 from app.candidates.service import (
     CandidateCreateRequest,
@@ -80,6 +87,35 @@ def _pdf(text: str) -> bytes:
     )
 
 
+def _pdf_with_content_streams(streams: tuple[bytes, ...]) -> bytes:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    references = []
+    for content in streams:
+        stream = DecodedStreamObject()
+        stream.set_data(content)
+        references.append(writer._add_object(stream.flate_encode()))
+    page[NameObject("/Contents")] = ArrayObject(references)
+    result = io.BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
+def _pdf_with_javascript() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.add_js("app.alert('fictional')")
+    result = io.BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
+def _pdf_request(content: bytes) -> CVImportRequest:
+    return CVImportRequest(
+        filename="fictional-cv.pdf", content_base64=base64.b64encode(content).decode()
+    )
+
+
 @pytest.mark.parametrize(
     ("filename", "content"),
     [("fictional-cv.pdf", _pdf(FICTIONAL_CV)), ("fictional-cv.docx", _docx(FICTIONAL_CV))],
@@ -95,6 +131,30 @@ def test_cv_import_extracts_pdf_and_docx_as_unapproved_drafts(
     assert len(draft.education.items) == 1
     assert len(draft.experience.items) == 1
     assert draft.approval_required is True
+
+
+def test_cv_import_rejects_compressed_pdf_expansion_during_extraction() -> None:
+    compressed_pdf = _pdf_with_content_streams((b" " * (2 * 1024 * 1024),))
+    assert len(compressed_pdf) < 20_000
+
+    with pytest.raises(CVImportError, match="compressed content exceeds"):
+        extract_cv_draft("example_candidate", _pdf_request(compressed_pdf))
+
+
+def test_cv_import_rejects_pdf_active_content_before_extraction() -> None:
+    active_pdf = _pdf_with_javascript()
+
+    with pytest.raises(CVImportError, match="unsupported active content"):
+        extract_cv_draft("example_candidate", _pdf_request(active_pdf))
+
+
+def test_cv_import_rejects_excessive_pdf_content_streams_before_extraction() -> None:
+    fragmented_pdf = _pdf_with_content_streams(
+        tuple(b"q Q" for _ in range(MAX_PDF_CONTENT_STREAMS_PER_PAGE + 1))
+    )
+
+    with pytest.raises(CVImportError, match="content stream limit"):
+        extract_cv_draft("example_candidate", _pdf_request(fragmented_pdf))
 
 
 def test_cv_import_persists_only_unapproved_extraction_and_applies_idempotently(

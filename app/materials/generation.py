@@ -11,6 +11,7 @@ from app.materials.contracts import (
     GeneratedDocument,
     GenerationRequest,
     GenerationResult,
+    MaterialAgentProvenance,
 )
 
 
@@ -20,6 +21,12 @@ def _sha256(value: str) -> str:
 
 class DeterministicMaterialGenerator:
     """Renders only supplied approved facts; it never invents or expands claims."""
+
+    provenance = MaterialAgentProvenance(
+        agent_version="deterministic-material-generator-v2",
+        model_version="deterministic-material-v2",
+        prompt_version="material-policy-v1",
+    )
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         facts = tuple(sorted(request.approved_facts, key=lambda fact: fact.fact_id))

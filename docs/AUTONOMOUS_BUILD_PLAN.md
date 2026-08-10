@@ -102,13 +102,13 @@ milestones or stage those paths.
    review for secrets/real data/scope regressions, update durable status, and commit each coherent
    passing milestone.
 
-Execution result: steps 1–6 are complete with deterministic regression coverage. The host browser
-matrix passes 20/20 and the committed frontend Playwright suite passes 13/13. Step 7 is complete for
-the scheduler logic but externally blocked for fresh Compose health because the WSL Docker bridge is
-absent. Step 8 is complete for all locally executable gates. The only remaining definition-of-done
+Execution result: steps 1–8 are complete with deterministic regression coverage. The browser matrix
+passes 20/20, the frontend Playwright suite passes 13/13, and the final application images run in
+the seven-service Compose stack with healthy primary routes and repeated scheduler processing.
+The only remaining definition-of-done
 work requires external private pilot data and human review, deployment identity/encryption and
 secure interactive takeover infrastructure, live-provider credentials/security review, or a
-restored Docker runtime; none may be fabricated or weakened in repository code.
+real provider environment; none may be fabricated or weakened in repository code.
 
 Reconciled implementation decisions:
 
@@ -433,8 +433,8 @@ corresponding acceptance criterion can be claimed complete.
    adapter, one-use gate permit, durable irreversible-click evidence, no-retry unknown outcome,
    approval/autonomous queueing, exact confirmation archive, API/UI, migration, and regression
    tests without making a live submission.
-8. [Complete locally; Docker externally blocked] Execute and repair both committed browser suites
-   with all provider requests intercepted. Fresh Compose health awaits a restored WSL Docker bridge.
+8. [Complete] Execute and repair both committed browser suites with all provider requests
+   intercepted, then rebuild and health-check the seven-service Compose stack.
 9. [Complete] Implement the simple guided website pipeline and evidence-backed autonomy blocker
    actions defined in the immediate milestone.
 10. [External] Supply and review the deployment-specific secure interactive takeover transport.

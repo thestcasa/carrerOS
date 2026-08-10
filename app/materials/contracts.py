@@ -155,14 +155,26 @@ class DraftArtifactManifest(MaterialModel):
     payload_sha256: Sha256
 
 
+class MaterialAgentProvenance(MaterialModel):
+    """Immutable identity recorded for every material-generation boundary."""
+
+    agent_version: str = Field(min_length=1, max_length=128)
+    model_version: str = Field(min_length=1, max_length=128)
+    prompt_version: str = Field(min_length=1, max_length=128)
+
+
 class DocumentGenerationAgent(Protocol):
     """Runtime material boundary; implementations have no browser or submission capability."""
+
+    provenance: MaterialAgentProvenance
 
     def generate(self, request: GenerationRequest) -> GenerationResult: ...
 
 
 class IndependentReviewAgent(Protocol):
     """Independent fail-closed review boundary over generated content and render evidence."""
+
+    provenance: MaterialAgentProvenance
 
     def review(
         self,
