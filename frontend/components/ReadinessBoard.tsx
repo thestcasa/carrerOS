@@ -3,6 +3,7 @@ import type { ReadinessReport } from "@/lib/types";
 import { StatusPill } from "./StatusPill";
 
 const editorSections = new Set([
+  "candidate_controls",
   "identity",
   "biography",
   "education",
@@ -23,6 +24,12 @@ const editorSections = new Set([
   "publications",
   "notification_rules",
 ]);
+
+function editorSection(fieldPath: string): string | null {
+  const root = fieldPath.split(".")[0];
+  if (root === "manifest") return "candidate_controls";
+  return editorSections.has(root) ? root : null;
+}
 
 function blockerLabel(blocker: string) {
   return blocker.replaceAll("_", " ");
@@ -72,7 +79,7 @@ export function ReadinessBoard({
         </div>
         <div className="domain-list">
           {report.domains.map((domain) => {
-            const editable = editorSections.has(domain.field_path);
+            const editable = editorSection(domain.field_path);
             return (
               <article className="domain-row" key={domain.domain}>
                 <div>
@@ -83,7 +90,7 @@ export function ReadinessBoard({
                 <div className="domain-action">
                   <StatusPill status={domain.status} />
                   {editable ? (
-                    <Link href={`/candidates/${candidateId}/profile?section=${domain.field_path}`}>
+                    <Link href={`/candidates/${candidateId}/profile?section=${editable}`}>
                       Edit domain <span aria-hidden="true">→</span>
                     </Link>
                   ) : null}
@@ -113,7 +120,13 @@ export function ReadinessBoard({
         ) : (
           <Link
             className="button primary"
-            href={`/candidates/${candidateId}/profile`}
+            href={`/candidates/${candidateId}/profile?section=${encodeURIComponent(
+              editorSection(
+                report.domains.find((domain) =>
+                  ["BLOCKED", "NOT_CONFIGURED"].includes(domain.status),
+                )?.field_path ?? "identity",
+              ) ?? "identity",
+            )}`}
           >
             Edit candidate profile
           </Link>

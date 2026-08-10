@@ -5,8 +5,8 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
-COPY candidates ./candidate-fixtures
-COPY candidates ./candidates
+COPY candidates/example_candidate ./candidate-fixtures/example_candidate
+COPY candidates/example_candidate ./candidates/example_candidate
 RUN pip install --no-cache-dir .
 RUN playwright install --with-deps chromium
 

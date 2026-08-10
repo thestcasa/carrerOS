@@ -53,4 +53,37 @@ describe("ReadinessBoard", () => {
       "/candidates/example_candidate/profile?section=legal_status",
     );
   });
+
+  it("links manifest approvals directly to the readiness controls", () => {
+    const manifestReport: ReadinessReport = {
+      ...report,
+      domains: [
+        {
+          domain: "profile",
+          label: "Profile approval",
+          status: "BLOCKED",
+          field_path: "manifest",
+          issues: [
+            {
+              code: "profile_not_approved",
+              message: "Candidate profile requires explicit approval.",
+              domain: "profile",
+              field_path: "manifest.validation.profile_approved",
+              severity: "blocking",
+            },
+          ],
+        },
+      ],
+    };
+    render(<ReadinessBoard candidateId="example_candidate" report={manifestReport} />);
+
+    const links = screen.getAllByRole("link");
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute(
+        "href",
+        "/candidates/example_candidate/profile?section=candidate_controls",
+      );
+    }
+  });
 });

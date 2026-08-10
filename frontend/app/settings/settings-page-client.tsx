@@ -12,7 +12,7 @@ function commandKey(prefix: string) {
 }
 
 const blockerLabels: Record<string, string> = {
-  candidate_profile_not_approved: "Approve the candidate profile before enabling autonomy.",
+  profile_not_approved: "Approve the candidate profile before enabling autonomy.",
   legal_status_not_approved: "Review and approve the legal and work-authorization answers.",
   automatic_answers_not_approved: "Approve the reusable application answers.",
   cv_templates_not_approved: "Approve the CV templates used for applications.",
@@ -23,6 +23,23 @@ const blockerLabels: Record<string, string> = {
   explicit_confirmation_missing: "Read the consequences and record your own confirmation.",
   emergency_stop_active: "Review the emergency stop before enabling any automation.",
 };
+
+function blockerHref(candidateId: string, code: string): string | null {
+  const encodedCandidate = encodeURIComponent(candidateId);
+  if (
+    [
+      "profile_not_approved",
+      "legal_status_not_approved",
+      "automatic_answers_not_approved",
+      "cv_templates_not_approved",
+      "automatic_submission_disabled",
+    ].includes(code)
+  ) {
+    return `/candidates/${encodedCandidate}/profile?section=candidate_controls`;
+  }
+  if (code === "no_allowed_ats_adapter") return "#allowed-ats-adapters";
+  return null;
+}
 
 function blockerLabel(code: string): string {
   return blockerLabels[code] ?? "Resolve this backend readiness requirement before continuing.";
@@ -212,6 +229,16 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
       setSaving(false);
     }
   }
+  const confirmationPrerequisitesBlocked = settings?.autonomy_blockers.some(
+    (blocker) => blocker !== "explicit_confirmation_missing",
+  ) ?? true;
+  const effectiveMode = !settings
+    ? "disabled"
+    : settings.emergency_stopped
+      ? "disabled"
+      : settings.automation_mode === "autonomous" && settings.autonomy_blockers.length
+        ? "approval_required"
+        : settings.automation_mode;
   return (
     <div className="page-wrap">
       <header className="page-header">
@@ -233,10 +260,16 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
             <div className="panel-title">
               <div>
                 <p className="eyebrow">Current mode</p>
-                <h2>{settings.automation_mode.replaceAll("_", " ")}</h2>
+                <h2>{effectiveMode.replaceAll("_", " ")}</h2>
+                {effectiveMode !== settings.automation_mode ? (
+                  <p className="form-message warning">
+                    Requested mode: {settings.automation_mode.replaceAll("_", " ")}. The effective
+                    mode is safely reduced while blockers remain.
+                  </p>
+                ) : null}
               </div>
               <StatusPill
-                status={settings.emergency_stopped ? "BLOCKED" : "READY"}
+                status={settings.emergency_stopped || effectiveMode !== settings.automation_mode ? "BLOCKED" : "READY"}
               />
             </div>
             <div className="mode-grid">
@@ -290,6 +323,15 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
                       {!prerequisite.passed && prerequisite.code !== "explicit_confirmation_missing" ? (
                         <a href={prerequisite.action_href}>Open the safe next step →</a>
                       ) : null}
+                      {prerequisite.evidence_id || prerequisite.evidenced_at ? (
+                        <details>
+                          <summary>Evidence details</summary>
+                          <dl className="compact-metadata">
+                            <div><dt>Evidence ID</dt><dd><code>{prerequisite.evidence_id ?? "Not recorded"}</code></dd></div>
+                            <div><dt>Recorded</dt><dd>{prerequisite.evidenced_at ? new Date(prerequisite.evidenced_at).toLocaleString() : "Not recorded"}</dd></div>
+                          </dl>
+                        </details>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -310,7 +352,12 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
                       !settings.autonomy_prerequisites.some((item) => item.code === blocker),
                     )
                     .map((blocker) => (
-                      <li key={blocker}>{blockerLabel(blocker)}</li>
+                      <li key={blocker}>
+                        {blockerLabel(blocker)}{" "}
+                        {blockerHref(candidateId, blocker) ? (
+                          <a href={blockerHref(candidateId, blocker)!}>Resolve this blocker →</a>
+                        ) : null}
+                      </li>
                     ))}
                 </ul>
               </div>
@@ -322,14 +369,19 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
                 pattern, within the displayed daily, weekly, and company limits. The emergency
                 stop prevents new authorizations, but it cannot undo an already armed final click.
               </p>
+              <dl className="compact-metadata">
+                <div><dt>Tested adapter scope</dt><dd>{settings.tested_ats_adapters.join(", ") || "No tested adapter"}</dd></div>
+                <div><dt>Daily limit</dt><dd>{settings.maximum_applications_per_day}</dd></div>
+                <div><dt>Weekly limit</dt><dd>{settings.maximum_applications_per_week}</dd></div>
+                <div><dt>Per company / 30 days</dt><dd>{settings.maximum_applications_per_company_30_days}</dd></div>
+              </dl>
               <label className="boolean-field">
                 <input
                   type="checkbox"
                   checked={confirmationChecked}
                   disabled={
                     saving ||
-                    !settings.tested_ats_adapters.length ||
-                    !settings.dry_run_acceptance_passed ||
+                    confirmationPrerequisitesBlocked ||
                     settings.explicit_autonomy_confirmation
                   }
                   onChange={(event) => setConfirmationChecked(event.target.checked)}
@@ -371,7 +423,7 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
               />
               Enable read-only scheduled discovery
             </label>
-            <h3>Allowed ATS adapters</h3>
+            <h3 id="allowed-ats-adapters">Allowed ATS adapters</h3>
             {(["greenhouse", "lever", "ashby"] as const).map((adapter) => (
               <label className="boolean-field" key={adapter}>
                 <input

@@ -29,6 +29,7 @@ class GreenhouseFormInspection(SubmissionContract):
 
 class ControlledAuthorizationRequest(SubmissionContract):
     approval_acknowledged: bool
+    consequence_version: Literal["controlled-approval-consequences-v1"]
 
     @model_validator(mode="after")
     def approval_is_explicit(self) -> ControlledAuthorizationRequest:

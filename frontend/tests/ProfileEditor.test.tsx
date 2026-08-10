@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { CandidateDetail } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
-  api: { updateSection: vi.fn() },
+  api: { updateSection: vi.fn(), updateCandidateControls: vi.fn() },
   ApiError: class ApiError extends Error {},
 }));
 
@@ -36,6 +36,24 @@ describe("ProfileEditor", () => {
       previous_version: "1.0.0",
       profile_version: "1.0.1",
       section: "certifications",
+      readiness: detail.readiness,
+    });
+    vi.mocked(api.updateCandidateControls).mockResolvedValue({
+      candidate_id: "example_candidate",
+      previous_version: "1.0.0",
+      profile_version: "1.0.1",
+      workflow: {
+        discovery_enabled: true,
+        automatic_submission_enabled: true,
+        email_tracking_enabled: false,
+        notifications_enabled: true,
+      },
+      validation: {
+        profile_approved: true,
+        legal_status_approved: true,
+        automatic_answers_approved: true,
+        cv_templates_approved: true,
+      },
       readiness: detail.readiness,
     });
   });
@@ -115,5 +133,51 @@ describe("ProfileEditor", () => {
 
     expect(screen.getByRole("textbox", { name: "Title" })).toBeVisible();
     expect((screen.getByRole("textbox", { name: "Id" }) as HTMLInputElement).value).toMatch(/^new_/);
+  });
+
+  it("requires an explicit candidate action to enable submission workflows", async () => {
+    const controlsDetail = {
+      ...detail,
+      config: {
+        manifest: {
+          workflow: {
+            discovery_enabled: true,
+            automatic_submission_enabled: false,
+            email_tracking_enabled: false,
+            notifications_enabled: true,
+          },
+          validation: {
+            profile_approved: false,
+            legal_status_approved: false,
+            automatic_answers_approved: false,
+            cv_templates_approved: false,
+          },
+        },
+      },
+    } as CandidateDetail;
+    render(<ProfileEditor detail={controlsDetail} initialSection="candidate_controls" />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Profile approved/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Automatic submission enabled/ }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Acknowledge automatic submission consequences/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+
+    await waitFor(() =>
+      expect(api.updateCandidateControls).toHaveBeenCalledWith(
+        "example_candidate",
+        expect.objectContaining({
+          workflow: expect.objectContaining({ automatic_submission_enabled: true }),
+          validation: expect.objectContaining({ profile_approved: true }),
+          acknowledge_automatic_submission_consequences: true,
+        }),
+        expect.stringMatching(/^update-profile-/),
+      ),
+    );
+    expect(api.updateSection).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/does not enable autonomous mode, confirm autonomy, or bypass manual approval/),
+    ).toBeVisible();
   });
 });

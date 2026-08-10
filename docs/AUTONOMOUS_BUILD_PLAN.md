@@ -110,6 +110,35 @@ work requires external private pilot data and human review, deployment identity/
 secure interactive takeover infrastructure, live-provider credentials/security review, or a
 real provider environment; none may be fabricated or weakened in repository code.
 
+### 2026-08-10 resumption audit
+
+The run resumed at `d261afd` without restarting the completed guided-flow milestone. The tracked
+tree is clean; `artifacts/`, `scripts/run-autonomous-build.sh`, and `how d8c72b0` remain preserved
+user-owned untracked paths. The baseline backend format, lint, strict typing, and non-browser tests
+pass; the frontend lint, strict typing, 78 Vitest tests, and production build pass.
+
+The next coherent local hardening slice is to scope the Docker image candidate fixture copy to the
+committed `example_candidate` package. Copying the whole local `candidates/` directory could embed
+an untracked private candidate in `/app/candidate-fixtures`, where runtime volume masking would not
+hide it. Add a static build-context regression, then rerun all quality, migration, scheduler,
+volume-safety, and host browser gates.
+
+Result: the image and build context now admit only the tracked fictional package. The website's
+guided-state selection is deterministic for multiple and terminal applications, readiness/workflow
+controls are editable through a versioned candidate command, allowed-adapter setup precedes synthetic
+acceptance, autonomy confirmation remains unavailable while any prerequisite is blocked, and both
+user approvals record versioned consequence evidence. Administrative audit rows reject database
+updates. All 356 backend tests, 87 frontend unit tests, 20 backend browser cases, and 13 frontend
+Playwright scenarios pass; fresh migration upgrade/check/downgrade/re-upgrade passes at
+`8e4b6c1d9a20`.
+
+Docker cannot currently be invoked from this execution environment: `/usr/bin/docker` points to
+the absent `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`. Do not retain a current healthy-stack
+claim from an earlier session. If the bridge becomes available, rebuild without deleting volumes,
+observe every default service across repeated scheduler cycles, inspect the mounted fictional
+volume non-destructively, and run the committed Playwright suite. Otherwise record this exact
+external verification limitation and continue all independent work.
+
 Reconciled implementation decisions:
 
 - Generic settings updates will no longer accept tested-adapter, dry-run-acceptance, or explicit

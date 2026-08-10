@@ -750,6 +750,7 @@ class ApplicationService:
             candidate_id,
             application_id,
             approval_acknowledged=request.approval_acknowledged,
+            consequence_version=request.consequence_version,
             idempotency_key=idempotency_key,
         )
 
@@ -759,6 +760,7 @@ class ApplicationService:
         application_id: UUID,
         *,
         approval_acknowledged: bool,
+        consequence_version: str | None,
         idempotency_key: str,
     ) -> AuthorizationView:
 
@@ -820,6 +822,11 @@ class ApplicationService:
                         "authorization_id": str(record.authorization_id),
                         "adapter": record.adapter,
                         "target_url_sha256": target_sha256,
+                        "approval_actor": (
+                            "local-user" if approval_acknowledged else "autonomous-policy"
+                        ),
+                        "approval_acknowledged": approval_acknowledged,
+                        "consequence_version": consequence_version,
                     },
                 )
             return view
@@ -868,6 +875,7 @@ class ApplicationService:
                     candidate_id,
                     application_id,
                     approval_acknowledged=False,
+                    consequence_version=None,
                     idempotency_key=f"autonomous-controlled-authorize:{key_suffix}",
                 )
                 queued.append(
@@ -7308,6 +7316,19 @@ class ApplicationService:
         encoded_candidate = candidate_id
         definitions = (
             (
+                "no_allowed_ats_adapter",
+                "Allow one ATS adapter",
+                (
+                    "A tested adapter can close autonomy readiness only when the candidate has "
+                    "explicitly allowed that ATS platform."
+                ),
+                "Choose the ATS adapters that may be used before running an acceptance check.",
+                f"/settings?candidate_id={encoded_candidate}#allowed-ats-adapters",
+                None,
+                None,
+                None,
+            ),
+            (
                 "no_tested_ats_adapter",
                 "Test one ATS adapter safely",
                 (
@@ -7423,6 +7444,8 @@ class ApplicationService:
             blockers.append("cv_templates_not_approved")
         if not config.manifest.workflow.automatic_submission_enabled:
             blockers.append("automatic_submission_disabled")
+        if not record.allowed_ats_adapters:
+            blockers.append("no_allowed_ats_adapter")
         if not tested_adapters:
             blockers.append("no_tested_ats_adapter")
         if not dry_run_acceptance_passed:

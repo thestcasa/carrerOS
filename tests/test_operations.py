@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from pydantic import ValidationError
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.enums import ApplicationState
@@ -286,3 +290,46 @@ def test_notifications_digest_and_analytics_are_candidate_neutral_projections() 
     assert overview["applications"] == 2
     assert overview["average_score"] == 80.0
     assert overview["by_role_category"] == {"ai_ml_adjacent": 1, "ai_ml_core": 1}
+
+
+def test_migrated_administrative_audit_records_reject_updates(
+    tmp_path: Path, project_root: Path
+) -> None:
+    database_path = tmp_path / "administrative-audit.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = Config(project_root / "alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO administrative_audit_records (
+                    id, actor_id, event_type, details, previous_hash,
+                    event_hash, occurred_at, candidate_id
+                ) VALUES (
+                    :id, :actor_id, :event_type, :details, :previous_hash,
+                    :event_hash, :occurred_at, :candidate_id
+                )
+                """
+            ),
+            {
+                "id": "00000000000000000000000000000001",
+                "actor_id": "local-user",
+                "event_type": "AUTONOMY_CONFIRMATION_RECORDED",
+                "details": "{}",
+                "previous_hash": None,
+                "event_hash": "a" * 64,
+                "occurred_at": "2026-08-10 10:00:00",
+                "candidate_id": "example_candidate",
+            },
+        )
+    with pytest.raises(IntegrityError, match="append-only"), engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE administrative_audit_records SET event_type = :event_type "
+                "WHERE event_hash = :event_hash"
+            ),
+            {"event_type": "TAMPERED", "event_hash": "a" * 64},
+        )

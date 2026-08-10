@@ -219,6 +219,42 @@ describe("ApplicationPageClient", () => {
     expect(screen.queryByText(/^confirmed$/i)).not.toBeInTheDocument();
   });
 
+  it("requires Greenhouse to be allowed before offering its acceptance check", async () => {
+    vi.mocked(api.settings).mockResolvedValue({
+      candidate_id: "example_candidate",
+      automation_mode: "approval_required",
+      discovery_enabled: true,
+      emergency_stopped: false,
+      allowed_ats_adapters: [],
+      tested_ats_adapters: [],
+      dry_run_acceptance_passed: true,
+      explicit_autonomy_confirmation: false,
+      maximum_applications_per_day: 5,
+      maximum_applications_per_week: 20,
+      maximum_applications_per_company_30_days: 3,
+      browser_session_retention_days: 30,
+      autonomy_blockers: ["no_allowed_ats_adapter", "no_tested_ats_adapter"],
+      autonomy_prerequisites: [],
+      controlled_submission_enabled: false,
+    });
+    vi.mocked(api.application).mockReset();
+    vi.mocked(api.application).mockResolvedValue(ready);
+    render(
+      <ApplicationPageClient
+        candidateId="example_candidate"
+        applicationId={ready.application_id}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "Allow Greenhouse before testing it" }),
+    ).toHaveAttribute("href", "/settings?candidate_id=example_candidate#allowed-ats-adapters");
+    expect(
+      screen.queryByRole("button", { name: "Run safe Greenhouse adapter check" }),
+    ).toBeNull();
+    expect(api.runAdapterAcceptance).not.toHaveBeenCalled();
+  });
+
   it("reuses authorization and submission keys after an uncertain failure", async () => {
     vi.mocked(api.submitSynthetic)
       .mockRejectedValueOnce(new Error("connection interrupted"))

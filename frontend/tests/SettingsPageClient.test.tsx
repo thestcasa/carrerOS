@@ -208,4 +208,39 @@ describe("SettingsPageClient", () => {
       vi.mocked(api.updateSettings).mock.calls[0][1],
     );
   });
+
+  it("shows a blocked effective mode and direct fix when autonomous scope drifts", async () => {
+    vi.mocked(api.settings).mockResolvedValue({
+      ...(await api.settings("example_candidate")),
+      automation_mode: "autonomous",
+      tested_ats_adapters: ["greenhouse"],
+      dry_run_acceptance_passed: true,
+      autonomy_blockers: ["profile_not_approved", "explicit_confirmation_missing"],
+      autonomy_prerequisites: [
+        {
+          code: "explicit_confirmation_missing",
+          title: "Confirm the autonomous scope yourself",
+          explanation: "Only the user can confirm this exact scope.",
+          passed: false,
+          resolution: "Resolve configuration first.",
+          action_href: "#autonomy-confirmation",
+          evidence_id: null,
+          evidence_summary: null,
+          evidenced_at: null,
+        },
+      ],
+    });
+    render(<SettingsPageClient candidateId="example_candidate" />);
+
+    expect(await screen.findByRole("heading", { name: "approval required" })).toBeVisible();
+    expect(screen.getByText(/Requested mode: autonomous/)).toBeVisible();
+    expect(screen.getByText("Approve the candidate profile before enabling autonomy.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Resolve this blocker →" })).toHaveAttribute(
+      "href",
+      "/candidates/example_candidate/profile?section=candidate_controls",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /understand these consequences/i }),
+    ).toBeDisabled();
+  });
 });

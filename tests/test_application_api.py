@@ -344,7 +344,10 @@ def test_authenticated_api_enforces_candidate_scope_csrf_and_backend_confirmatio
             f"/api/applications/{application_id}/controlled-authorize"
             "?candidate_id=example_candidate",
             headers={**mutation, "Idempotency-Key": "api-controlled-authorize-0001"},
-            json={"approval_acknowledged": True},
+            json={
+                "approval_acknowledged": True,
+                "consequence_version": "controlled-approval-consequences-v1",
+            },
         )
         assert controlled_denied.status_code == 409
         assert controlled_denied.json()["error"]["message"] == ("controlled submission is disabled")
@@ -504,3 +507,30 @@ def test_settings_api_rejects_self_asserted_autonomy_evidence(
         )
 
     assert response.status_code == 422
+
+
+def test_autonomy_confirmation_api_rejects_a_false_acknowledgement(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    client, _job_id, _applications, _task_queue = _client(
+        copied_candidates_root, tmp_path / "runtime-false-autonomy-ack"
+    )
+    with client:
+        login = client.post(
+            "/api/auth/local-session", json={"candidate_id": "example_candidate"}
+        ).json()
+        response = client.post(
+            "/api/automation/confirm?candidate_id=example_candidate",
+            headers={
+                "Authorization": f"Bearer {login['session_token']}",
+                "X-CSRF-Token": login["csrf_token"],
+                "Idempotency-Key": "false-autonomy-acknowledgement",
+            },
+            json={
+                "acknowledged": False,
+                "consequence_version": "autonomy-consequences-v1",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_validation_failed"

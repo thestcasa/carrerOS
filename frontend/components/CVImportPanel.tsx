@@ -101,9 +101,9 @@ export function CVImportPanel({
         </div>
       </div>
       <p>
-        UTF-8 text is extracted locally. The source file is not retained, and every imported fact
-        remains restricted and unapproved until you review it. PDF stays disabled until its parser
-        can run in a resource-isolated worker.
+        Bounded TXT, PDF, and DOCX text is extracted locally. The source file is not retained, and
+        every imported fact remains restricted and unapproved until you review it. Encrypted,
+        active-content, oversized, or excessively compressed documents fail closed.
       </p>
       <label className="form-field">
         <span>CV file</span>

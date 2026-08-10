@@ -633,13 +633,22 @@ export function ApplicationPageClient({
         {application.state === "ready_to_submit" &&
         settings &&
         !settings.tested_ats_adapters.includes("greenhouse") ? (
-          <button
-            className="button secondary"
-            disabled={busy}
-            onClick={() => void acceptAdapter()}
-          >
-            Run safe Greenhouse adapter check
-          </button>
+          settings.allowed_ats_adapters.includes("greenhouse") ? (
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => void acceptAdapter()}
+            >
+              Run safe Greenhouse adapter check
+            </button>
+          ) : (
+            <Link
+              className="button secondary"
+              href={`/settings?candidate_id=${encodeURIComponent(candidateId)}#allowed-ats-adapters`}
+            >
+              Allow Greenhouse before testing it
+            </Link>
+          )
         ) : null}
         {nextAction ? (
           <button

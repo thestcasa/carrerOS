@@ -61,6 +61,8 @@ from app.candidates.service import (
     CandidateDetail,
     CandidateIdempotencyError,
     CandidateImportRequest,
+    CandidateManifestControlsResult,
+    CandidateManifestControlsUpdate,
     CandidateNotFoundError,
     CandidateSectionUpdate,
     CandidateService,
@@ -267,6 +269,15 @@ def _candidate_router() -> APIRouter:
         idempotency_key: IdempotencyKey,
     ) -> CandidateUpdateResult:
         return service.update_section(candidate_id, update, idempotency_key)
+
+    @router.patch("/{candidate_id}/controls", response_model=CandidateManifestControlsResult)
+    def update_candidate_controls(
+        candidate_id: str,
+        update: CandidateManifestControlsUpdate,
+        service: CandidateServiceDependency,
+        idempotency_key: IdempotencyKey,
+    ) -> CandidateManifestControlsResult:
+        return service.update_manifest_controls(candidate_id, update, idempotency_key)
 
     @router.post("/{candidate_id}/validate", response_model=CandidateValidationReport)
     def validate_candidate(

@@ -2,12 +2,11 @@
 
 ## Current state
 
-- Build status: **LOCALLY COMPLETE - EXTERNAL DEFINITION-OF-DONE BLOCKERS REMAIN**
-- Active phase: all safe, locally implementable work and quality gates are complete; the private
-  pilot, secure takeover transport, hosted hardening, and live-provider review require external
-  state or authorization
-- Branch baseline: `autonomous-build`; the guided workflow checkpoint is published through
-  `3fa4aff`.
+- Build status: **LOCAL WEBSITE HARDENING VERIFIED; DEFINITION-OF-DONE AUDIT CONTINUES**
+- Active phase: commit the verified guided-workflow/privacy slice, then continue the remaining
+  locally implementable specification audit without weakening external pilot or deployment gates
+- Branch baseline: `autonomous-build` at `d261afd`; the guided workflow checkpoint is published
+  through `3fa4aff` and later local security/runtime hardening is included through `d261afd`.
 - Current local milestone commits: `c0bf6e9` (durable autonomy/scheduler/browser/volume safety) and
   `5257f2d` (guided web workflow and durable verification documentation).
 - Authoritative specification: `CareerOS_PROJECT_SPEC(1).md` version 1.1.0
@@ -21,6 +20,22 @@
   separately audited, the six-stage website path exposes one next action, stale fictional volumes
   are detected without mutation, and both committed browser suites pass on the host. Manual approval
   remains the default and controlled live execution remains disabled.
+- Current 2026-08-10 resumption evidence: Ruff format/lint and strict mypy pass; all **356** backend
+  tests pass with the isolated Chromium runtime, including **20/20** browser cases. Frontend
+  lint/typecheck, all **87** Vitest tests, the production build, and the separate **13/13**
+  Playwright route/safety/accessibility suite pass.
+- Current Docker evidence is blocked: `docker` is not callable because `/usr/bin/docker` points to
+  an absent `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`. Earlier healthy-service and mounted-
+  volume observations below are dated evidence, not a current health result.
+- The Docker build-context privacy gap is closed: the image copies only the committed fictional
+  `example_candidate`, and `.dockerignore` rejects every other candidate package and private
+  runtime directory. A deterministic regression checks both boundaries.
+- The website now edits readiness approvals and workflow switches through a payload-idempotent,
+  versioned candidate command. Automatic submission still requires a separate unchecked,
+  consequence-aware acknowledgement and does not confirm autonomy or authorize a final click.
+- Administrative audit rows are now database-immutable on SQLite and PostgreSQL; candidate erasure
+  may still delete them under the existing lifecycle policy. Manual controlled approval records a
+  versioned consequence statement and actor in the immutable application event.
 
 ## Completed local milestone - first-version UX and autonomy readiness
 
@@ -224,26 +239,28 @@
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **349 pytest tests pass** with six
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **356 pytest tests pass** with seven
   non-failing dependency deprecation warnings on Python 3.14.4. With isolated Chromium and extracted
   libraries, the real synthetic browser matrix passes **20/20** across standard, optional-cover,
   multi-step, changed-label, closed-job, timeout, retry, and fail-closed novel-field cases.
-- Frontend: ESLint, strict TypeScript, **78 Vitest tests**, and the Next.js production build pass.
+- Frontend: ESLint, strict TypeScript, **87 Vitest tests**, and the Next.js production build pass.
   The committed Chromium route/safety/accessibility suite passes **13/13** with deterministic API
   interception and no provider traffic.
 - Migrations: fresh SQLite upgrade, `alembic check`, newest-revision downgrade, and re-upgrade pass
-  through `6a9d4e2f7b10`. Models and Alembic report no missing operations.
+  through `8e4b6c1d9a20`. Models and Alembic report no missing operations.
 - Scheduler: the profile-version-bound readiness key and retained-task regressions pass in the full
-  suite; rebuilt Compose cycles run without the historical idempotency crash.
+  suite. The earlier rebuilt Compose cycles ran without the historical idempotency crash; current
+  Compose execution is unavailable because the WSL Docker CLI target is absent.
 - Candidate volume safety: the mounted fictional candidate currently differs from the immutable
   fixture and is preserved with `mutation_performed=false`. Traversal, symlink, excluded-directory,
   nested-destination, stale, and occupied-destination cases pass deterministic tests.
 - Archive recovery now rejects raw-job-source or agent/model/prompt provenance drift. Injected
   material agents must declare immutable provenance, and PDF import rejects active content,
   excessive compressed streams, objects, and decompressed content before accepting extraction.
-- Docker/Compose: the final application images were rebuilt on 2026-08-10 without deleting volumes.
-  All seven services are running; API, frontend, PostgreSQL, and Redis are healthy, and `/`,
-  `/candidates`, and `/health` return HTTP 200.
+- Docker/Compose: the final application images were rebuilt earlier on 2026-08-10 without deleting
+  volumes, when all seven services ran and primary health/routes returned HTTP 200. This is dated
+  evidence only. In the current environment `/usr/bin/docker` is a dangling link to the absent
+  Docker Desktop WSL CLI, so no current Compose health claim is made.
 - No live applications, employer contact, CAPTCHA bypass, ATS manipulation, committed credentials,
   or real candidate fixture data were introduced.
 
@@ -264,7 +281,7 @@ an absent destination, and Docker onboarding uses the immutable fixture rather t
 | 8–11 | Pass | Confirmed synthetic submissions have immutable exact artifacts, provenance, and target validation. |
 | 12–15 | Pass | Duplicate identity, candidate isolation, prompt quarantine, and per-candidate disable controls are deterministic and tested. |
 | 16 | Pass locally | Manual approval is the default; autonomy is scoped per tested ATS evidence and user confirmation. No user confirmation was fabricated. |
-| 17 | Pass locally | A fresh one-command Compose rebuild runs all seven services; health checks and primary routes pass without touching volumes. |
+| 17 | Pass locally, current recheck blocked | A dated one-command Compose rebuild ran all seven services without touching volumes. Current recheck is blocked by the absent Docker Desktop WSL CLI target. |
 | 18–21 | Pass | All routine web routes exist; success/readiness stay backend-owned; exact submitted artifacts are available by ID. |
 | 22 | External blocker | Evidence, expiry, handshake, and browser-owned verification exist, but no deployment-specific secure interactive takeover broker is supplied. |
 | 23 | Pass locally | Backend, frontend, browser, accessibility, security, migration, and fresh Compose integration gates pass. |
@@ -294,15 +311,18 @@ attempted, so this run does not claim a production observation against a real AT
   client, OS-keychain/managed-secret integration, and account authorization not present in this
   workspace. No automatic reply capability exists.
 
-External conditions now block every remaining definition-of-done item. The local guided pipeline,
-evidence-backed autonomy path, committed browser suites, scheduler repair, and non-destructive
-candidate-volume handling are complete and verified.
+External conditions block the private-pilot, live-provider, secure-takeover, and hosted-deployment
+items. The local guided pipeline, evidence-backed autonomy path, committed browser suites,
+scheduler repair, build-context privacy, and non-destructive candidate-volume handling are complete
+and verified. The repository-level specification audit continues for any remaining local quality or
+operability requirement before this status can become final.
 
 ## Resume instructions
 
 1. Read `docs/AUTONOMOUS_BUILD_PLAN.md` and this file.
 2. Inspect Git status and do not stage `scripts/run-autonomous-build.sh` or `artifacts/`.
-3. Retain the passing Docker and Playwright evidence; do not enable a live final click.
+3. Treat Docker health as dated evidence until the WSL CLI target returns; retain the passing
+   Playwright evidence and do not enable a live final click.
 4. Resolve tested-adapter and dry-run blockers only from passing synthetic evidence; never confirm
    autonomy on the user's behalf.
 5. Supply and security-review a deployment-specific interactive takeover broker before claiming the

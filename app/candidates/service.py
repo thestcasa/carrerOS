@@ -24,7 +24,9 @@ from app.candidates.loader import CandidateConfigError, CandidateLoader
 from app.candidates.models import (
     ApprovedAnswers,
     Biography,
+    CandidateApprovals,
     CandidateConfig,
+    CandidateWorkflow,
     CareerStrategy,
     Certifications,
     CompanyRules,
@@ -135,6 +137,14 @@ class CandidateSectionUpdate(BaseModel):
     data: dict[str, Any]
 
 
+class CandidateManifestControlsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow: CandidateWorkflow
+    validation: CandidateApprovals
+    acknowledge_automatic_submission_consequences: bool = False
+
+
 class CandidateUpdateResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -142,6 +152,17 @@ class CandidateUpdateResult(BaseModel):
     previous_version: str
     profile_version: str
     section: CandidateSection
+    readiness: ReadinessReport
+
+
+class CandidateManifestControlsResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str
+    previous_version: str
+    profile_version: str
+    workflow: CandidateWorkflow
+    validation: CandidateApprovals
     readiness: ReadinessReport
 
 
@@ -836,6 +857,88 @@ class CandidateService:
                 )
             self._complete_command(receipt_path, receipt, result.model_dump(mode="json"))
             return result
+
+    def update_manifest_controls(
+        self,
+        candidate_id: str,
+        update: CandidateManifestControlsUpdate,
+        idempotency_key: str,
+    ) -> CandidateManifestControlsResult:
+        with self._write_lock, self._lifecycle_lock(candidate_id):
+            config = self.get_config(candidate_id)
+            next_version = _next_patch_version(config.manifest.profile_version)
+            receipt_path, receipt = self._begin_command(
+                candidate_id,
+                "update_candidate_manifest_controls",
+                update.model_dump(mode="json"),
+                idempotency_key,
+                base_profile_version=config.manifest.profile_version,
+                target_profile_version=next_version,
+            )
+            if receipt.status == "completed":
+                return CandidateManifestControlsResult.model_validate(receipt.result)
+            if config.manifest.profile_version == receipt.target_profile_version:
+                if (
+                    config.manifest.workflow != update.workflow
+                    or config.manifest.validation != update.validation
+                    or receipt.base_profile_version is None
+                ):
+                    raise CandidateIdempotencyError(
+                        "candidate changed after an interrupted manifest-controls command"
+                    )
+                result = CandidateManifestControlsResult(
+                    candidate_id=candidate_id,
+                    previous_version=receipt.base_profile_version,
+                    profile_version=config.manifest.profile_version,
+                    workflow=config.manifest.workflow,
+                    validation=config.manifest.validation,
+                    readiness=assess_readiness(config),
+                )
+            elif config.manifest.profile_version == receipt.base_profile_version:
+                self._recover_interrupted_update(candidate_id, receipt.base_profile_version)
+                result = self._update_manifest_controls_unlocked(candidate_id, update)
+            else:
+                raise CandidateIdempotencyError(
+                    "candidate changed after an interrupted manifest-controls command"
+                )
+            self._complete_command(receipt_path, receipt, result.model_dump(mode="json"))
+            return result
+
+    def _update_manifest_controls_unlocked(
+        self,
+        candidate_id: str,
+        update: CandidateManifestControlsUpdate,
+    ) -> CandidateManifestControlsResult:
+        config = self.get_config(candidate_id)
+        if (
+            not config.manifest.workflow.automatic_submission_enabled
+            and update.workflow.automatic_submission_enabled
+            and not update.acknowledge_automatic_submission_consequences
+        ):
+            raise CandidateUpdateError(
+                "enabling candidate submission workflows requires explicit consequence "
+                "acknowledgement"
+            )
+        previous_version = config.manifest.profile_version
+        next_version = _next_patch_version(previous_version)
+        manifest = config.manifest.model_copy(
+            update={
+                "profile_version": next_version,
+                "workflow": update.workflow,
+                "validation": update.validation,
+            },
+            deep=True,
+        )
+        updated = config.model_copy(update={"manifest": manifest}, deep=True)
+        self._persist_updates(config, updated, ())
+        return CandidateManifestControlsResult(
+            candidate_id=candidate_id,
+            previous_version=previous_version,
+            profile_version=next_version,
+            workflow=updated.manifest.workflow,
+            validation=updated.manifest.validation,
+            readiness=assess_readiness(updated),
+        )
 
     def _update_section_unlocked(
         self, candidate_id: str, update: CandidateSectionUpdate

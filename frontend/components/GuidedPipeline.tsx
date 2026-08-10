@@ -5,6 +5,7 @@ import type {
   JobSummary,
   ReadinessReport,
 } from "@/lib/types";
+import { deriveGuidedWorkflowFocus } from "@/lib/guided-workflow";
 import { StatusPill } from "./StatusPill";
 
 interface PipelineStage {
@@ -12,35 +13,6 @@ interface PipelineStage {
   description: string;
   href: string;
   action: string;
-}
-
-const terminalStates = new Set([
-  "submitted",
-  "confirmed",
-  "rejected",
-  "interview",
-  "offer",
-  "withdrawn",
-]);
-
-function activeStage(
-  readiness: ReadinessReport,
-  jobs: JobSummary[],
-  applications: ApplicationSummary[],
-  actions: HumanActionView[],
-): number {
-  if (readiness.status !== "ready") return 0;
-  if (!jobs.length || !applications.length) return 1;
-  const application = applications[0];
-  if (application.state === "review_pending" || application.state === "materials_ready") return 2;
-  if (application.state === "application_started" || application.state === "form_filling") return 3;
-  if (
-    application.state === "human_action_required" ||
-    actions.some((action) => action.status === "pending")
-  )
-    return 4;
-  if (application.state === "ready_to_submit" || application.state === "submitting") return 5;
-  return terminalStates.has(application.state) ? 6 : 2;
 }
 
 export function GuidedPipeline({
@@ -57,10 +29,9 @@ export function GuidedPipeline({
   actions: HumanActionView[];
 }) {
   const encodedCandidate = encodeURIComponent(candidateId);
-  const application = applications[0];
-  const current = activeStage(readiness, jobs, applications, actions);
-  const applicationHref = application
-    ? `/applications/${application.application_id}?candidate_id=${encodedCandidate}`
+  const focus = deriveGuidedWorkflowFocus(candidateId, readiness, jobs, applications, actions);
+  const applicationHref = focus.application
+    ? `/applications/${focus.application.application_id}?candidate_id=${encodedCandidate}`
     : `/applications?candidate_id=${encodedCandidate}`;
   const stages: PipelineStage[] = [
     {
@@ -112,16 +83,16 @@ export function GuidedPipeline({
       </div>
       <ol className="pipeline-stages">
         {stages.map((stage, index) => {
-          const complete = current > index;
-          const active = current === index;
+          const complete = focus.stage > index;
+          const active = focus.stage === index;
           return (
             <li className={active ? "pipeline-stage current" : "pipeline-stage"} key={stage.title}>
-              <StatusPill status={complete ? "READY" : active ? "READY_WITH_WARNINGS" : "NOT_CONFIGURED"} />
+              <StatusPill status={complete ? "READY" : active && focus.blocked ? "BLOCKED" : active ? "READY_WITH_WARNINGS" : "NOT_CONFIGURED"} />
               <h3>{stage.title}</h3>
               <p>{stage.description}</p>
               {active ? (
-                <Link className="button primary" href={stage.href}>
-                  {stage.action}
+                <Link className="button primary" href={focus.href ?? stage.href}>
+                  {focus.action ?? stage.action}
                 </Link>
               ) : (
                 <span className="muted">{complete ? "Complete" : "Waiting for the previous stage"}</span>
@@ -130,8 +101,13 @@ export function GuidedPipeline({
           );
         })}
       </ol>
-      {current === 6 ? (
-        <p className="form-message success">This workflow has reached a recorded outcome.</p>
+      {focus.stage === 6 ? (
+        <p className="form-message success">
+          This workflow has reached a backend-recorded outcome. {focus.outcome}
+          {focus.href && focus.action ? <> <Link href={focus.href}>{focus.action}</Link>.</> : null}
+        </p>
+      ) : focus.outcome ? (
+        <p className="form-message">{focus.outcome}</p>
       ) : null}
     </section>
   );

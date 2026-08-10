@@ -97,6 +97,55 @@ def test_readiness_reports_domains_and_disabled_autonomy(
     assert autonomous["blockers"] == ["automatic_submission_disabled"]
 
 
+def test_manifest_controls_require_explicit_submission_acknowledgement_and_version_history(
+    copied_candidates_root: Path,
+) -> None:
+    payload = {
+        "workflow": {
+            "discovery_enabled": True,
+            "automatic_submission_enabled": True,
+            "email_tracking_enabled": False,
+            "notifications_enabled": True,
+        },
+        "validation": {
+            "profile_approved": True,
+            "legal_status_approved": True,
+            "automatic_answers_approved": True,
+            "cv_templates_approved": True,
+        },
+        "acknowledge_automatic_submission_consequences": False,
+    }
+    with _client(copied_candidates_root) as client:
+        denied = client.patch(
+            "/api/candidates/example_candidate/controls",
+            headers={"Idempotency-Key": "candidate-controls-denied"},
+            json=payload,
+        )
+        payload["acknowledge_automatic_submission_consequences"] = True
+        accepted = client.patch(
+            "/api/candidates/example_candidate/controls",
+            headers={"Idempotency-Key": "candidate-controls-accepted"},
+            json=payload,
+        )
+        replay = client.patch(
+            "/api/candidates/example_candidate/controls",
+            headers={"Idempotency-Key": "candidate-controls-accepted"},
+            json=payload,
+        )
+
+    assert denied.status_code == 422
+    assert denied.json()["error"]["code"] == "candidate_update_invalid"
+    assert "explicit consequence acknowledgement" in denied.json()["error"]["message"]
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["previous_version"] == "1.0.0"
+    assert accepted.json()["profile_version"] == "1.0.1"
+    assert accepted.json()["workflow"]["automatic_submission_enabled"] is True
+    assert replay.json() == accepted.json()
+    assert (
+        copied_candidates_root / "example_candidate" / ".history" / "1.0.0" / "profile.yaml"
+    ).is_file()
+
+
 def test_profile_update_is_validated_versioned_and_archived(
     copied_candidates_root: Path,
 ) -> None:
@@ -372,6 +421,24 @@ def test_configuration_import_invalid_bundle_has_stable_error(
             "patch",
             "/api/candidates/example_candidate",
             {"section": "identity", "data": {}},
+        ),
+        (
+            "patch",
+            "/api/candidates/example_candidate/controls",
+            {
+                "workflow": {
+                    "discovery_enabled": True,
+                    "automatic_submission_enabled": False,
+                    "email_tracking_enabled": False,
+                    "notifications_enabled": True,
+                },
+                "validation": {
+                    "profile_approved": True,
+                    "legal_status_approved": True,
+                    "automatic_answers_approved": True,
+                    "cv_templates_approved": True,
+                },
+            },
         ),
         ("post", "/api/candidates/example_candidate/snapshot", None),
         (

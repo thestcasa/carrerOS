@@ -14,6 +14,8 @@ import type {
   CandidateExportView,
   CandidateSummary,
   CandidateUpdateResult,
+  CandidateManifestControlsResult,
+  CandidateManifestControlsUpdate,
   ControlledSubmissionExecutionView,
   CVImportDraft,
   DiscoveryRequest,
@@ -261,6 +263,19 @@ export const api = {
         body: JSON.stringify({ section, data }),
       },
     ),
+  updateCandidateControls: (
+    candidateId: string,
+    input: CandidateManifestControlsUpdate,
+    idempotencyKey: string,
+  ) =>
+    request<CandidateManifestControlsResult>(
+      `/api/candidates/${encodeURIComponent(candidateId)}/controls`,
+      {
+        method: "PATCH",
+        headers: commandHeaders(idempotencyKey),
+        body: JSON.stringify(input),
+      },
+    ),
   jobs: (candidateId: string) =>
     request<JobSummary[]>(`/api/jobs?candidate_id=${encodeURIComponent(candidateId)}`),
   analyzeJob: (candidateId: string, jobId: string, idempotencyKey: string) =>
@@ -339,7 +354,7 @@ export const api = {
   submitSynthetic: (candidateId: string, applicationId: string, authorizationId: string, idempotencyKey: string) =>
     request<SubmissionResultView>(`/api/applications/${encodeURIComponent(applicationId)}/submit?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId, synthetic_fixture_acknowledged: true }) }),
   authorizeControlled: (candidateId: string, applicationId: string, idempotencyKey: string) =>
-    request<AuthorizationView>(`/api/applications/${encodeURIComponent(applicationId)}/controlled-authorize?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ approval_acknowledged: true }) }),
+    request<AuthorizationView>(`/api/applications/${encodeURIComponent(applicationId)}/controlled-authorize?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ approval_acknowledged: true, consequence_version: "controlled-approval-consequences-v1" }) }),
   queueControlledSubmission: (candidateId: string, applicationId: string, authorizationId: string, idempotencyKey: string) =>
     request<ControlledSubmissionExecutionView>(`/api/applications/${encodeURIComponent(applicationId)}/controlled-submissions?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ authorization_id: authorizationId }) }),
   artifacts: (candidateId: string, applicationId: string) =>

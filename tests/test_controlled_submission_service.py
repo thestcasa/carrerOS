@@ -28,6 +28,7 @@ from app.discovery.verification import StoredFixtureJobSourceVerifier
 from app.domain.enums import ApplicationState
 from app.domain.models import (
     ApplicationArtifact,
+    ApplicationEvent,
     Base,
     CandidateSettingsRecord,
     ControlledSubmissionAttempt,
@@ -305,6 +306,42 @@ def test_autonomy_evidence_is_derived_and_confirmation_is_scope_bound(
     assert "explicit_confirmation_missing" in drifted.autonomy_blockers
 
 
+def test_default_autonomy_readiness_requires_an_explicitly_allowed_adapter(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, _queue, _sessions = _services(
+        copied_candidates_root, tmp_path / "runtime-default-adapter", controlled_enabled=False
+    )
+
+    settings = applications.get_settings(_CANDIDATE_ID)
+
+    assert settings.allowed_ats_adapters == ()
+    assert "no_allowed_ats_adapter" in settings.autonomy_blockers
+    prerequisite = next(
+        item for item in settings.autonomy_prerequisites if item.code == "no_allowed_ats_adapter"
+    )
+    assert prerequisite.passed is False
+    assert prerequisite.action_href.endswith("#allowed-ats-adapters")
+
+
+def test_autonomy_confirmation_denies_before_evidence_prerequisites(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, _queue, _sessions = _services(
+        copied_candidates_root, tmp_path / "runtime-premature-confirm", controlled_enabled=False
+    )
+
+    with pytest.raises(ApplicationConflictError, match="prerequisites are blocked"):
+        applications.confirm_autonomy(
+            _CANDIDATE_ID,
+            AutonomyConfirmationRequest(
+                acknowledged=True,
+                consequence_version="autonomy-consequences-v1",
+            ),
+            "premature-autonomy-confirmation",
+        )
+
+
 def test_legacy_settings_flags_cannot_fabricate_autonomy_evidence(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:
@@ -391,7 +428,10 @@ def _authorize_and_queue(
     authorization = applications.authorize_controlled(
         _CANDIDATE_ID,
         application_id,
-        ControlledAuthorizationRequest(approval_acknowledged=True),
+        ControlledAuthorizationRequest(
+            approval_acknowledged=True,
+            consequence_version="controlled-approval-consequences-v1",
+        ),
         f"controlled-authorize-{suffix}",
     )
     execution = applications.queue_controlled_submission(
@@ -420,7 +460,10 @@ def test_controlled_submission_is_disabled_before_authorization(
         applications.authorize_controlled(
             _CANDIDATE_ID,
             application_id,
-            ControlledAuthorizationRequest(approval_acknowledged=True),
+            ControlledAuthorizationRequest(
+                approval_acknowledged=True,
+                consequence_version="controlled-approval-consequences-v1",
+            ),
             "disabled-controlled-authorization",
         )
 
@@ -526,6 +569,19 @@ def test_timeout_after_click_is_unknown_terminal_and_never_requeued(
     with sessions() as session:
         assert session.scalar(select(HumanAction)) is not None
         assert session.scalar(select(NotificationRecord)) is not None
+        authorization_event = session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.application_id == application_id,
+                ApplicationEvent.event_type == "CONTROLLED_SUBMISSION_AUTHORIZED",
+            )
+        )
+        assert authorization_event is not None
+        assert authorization_event.payload["approval_actor"] == "local-user"
+        assert authorization_event.payload["approval_acknowledged"] is True
+        assert (
+            authorization_event.payload["consequence_version"]
+            == "controlled-approval-consequences-v1"
+        )
         receipt = session.scalar(
             select(ApplicationArtifact).where(
                 ApplicationArtifact.kind == "controlled_submission_unknown_receipt"

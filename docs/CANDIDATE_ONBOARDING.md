@@ -42,8 +42,9 @@ uses deterministic stable IDs, and stores imported items as restricted and unapp
 draft creates one candidate version; readiness remains blocked until every imported fact is
 reviewed and explicitly approved. Reapplying the same import is idempotent.
 
-PDF import remains disabled until parsing can run in a CPU/memory/time-constrained worker.
-Converting a private CV to UTF-8 text locally is the supported safe path in this build.
+TXT, PDF, and DOCX imports use bounded deterministic extraction. PDF page, object, stream,
+decompression, and active-content limits and DOCX ZIP/XML expansion limits fail closed. The raw
+document is never retained; only its SHA-256 and the structured unapproved draft are stored.
 
 Run validation and capability readiness after changes:
 

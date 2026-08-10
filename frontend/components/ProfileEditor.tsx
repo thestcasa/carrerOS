@@ -2,9 +2,16 @@
 
 import { useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import type { CandidateDetail, EditableSection, JsonObject, JsonValue } from "@/lib/types";
+import type {
+  CandidateDetail,
+  CandidateManifestControlsUpdate,
+  EditableSection,
+  JsonObject,
+  JsonValue,
+} from "@/lib/types";
 
 const sectionMeta: Record<EditableSection, { label: string; description: string }> = {
+  candidate_controls: { label: "Readiness approvals", description: "Approve the complete profile and choose candidate-level workflow boundaries." },
   identity: { label: "Identity", description: "Contact and location details used in applications." },
   biography: { label: "Biography", description: "Approved professional summary and evidence highlights." },
   education: { label: "Education", description: "Qualifications with stable IDs and verified dates." },
@@ -45,6 +52,52 @@ const structuredTemplates: Partial<Record<EditableSection, Record<string, JsonOb
   certifications: { items: { id: "new_certification", name: "", issuer: "", issued_date: null, expiration_date: null, credential_url: null, cv_eligible: true, approved: false, archived: false } },
   publications: { items: { id: "new_publication", title: "", publisher: null, published_date: null, url: null, summary: null, cv_eligible: true, approved: false, archived: false } },
 };
+
+function candidateControls(detail: CandidateDetail): JsonObject {
+  const manifest = detail.config.manifest ?? {};
+  const workflow = manifest.workflow;
+  const validation = manifest.validation;
+  return {
+    validation: validation && typeof validation === "object" && !Array.isArray(validation)
+      ? structuredClone(validation)
+      : {
+          profile_approved: false,
+          legal_status_approved: false,
+          automatic_answers_approved: false,
+          cv_templates_approved: false,
+        },
+    workflow: workflow && typeof workflow === "object" && !Array.isArray(workflow)
+      ? structuredClone(workflow)
+      : {
+          discovery_enabled: false,
+          automatic_submission_enabled: false,
+          email_tracking_enabled: false,
+          notifications_enabled: true,
+        },
+    acknowledge_automatic_submission_consequences: false,
+  };
+}
+
+function controlsPayload(data: JsonObject): CandidateManifestControlsUpdate {
+  const workflow = data.workflow as JsonObject;
+  const validation = data.validation as JsonObject;
+  return {
+    workflow: {
+      discovery_enabled: workflow.discovery_enabled === true,
+      automatic_submission_enabled: workflow.automatic_submission_enabled === true,
+      email_tracking_enabled: workflow.email_tracking_enabled === true,
+      notifications_enabled: workflow.notifications_enabled === true,
+    },
+    validation: {
+      profile_approved: validation.profile_approved === true,
+      legal_status_approved: validation.legal_status_approved === true,
+      automatic_answers_approved: validation.automatic_answers_approved === true,
+      cv_templates_approved: validation.cv_templates_approved === true,
+    },
+    acknowledge_automatic_submission_consequences:
+      data.acknowledge_automatic_submission_consequences === true,
+  };
+}
 
 function titleFor(key: string) {
   return key.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
@@ -229,7 +282,10 @@ function StructuredArrayField({ label, path, value, onChange, emptyTemplate, arr
 export function ProfileEditor({ detail, initialSection = "identity" }: { detail: CandidateDetail; initialSection?: EditableSection }) {
   const safeInitial = sections.includes(initialSection) ? initialSection : "identity";
   const [activeSection, setActiveSection] = useState<EditableSection>(safeInitial);
-  const sourceData = useMemo(() => structuredClone(detail.config), [detail.config]);
+  const sourceData = useMemo(
+    () => ({ ...structuredClone(detail.config), candidate_controls: candidateControls(detail) }),
+    [detail],
+  );
   const [baseline, setBaseline] = useState<Record<string, JsonObject>>(sourceData);
   const [data, setData] = useState<Record<string, JsonObject>>(sourceData);
   const [version, setVersion] = useState(detail.profile_version);
@@ -265,14 +321,24 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
       };
     }
     try {
-      const result = await api.updateSection(
-        detail.candidate_id,
-        activeSection,
-        current,
-        saveCommand.current.key,
-      );
+      const result = activeSection === "candidate_controls"
+        ? await api.updateCandidateControls(
+            detail.candidate_id,
+            controlsPayload(current),
+            saveCommand.current.key,
+          )
+        : await api.updateSection(
+            detail.candidate_id,
+            activeSection,
+            current,
+            saveCommand.current.key,
+          );
       saveCommand.current = null;
-      setBaseline((previous) => ({ ...previous, [activeSection]: structuredClone(current) }));
+      const saved = activeSection === "candidate_controls"
+        ? { ...structuredClone(current), acknowledge_automatic_submission_consequences: false }
+        : structuredClone(current);
+      setBaseline((previous) => ({ ...previous, [activeSection]: saved }));
+      setData((previous) => ({ ...previous, [activeSection]: structuredClone(saved) }));
       setVersion(result.profile_version);
       setMessage({ kind: "success", text: `Saved as profile version ${result.profile_version}. Previous data remains in version history.` });
     } catch (error) {
@@ -305,6 +371,13 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
         {activeSection === "legal_status" ? (
           <div className="legal-notice" role="note">
             <strong>Submission-critical configuration.</strong> Missing or unapproved legal answers cause the deterministic submission gate to deny authorization.
+          </div>
+        ) : null}
+        {activeSection === "candidate_controls" ? (
+          <div className="legal-notice" role="note">
+            <strong>Candidate-controlled safety boundary.</strong> Approve these controls only
+            after reviewing the underlying sections. Allowing submission workflows does not enable
+            autonomous mode, confirm autonomy, or bypass manual approval and SubmissionGate.
           </div>
         ) : null}
         <div className="field-grid">

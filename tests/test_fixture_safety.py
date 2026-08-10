@@ -21,3 +21,21 @@ def test_committed_fixtures_do_not_contain_known_real_candidate_markers(project_
     )
     forbidden_markers = ("aless", "@gmail.", "@outlook.", "politecnico di torino")
     assert all(marker not in fixture_text for marker in forbidden_markers)
+
+
+def test_docker_image_copies_only_the_fictional_candidate_fixture(project_root: Path) -> None:
+    dockerfile_lines = {
+        line.strip()
+        for line in (project_root / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("COPY candidates")
+    }
+    assert dockerfile_lines == {
+        "COPY candidates/example_candidate ./candidate-fixtures/example_candidate",
+        "COPY candidates/example_candidate ./candidates/example_candidate",
+    }
+
+    dockerignore = (project_root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert "candidates/*" in dockerignore
+    assert "!candidates/example_candidate/**" in dockerignore
+    for private_directory in (".history", ".idempotency", ".imports", ".locks"):
+        assert f"candidates/example_candidate/{private_directory}/**" in dockerignore

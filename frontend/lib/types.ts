@@ -69,6 +69,7 @@ export interface CandidateDetail {
 }
 
 export type EditableSection =
+  | "candidate_controls"
   | "identity"
   | "biography"
   | "education"
@@ -94,6 +95,31 @@ export interface CandidateUpdateResult {
   previous_version: string;
   profile_version: string;
   section: EditableSection;
+  readiness: ReadinessReport;
+}
+
+export interface CandidateManifestControlsUpdate {
+  workflow: {
+    discovery_enabled: boolean;
+    automatic_submission_enabled: boolean;
+    email_tracking_enabled: boolean;
+    notifications_enabled: boolean;
+  };
+  validation: {
+    profile_approved: boolean;
+    legal_status_approved: boolean;
+    automatic_answers_approved: boolean;
+    cv_templates_approved: boolean;
+  };
+  acknowledge_automatic_submission_consequences: boolean;
+}
+
+export interface CandidateManifestControlsResult {
+  candidate_id: string;
+  previous_version: string;
+  profile_version: string;
+  workflow: CandidateManifestControlsUpdate["workflow"];
+  validation: CandidateManifestControlsUpdate["validation"];
   readiness: ReadinessReport;
 }
 
