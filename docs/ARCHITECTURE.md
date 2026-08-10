@@ -1,5 +1,8 @@
 # Architecture
 
+Major trust-boundary decisions are recorded under [`docs/adr/`](adr/README.md). The current records
+make deterministic submission authority and candidate lifecycle isolation explicit and append-only.
+
 ## Status and scope
 
 This repository was empty when Milestone 1 began. `CareerOS_PROJECT_SPEC(1).md` became available during final verification and is treated as the product source of truth, with the current task instructions taking precedence where they intentionally narrow scope. In particular, this milestone contains only fictional candidate data and does not create the real pilot profile described in the master specification.

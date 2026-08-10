@@ -47,8 +47,10 @@ def test_candidate_list_and_health_are_available(copied_candidates_root: Path) -
         candidates = client.get("/api/candidates")
 
     assert health.status_code == 200
+    assert len(health.headers["x-correlation-id"]) == 32
     assert health.json()["status"] == "ok"
     assert candidates.status_code == 200
+    assert len(candidates.headers["x-correlation-id"]) == 32
     assert candidates.json() == [
         {
             "candidate_id": "example_candidate",
@@ -59,6 +61,16 @@ def test_candidate_list_and_health_are_available(copied_candidates_root: Path) -
             "automation_status": "disabled",
         }
     ]
+
+
+def test_request_correlation_id_is_bounded_and_echoed(copied_candidates_root: Path) -> None:
+    with _client(copied_candidates_root) as client:
+        accepted = client.get("/api/health", headers={"X-Correlation-ID": "fixture-request-0001"})
+        replaced = client.get("/api/health", headers={"X-Correlation-ID": "contains a secret"})
+
+    assert accepted.headers["x-correlation-id"] == "fixture-request-0001"
+    assert replaced.headers["x-correlation-id"] != "contains a secret"
+    assert len(replaced.headers["x-correlation-id"]) == 32
 
 
 @pytest.mark.parametrize("origin", ["http://localhost:3000", "http://127.0.0.1:3000"])

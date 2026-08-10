@@ -70,3 +70,7 @@ fictional onboarding template is protected.
 See `docs/ARCHITECTURE.md`, `docs/CANDIDATE_ONBOARDING.md`, `docs/SECURITY.md`, and
 `docs/OPERATIONS.md`. Career OS never bypasses CAPTCHA or anti-bot controls. No live application
 was executed while building or testing this repository.
+
+The committed CI workflow repeats backend, migration, frontend, production-build, and browser
+quality gates. API/runtime operational records are structured JSON with bounded correlation and
+workflow metadata; request bodies, tokens, candidate facts, and hidden prompts are not logged.

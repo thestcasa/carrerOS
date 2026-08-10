@@ -92,6 +92,9 @@ any browser or submission capability.
   blocked because the current WSL Docker CLI target is absent.
 - [x] Simplify the first-version website into a guided pipeline and make every autonomy blocker
   actionable while preserving evidence-backed, fail-closed authorization.
+- [x] Add bounded structured JSON request/runtime logging with correlation IDs, committed CI for
+  backend/frontend/migration/browser gates, and append-only ADRs for submission authority and
+  candidate lifecycle isolation.
 
 ## Acceptance criteria for Milestone 1
 

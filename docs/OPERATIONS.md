@@ -1,5 +1,18 @@
 # Operations
 
+## Quality automation
+
+The committed GitHub Actions workflow runs the strict backend checks, a fresh migration upgrade and
+schema check, the complete pytest suite with Chromium, frontend lint/type/unit/build gates, and the
+committed Playwright route/safety/accessibility suite. Local commands in `AGENTS.md` remain the
+authoritative pre-commit checks; CI is an independent repeat of those gates on Python 3.12 and
+Node.js 22.
+
+API and runtime processes emit bounded JSON records through the `careeros` logger. HTTP responses
+include `X-Correlation-ID`; a caller-supplied ID is echoed only when it matches the bounded opaque-ID
+grammar. Logs contain route templates, status, duration, correlation/application IDs, worker role,
+and safe state metadata—not request bodies, tokens, candidate facts, hidden prompts, or secrets.
+
 Start the local stack with `docker compose up --build`. The UI is at `http://localhost:3000`, the
 API at `http://localhost:8000`, and API documentation at `/docs`. Services bind to `127.0.0.1`.
 PostgreSQL, Redis, candidate data, and runtime artifacts use separate volumes.

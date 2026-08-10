@@ -132,6 +132,15 @@ updates. All 356 backend tests, 87 frontend unit tests, 20 backend browser cases
 Playwright scenarios pass; fresh migration upgrade/check/downgrade/re-upgrade passes at
 `8e4b6c1d9a20`.
 
+The subsequent repository-quality audit closed the remaining local observability and delivery
+gaps: the API returns bounded correlation IDs and emits body-free structured JSON request records;
+runtime roles emit safe cycle metrics; GitHub CI repeats backend, migration, frontend, Chromium,
+and Playwright gates; and major trust-boundary decisions have append-only ADRs. The expanded
+backend suite passes 360/360. Remaining incomplete specification items now require private pilot
+data/human review, a credentialed live-provider environment and security review, a secure
+deployment-specific takeover broker, hosted identity/encryption infrastructure, or restoration of
+the external Docker Desktop WSL CLI.
+
 Docker cannot currently be invoked from this execution environment: `/usr/bin/docker` points to
 the absent `/mnt/wsl/docker-desktop/cli-tools/usr/bin/docker`. Do not retain a current healthy-stack
 claim from an earlier session. If the bridge becomes available, rebuild without deleting volumes,

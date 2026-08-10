@@ -2,9 +2,9 @@
 
 ## Current state
 
-- Build status: **LOCAL WEBSITE HARDENING VERIFIED; DEFINITION-OF-DONE AUDIT CONTINUES**
-- Active phase: commit the verified guided-workflow/privacy slice, then continue the remaining
-  locally implementable specification audit without weakening external pilot or deployment gates
+- Build status: **ALL LOCALLY IMPLEMENTABLE DEFINITION-OF-DONE WORK VERIFIED**
+- Active phase: final review/commit; remaining acceptance work requires external private data,
+  provider credentials/security review, hosted infrastructure, or a secure takeover transport
 - Branch baseline: `autonomous-build` at `d261afd`; the guided workflow checkpoint is published
   through `3fa4aff` and later local security/runtime hardening is included through `d261afd`.
 - Current local milestone commits: `c0bf6e9` (durable autonomy/scheduler/browser/volume safety) and
@@ -20,7 +20,7 @@
   separately audited, the six-stage website path exposes one next action, stale fictional volumes
   are detected without mutation, and both committed browser suites pass on the host. Manual approval
   remains the default and controlled live execution remains disabled.
-- Current 2026-08-10 resumption evidence: Ruff format/lint and strict mypy pass; all **356** backend
+- Current 2026-08-10 resumption evidence: Ruff format/lint and strict mypy pass; all **360** backend
   tests pass with the isolated Chromium runtime, including **20/20** browser cases. Frontend
   lint/typecheck, all **87** Vitest tests, the production build, and the separate **13/13**
   Playwright route/safety/accessibility suite pass.
@@ -36,6 +36,10 @@
 - Administrative audit rows are now database-immutable on SQLite and PostgreSQL; candidate erasure
   may still delete them under the existing lifecycle policy. Manual controlled approval records a
   versioned consequence statement and actor in the immutable application event.
+- Operational logs now use a bounded JSON field allowlist and request correlation IDs without
+  bodies, tokens, candidate facts, or hidden prompts. Committed CI repeats strict backend,
+  migration, frontend, production-build, and both Chromium suites. Append-only ADRs record the
+  deterministic submission and candidate-isolation decisions.
 
 ## Completed local milestone - first-version UX and autonomy readiness
 
@@ -239,7 +243,7 @@
 
 ## Latest verification
 
-- Backend: `ruff format --check`, Ruff lint, strict mypy, and **356 pytest tests pass** with seven
+- Backend: `ruff format --check`, Ruff lint, strict mypy, and **360 pytest tests pass** with seven
   non-failing dependency deprecation warnings on Python 3.14.4. With isolated Chromium and extracted
   libraries, the real synthetic browser matrix passes **20/20** across standard, optional-cover,
   multi-step, changed-label, closed-job, timeout, retry, and fail-closed novel-field cases.
@@ -311,11 +315,12 @@ attempted, so this run does not claim a production observation against a real AT
   client, OS-keychain/managed-secret integration, and account authorization not present in this
   workspace. No automatic reply capability exists.
 
-External conditions block the private-pilot, live-provider, secure-takeover, and hosted-deployment
-items. The local guided pipeline, evidence-backed autonomy path, committed browser suites,
-scheduler repair, build-context privacy, and non-destructive candidate-volume handling are complete
-and verified. The repository-level specification audit continues for any remaining local quality or
-operability requirement before this status can become final.
+External conditions block the private-pilot, live-provider, secure-takeover, hosted-deployment, and
+current Compose recheck items. The local guided pipeline, evidence-backed autonomy path, committed
+browser suites, scheduler repair, build-context privacy, non-destructive candidate-volume handling,
+observability, CI, and architecture decision records are complete and verified. No further useful
+implementation can close those external requirements without new authority, private data,
+credentials, or infrastructure.
 
 ## Resume instructions
 

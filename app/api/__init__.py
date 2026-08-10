@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
+import time
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Annotated, Any, Literal, cast
@@ -93,6 +95,7 @@ from app.job_service import (
     JobService,
     JobView,
 )
+from app.observability import configure_structured_logging, correlation_id, event_fields
 
 _CV_IMPORT_MAX_REQUEST_BYTES = 3_010_000
 # A 1 MiB UTF-8 document can expand to six bytes per character when embedded in JSON.
@@ -839,6 +842,8 @@ def create_app(
     health_checker: HealthChecker | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_environment()
+    configure_structured_logging()
+    request_logger = logging.getLogger("careeros.http")
     application = FastAPI(title="Career OS", version="0.2.0")
     resolved_candidate_service = candidate_service or CandidateService(
         resolved_settings.candidates_root,
@@ -897,7 +902,9 @@ def create_app(
             "Content-Type",
             "Idempotency-Key",
             "X-CSRF-Token",
+            "X-Correlation-ID",
         ],
+        expose_headers=["X-Correlation-ID"],
     )
 
     @application.middleware("http")
@@ -972,6 +979,46 @@ def create_app(
         cv_max_bytes=_CV_IMPORT_MAX_REQUEST_BYTES,
         configuration_max_bytes=_CONFIGURATION_IMPORT_MAX_REQUEST_BYTES,
     )
+
+    @application.middleware("http")
+    async def request_observability(request: Request, call_next: Any) -> Any:
+        request_correlation_id = correlation_id(request.headers.get("X-Correlation-ID"))
+        request.state.correlation_id = request_correlation_id
+        started = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            route = request.scope.get("route")
+            application_id = request.path_params.get("application_id")
+            request_logger.error(
+                "http_request_failed",
+                extra=event_fields(
+                    event="http_request_failed",
+                    correlation_id=request_correlation_id,
+                    http_method=request.method,
+                    http_route=getattr(route, "path", "unmatched"),
+                    application_id=str(application_id) if application_id is not None else None,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    exception_type=type(exc).__name__,
+                ),
+            )
+            raise
+        route = request.scope.get("route")
+        application_id = request.path_params.get("application_id")
+        response.headers["X-Correlation-ID"] = request_correlation_id
+        request_logger.info(
+            "http_request_completed",
+            extra=event_fields(
+                event="http_request_completed",
+                correlation_id=request_correlation_id,
+                http_method=request.method,
+                http_route=getattr(route, "path", "unmatched"),
+                application_id=str(application_id) if application_id is not None else None,
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                status_code=response.status_code,
+            ),
+        )
+        return response
 
     @application.post(
         "/api/auth/local-session",

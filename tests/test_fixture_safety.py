@@ -39,3 +39,25 @@ def test_docker_image_copies_only_the_fictional_candidate_fixture(project_root: 
     assert "!candidates/example_candidate/**" in dockerignore
     for private_directory in (".history", ".idempotency", ".imports", ".locks"):
         assert f"candidates/example_candidate/{private_directory}/**" in dockerignore
+
+
+def test_ci_repeats_backend_frontend_migration_and_browser_quality_gates(
+    project_root: Path,
+) -> None:
+    workflow = (project_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "permissions:\n  contents: read" in workflow
+    for command in (
+        "ruff format --check app tests migrations",
+        "ruff check app tests migrations",
+        "mypy app tests",
+        "alembic upgrade head",
+        "alembic check",
+        "pytest",
+        "npm run lint",
+        "npm run typecheck",
+        "npm test -- --run",
+        "npm run build",
+        "npx playwright test --workers=2",
+    ):
+        assert command in workflow

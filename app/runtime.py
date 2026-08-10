@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import threading
 import time
@@ -21,6 +22,7 @@ from app.discovery.providers import ProviderFeedClient
 from app.discovery.scheduled import ScheduledDiscoveryService
 from app.discovery.verification import ProviderJobSourceVerifier
 from app.job_service import JobService
+from app.observability import configure_structured_logging, event_fields
 from app.submission import ControlledSubmissionExecutor, GreenhousePlaywrightExecutor
 from app.tasks import TaskLeaseLostError, TaskQueue, TaskView
 
@@ -162,6 +164,8 @@ def run_controlled_submission_worker_once(
 
 def run_process(role: str) -> NoReturn:
     """Run a durable local scheduler or worker with Redis health publication."""
+    configure_structured_logging()
+    runtime_logger = logging.getLogger("careeros.runtime")
     settings = Settings.from_environment()
     sessions = build_session_factory(build_engine(settings.database_url))
     queue = TaskQueue(sessions)
@@ -266,6 +270,15 @@ def run_process(role: str) -> NoReturn:
                     }
                 ),
                 ex=90,
+            )
+            runtime_logger.info(
+                "runtime_cycle_completed",
+                extra=event_fields(
+                    event="runtime_cycle_completed",
+                    processed=processed,
+                    role=role,
+                    worker_id=worker_id,
+                ),
             )
             time.sleep(
                 15 if role in {"worker", "browser-worker", "controlled-submission-worker"} else 30
