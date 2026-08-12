@@ -4,13 +4,27 @@
       "key": "work_authorization",
       "question_pattern": "Are you authorized to work in the United States?",
       "answer": "Yes",
-      "evidence_ids": []
+      "evidence_ids": [],
+      "question_categories": ["work_authorization"],
+      "approved": true,
+      "sensitive": true,
+      "auto_submit_allowed": true,
+      "valid_from": "2026-08-01",
+      "valid_until": null,
+      "archived": false
     },
     {
       "key": "sponsorship",
       "question_pattern": "Will you require employment sponsorship?",
       "answer": "No",
-      "evidence_ids": []
+      "evidence_ids": [],
+      "question_categories": ["sponsorship"],
+      "approved": true,
+      "sensitive": true,
+      "auto_submit_allowed": true,
+      "valid_from": "2026-08-01",
+      "valid_until": null,
+      "archived": false
     }
   ]
 }

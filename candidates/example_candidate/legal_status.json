@@ -2,5 +2,11 @@
   "jurisdictions": ["United States"],
   "work_authorization_confirmed": true,
   "requires_sponsorship": false,
-  "approved_for_automated_use": true
+  "approved_for_automated_use": true,
+  "citizenships": ["Fictional jurisdiction"],
+  "may_require_sponsorship_in_future": false,
+  "permit_type": null,
+  "permit_expiration": null,
+  "approved": true,
+  "last_verified": "2026-08-01"
 }

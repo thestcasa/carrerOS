@@ -1,66 +1,119 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActionRequiredCard } from "@/components/ActionRequiredCard";
+import { AutopilotCard } from "@/components/AutopilotCard";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { GuidedPipeline } from "@/components/GuidedPipeline";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
-import type { CandidateSummary, HealthReport } from "@/lib/types";
+import { useActiveCandidateId } from "@/lib/active-candidate";
+import type { AnalyticsOverview, ApplicationSummary, CandidateSummary, DiscoverySourceView, HealthReport, HumanActionView, JobSummary, NotificationView, ReadinessReport, SettingsView } from "@/lib/types";
 
 export default function OverviewPage() {
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [candidates, setCandidates] = useState<CandidateSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ candidateId: string; message: string } | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [actions, setActions] = useState<HumanActionView[] | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  const [jobs, setJobs] = useState<JobSummary[] | null>(null);
+  const [applications, setApplications] = useState<ApplicationSummary[] | null>(null);
+  const [notifications, setNotifications] = useState<NotificationView[] | null>(null);
+  const [sources, setSources] = useState<DiscoverySourceView[] | null>(null);
+  const [loadedCandidateId, setLoadedCandidateId] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+  const activeCandidate = useActiveCandidateId();
 
-  async function load() {
-    setError(null);
+  const load = useCallback(async (candidateId: string, generation: number) => {
     try {
-      const [healthReport, candidateList] = await Promise.all([api.health(), api.candidates()]);
+      const [healthReport, candidateList, analyticsReport, settingsReport, humanActions, readinessReport, jobList, applicationList, notificationList, sourceList] = await Promise.all([api.health(), api.candidates(), api.analytics(candidateId), api.settings(candidateId), api.humanActions(candidateId), api.readiness(candidateId), api.jobs(candidateId), api.applications(candidateId), api.notifications(candidateId), api.discoverySources(candidateId)]);
+      if (generation !== requestGeneration.current) return;
+      setError(null);
       setHealth(healthReport);
       setCandidates(candidateList);
+      setAnalytics(analyticsReport); setSettings(settingsReport); setActions(humanActions);
+      setReadiness(readinessReport); setJobs(jobList); setApplications(applicationList);
+      setNotifications(notificationList);
+      setSources(sourceList);
+      setLoadedCandidateId(candidateId);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "The control plane is unavailable.");
+      if (generation !== requestGeneration.current) return;
+      setAnalytics(null); setSettings(null); setActions(null); setReadiness(null); setJobs(null); setApplications(null); setNotifications(null); setSources(null); setLoadedCandidateId(null);
+      setError({ candidateId, message: requestError instanceof Error ? requestError.message : "The control plane is unavailable." });
     }
-  }
-
-  useEffect(() => {
-    let active = true;
-    Promise.all([api.health(), api.candidates()])
-      .then(([healthReport, candidateList]) => {
-        if (!active) return;
-        setHealth(healthReport);
-        setCandidates(candidateList);
-      })
-      .catch((requestError: unknown) => {
-        if (active) setError(requestError instanceof Error ? requestError.message : "The control plane is unavailable.");
-      });
-    return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (!activeCandidate) return;
+    const generation = ++requestGeneration.current;
+    void Promise.resolve().then(() => load(activeCandidate, generation));
+    return () => {
+      if (requestGeneration.current === generation) requestGeneration.current += 1;
+    };
+  }, [activeCandidate, load]);
+
+  useEffect(() => {
+    if (!activeCandidate) return;
+    const interval = globalThis.setInterval(() => {
+      void load(activeCandidate, ++requestGeneration.current);
+    }, 15_000);
+    return () => globalThis.clearInterval(interval);
+  }, [activeCandidate, load]);
+
+  if (!activeCandidate) return null;
+
   return (
-    <div className="page-wrap">
-      <section className="hero">
+    <div className="page-wrap home-page">
+      <section className="home-hero">
         <div>
-          <p className="eyebrow">Candidate-controlled application platform</p>
-          <h1>Decisions stay explainable.<br />Submission stays deterministic.</h1>
-          <p className="hero-copy">Career OS keeps candidate evidence, preferences, legal declarations, and automation permissions in versioned configuration.</p>
+          <p className="home-greeting">Your job search,</p>
+          <h1>on autopilot</h1>
+          <p className="hero-copy">Career OS is finding the right opportunities and preparing everything for you.</p>
           <div className="hero-actions">
-            <Link className="button primary" href="/candidates">Select a candidate</Link>
-            <a className="button secondary" href="#system-status">View system status</a>
+            <Link className="button primary" href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all jobs</Link>
+            <Link className="button secondary" href={`/candidates/${encodeURIComponent(activeCandidate)}/profile`}>Update profile</Link>
           </div>
         </div>
-        <div className="control-card">
-          <p className="eyebrow">Hard safety boundary</p>
-          <strong>SubmissionGate defaults to deny</strong>
-          <p>Only the deterministic gate may issue submission authorization. LLM workers and browser automation cannot override it.</p>
-          <div className="control-row"><span>Live submission</span><StatusPill status="BLOCKED" /></div>
-        </div>
+        {settings && actions && jobs && applications && sources ? <AutopilotCard candidateId={activeCandidate} settings={settings} actions={actions} jobs={jobs} applications={applications} sources={sources} /> : null}
       </section>
 
-      {error ? <ErrorState message={error} retry={() => void load()} /> : null}
-      {!error && (!health || !candidates) ? <LoadingState label="Checking the control plane" /> : null}
+      {error?.candidateId === activeCandidate ? <ErrorState message={error.message} retry={() => void load(activeCandidate, ++requestGeneration.current)} /> : null}
+      {error?.candidateId !== activeCandidate && (!health || !candidates || loadedCandidateId !== activeCandidate || !analytics || !settings || !actions || !readiness || !jobs || !applications || !notifications || !sources) ? <LoadingState label="Checking your job search" /> : null}
 
-      {health && candidates ? (
+      {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions && readiness && jobs && applications && notifications && sources ? (
+        <>
+        <section className="recommended-section" aria-labelledby="recommended-title">
+        {actions.some((action) => action.status === "pending") ? <section className="attention-section" aria-labelledby="attention-title">
+          <div className="section-heading compact-heading"><h2 id="attention-title">Needs your attention <span className="count-badge">{actions.filter((action) => action.status === "pending").length}</span></h2><Link href={`/actions?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all</Link></div>
+          <div className="attention-list">{actions.filter((action) => action.status === "pending").slice(0, 3).map((action) => <ActionRequiredCard key={action.action_id} candidateId={activeCandidate} action={action} />)}</div>
+        </section> : null}
+          <div className="section-heading">
+            <div><h2 id="recommended-title">Recommended for you</h2></div>
+            <Link href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all</Link>
+          </div>
+          {jobs.length ? (
+            <div className="job-card-grid">
+              {[...jobs]
+                .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
+                .slice(0, 4)
+                .map((job) => (
+                  <article className="job-card" key={job.job_id}>
+                    <div className="job-card-score"><strong>{job.score ?? "?"}</strong><span>match</span></div>
+                    <div><p className="eyebrow">{job.company}</p><h3>{job.title}</h3></div>
+                    <p className="job-card-meta">{job.location ?? "Location to confirm"} <span aria-hidden="true">/</span> {job.remote_policy ?? "Work mode to confirm"}</p>
+                    {job.hard_blockers.length ? <p className="issue-text">Needs review before you continue</p> : <p className="fit-positive">No hard blockers detected</p>}
+                    <Link className="button primary" href={`/jobs/${job.job_id}?candidate_id=${encodeURIComponent(activeCandidate)}`}>Review this job</Link>
+                  </article>
+                ))}
+            </div>
+          ) : <div className="empty-state"><h3>We are looking for opportunities</h3><p>New jobs will appear here automatically.</p></div>}
+        </section>
+        <GuidedPipeline candidateId={activeCandidate} readiness={readiness} jobs={jobs} applications={applications} actions={actions} />
+        <details className="advanced-diagnostics">
+          <summary>Advanced diagnostics</summary>
         <section id="system-status" className="overview-grid">
           <article className="panel status-panel">
             <div className="panel-title"><div><p className="eyebrow">Runtime</p><h2>System status</h2></div><StatusPill status={health.status} /></div>
@@ -78,12 +131,32 @@ export default function OverviewPage() {
             <p>{candidates.filter((candidate) => candidate.configuration_status === "valid").length} valid configuration{candidates.length === 1 ? "" : "s"} available.</p>
           </article>
           <article className="panel next-panel">
-            <p className="eyebrow">Current milestone</p>
-            <h2>Profile and readiness</h2>
-            <p>Review versioned candidate data and see capability-specific blockers before any autonomous workflow is introduced.</p>
-            <Link href="/candidates">Open candidate workspace →</Link>
+            <p className="eyebrow">Automation</p>
+            <h2>{settings.automation_mode.replaceAll("_", " ")}</h2>
+            <p>{settings.autonomy_blockers.length ? `${settings.autonomy_blockers.length} blockers prevent autonomous mode.` : "Autonomy prerequisites are recorded."}</p>
+            <Link href={`/settings?candidate_id=${encodeURIComponent(activeCandidate)}`}>Open safety settings →</Link>
+          </article>
+          <article className="panel metric-panel"><span className="large-metric">{analytics.applications}</span><h2>Applications</h2><p>{analytics.confirmations} backend-confirmed.</p></article>
+          <article className="panel metric-panel"><span className="large-metric">{actions.filter((action) => action.status === "pending").length}</span><h2>Human actions</h2><Link href={`/actions?candidate_id=${encodeURIComponent(activeCandidate)}`}>Open intervention queue →</Link></article>
+          <article className="panel metric-panel"><span className="large-metric">{analytics.security_events_unresolved}</span><h2>Security findings</h2><Link href={`/security?candidate_id=${encodeURIComponent(activeCandidate)}`}>Review security ledger →</Link></article>
+          <article className="panel activity-panel">
+            <p className="eyebrow">Near-real-time activity</p>
+            <h2>Recent events</h2>
+            {[...notifications]
+              .sort((left, right) => right.created_at.localeCompare(left.created_at))
+              .slice(0, 5)
+              .map((notification) => (
+                <div className="activity-row" key={notification.notification_id}>
+                  <strong>{notification.event_type.replaceAll("_", " ")}</strong>
+                  <span>{notification.message}</span>
+                  <small>{new Date(notification.created_at).toLocaleString()}</small>
+                </div>
+              ))}
+            {!notifications.length ? <p className="muted">No recent notifications. This view refreshes every 15 seconds.</p> : null}
           </article>
         </section>
+        </details>
+        </>
       ) : null}
     </div>
   );

@@ -5,11 +5,14 @@ services:
       DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
       REDIS_URL: redis://redis:6379/0
       CANDIDATES_ROOT: /app/candidates
-      CORS_ORIGINS: http://localhost:3000
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
+      RUNTIME_ROOT: /app/runtime
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
     depends_on:
       db:
         condition: service_healthy
@@ -27,12 +30,12 @@ services:
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -43,8 +46,6 @@ services:
       POSTGRES_DB: career_os
       POSTGRES_USER: career_os
       POSTGRES_PASSWORD: career_os
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -56,8 +57,6 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -66,7 +65,62 @@ services:
       timeout: 5s
       retries: 10
 
+  worker:
+    build: .
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
+      REDIS_URL: redis://redis:6379/0
+      CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
+      RUNTIME_ROOT: /app/runtime
+    volumes:
+      - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  browser-worker:
+    build: .
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-browser-worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
+      REDIS_URL: redis://redis:6379/0
+      CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
+      RUNTIME_ROOT: /app/runtime
+    volumes:
+      - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    command: ["sh", "-c", "python -m app inspect-candidate-volume && exec python -m app run-scheduler"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://career_os:career_os@db:5432/career_os
+      REDIS_URL: redis://redis:6379/0
+      CANDIDATES_ROOT: /app/candidates
+      CANDIDATE_FIXTURES_ROOT: /app/candidate-fixtures
+      RUNTIME_ROOT: /app/runtime
+    volumes:
+      - candidate_data:/app/candidates
+      - runtime_data:/app/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   candidate_data:
   postgres_data:
   redis_data:
+  runtime_data:

@@ -15,6 +15,11 @@ StableId = Annotated[
     StringConstraints(pattern=r"^[a-z][a-z0-9_-]{1,63}$", strip_whitespace=True),
 ]
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]
+HttpsUrl = Annotated[str, StringConstraints(pattern=r"^https://[^\s]+$", strip_whitespace=True)]
+PhoneNumber = Annotated[
+    str,
+    StringConstraints(pattern=r"^\+?[0-9][0-9(). -]{5,30}$", strip_whitespace=True),
+]
 
 
 class StrictModel(BaseModel):
@@ -38,6 +43,9 @@ class ManifestFiles(StrictModel):
     cover_letter_rules: str
     companies: str
     roles: str
+    certifications: str | None = None
+    publications: str | None = None
+    notification_rules: str | None = None
 
 
 class CandidateWorkflow(StrictModel):
@@ -69,14 +77,31 @@ class Identity(StrictModel):
     candidate_id: CandidateId
     full_name: NonEmptyStr
     email: Annotated[str, StringConstraints(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")]
-    phone: NonEmptyStr
+    phone: PhoneNumber
     city: NonEmptyStr
     country_code: Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]
+    preferred_name: str | None = None
+    pronouns: str | None = None
+    region: str | None = None
+    country: str | None = None
+    linkedin: HttpsUrl | None = None
+    personal_website: HttpsUrl | None = None
+    github: HttpsUrl | None = None
+    portfolio: HttpsUrl | None = None
+    other_links: tuple[HttpsUrl, ...] = ()
+    approved: bool = False
 
 
 class Biography(StrictModel):
     summary: NonEmptyStr
     highlights: tuple[NonEmptyStr, ...]
+    headline: str | None = None
+    long_bio: str | None = None
+    career_stage: (
+        Literal["student", "graduate", "early_career", "mid_level", "senior", "executive"] | None
+    ) = None
+    primary_professional_identity: str | None = None
+    approved: bool = False
 
 
 class DateRangeModel(StrictModel):
@@ -90,16 +115,40 @@ class DateRangeModel(StrictModel):
         return self
 
 
+class ClaimFact(StrictModel):
+    id: StableId
+    statement: NonEmptyStr
+    verified: bool = False
+    source: str | None = None
+    publicly_usable: bool = False
+    confidentiality: Literal["public", "restricted", "internal"] = "restricted"
+    approved: bool = False
+    archived: bool = False
+
+
 class EducationItem(DateRangeModel):
     id: StableId
     institution: NonEmptyStr
     qualification: NonEmptyStr
     field_of_study: NonEmptyStr
     location: NonEmptyStr
+    completed: bool | None = None
+    grade: str | None = None
+    coursework: tuple[str, ...] = ()
+    cv_eligible: bool = True
+    approved: bool = False
+    archived: bool = False
 
 
 class Education(StrictModel):
     items: tuple[EducationItem, ...]
+
+    @model_validator(mode="after")
+    def education_ids_are_unique(self) -> Education:
+        item_ids = [item.id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("duplicate education IDs are not allowed")
+        return self
 
 
 class ExperienceItem(DateRangeModel):
@@ -107,21 +156,64 @@ class ExperienceItem(DateRangeModel):
     organization: NonEmptyStr
     title: NonEmptyStr
     location: NonEmptyStr
-    achievements: tuple[NonEmptyStr, ...]
+    achievements: tuple[ClaimFact | NonEmptyStr, ...]
     skills: tuple[NonEmptyStr, ...]
+    employment_type: (
+        Literal["full_time", "part_time", "internship", "freelance", "contract"] | None
+    ) = None
+    remote_policy: Literal["remote", "hybrid", "onsite", "unknown"] = "unknown"
+    current: bool = False
+    summary: str | None = None
+    responsibilities: tuple[str, ...] = ()
+    domains: tuple[str, ...] = ()
+    role_categories: tuple[str, ...] = ()
+    confidentiality: Literal["public", "restricted", "internal"] = "restricted"
+    cv_eligible: bool = True
+    cover_letter_eligible: bool = True
+    approved: bool = False
+    archived: bool = False
+
+    @model_validator(mode="after")
+    def current_role_has_no_end_date(self) -> ExperienceItem:
+        if self.current and self.end_date is not None:
+            raise ValueError("current experience cannot have an end_date")
+        if not self.current and self.end_date is None:
+            raise ValueError("non-current experience requires an end_date")
+        return self
 
 
 class Experience(StrictModel):
     items: tuple[ExperienceItem, ...]
+
+    @model_validator(mode="after")
+    def experience_ids_are_unique(self) -> Experience:
+        item_ids = [item.id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("duplicate experience IDs are not allowed")
+        return self
 
 
 class ProjectItem(DateRangeModel):
     id: StableId
     name: NonEmptyStr
     description: NonEmptyStr
-    outcomes: tuple[NonEmptyStr, ...]
+    outcomes: tuple[ClaimFact | NonEmptyStr, ...]
     skills: tuple[NonEmptyStr, ...]
-    url: str | None = None
+    url: HttpsUrl | None = None
+    project_type: (
+        Literal["professional", "academic", "personal", "open_source", "research"] | None
+    ) = None
+    status: Literal["planned", "active", "completed", "paused"] = "completed"
+    domains: tuple[str, ...] = ()
+    role_categories: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    confidentiality: Literal["public", "restricted", "internal"] = "restricted"
+    public_summary: str | None = None
+    cv_eligible: bool = True
+    cover_letter_eligible: bool = True
+    interview_eligible: bool = True
+    approved: bool = False
+    archived: bool = False
 
 
 class Projects(StrictModel):
@@ -137,15 +229,26 @@ class Projects(StrictModel):
 
 class Skills(StrictModel):
     categories: dict[NonEmptyStr, tuple[NonEmptyStr, ...]]
+    approved: bool = False
 
 
 class LanguageItem(StrictModel):
     language: NonEmptyStr
     level: Literal["A1", "A2", "B1", "B2", "C1", "C2", "native"]
+    professional_use: bool = False
+    approved: bool = False
+    archived: bool = False
 
 
 class Languages(StrictModel):
     items: tuple[LanguageItem, ...]
+
+
+class RoleTier(StrictModel):
+    tier: Annotated[int, Field(ge=1)]
+    name: NonEmptyStr
+    roles: tuple[NonEmptyStr, ...]
+    application_share_target: Annotated[Decimal, Field(ge=0, le=1)]
 
 
 class CareerStrategy(StrictModel):
@@ -153,12 +256,28 @@ class CareerStrategy(StrictModel):
     priority_domains: tuple[NonEmptyStr, ...]
     excluded_domains: tuple[NonEmptyStr, ...] = ()
     objectives: tuple[NonEmptyStr, ...]
+    role_tiers: tuple[RoleTier, ...] = ()
+    preferred_company_stages: tuple[str, ...] = ()
+    preferred_company_types: tuple[str, ...] = ()
+    approved: bool = False
+
+    @model_validator(mode="after")
+    def application_shares_are_valid(self) -> CareerStrategy:
+        application_share = sum(
+            (tier.application_share_target for tier in self.role_tiers), Decimal(0)
+        )
+        if application_share > Decimal(1):
+            raise ValueError("role tier application shares cannot exceed 1")
+        return self
 
 
 class ScoringRules(StrictModel):
     application_threshold: Annotated[int, Field(ge=0, le=100)]
     human_review_threshold: Annotated[int, Field(ge=0, le=100)]
     weights: dict[NonEmptyStr, Annotated[Decimal, Field(ge=0, le=1)]]
+    bonuses: tuple[str, ...] = ()
+    penalties: tuple[str, ...] = ()
+    approved: bool = False
 
     @model_validator(mode="after")
     def validate_scoring(self) -> ScoringRules:
@@ -187,6 +306,13 @@ class Preferences(StrictModel):
     employment_types: tuple[Literal["permanent", "contract", "internship"], ...]
     salary: SalaryPreference
     willing_to_relocate: bool
+    relocation_destinations: tuple[str, ...] = ()
+    full_time_start: date | None = None
+    part_time_available: bool = False
+    notice_period_days: Annotated[int, Field(ge=0)] | None = None
+    maximum_applications_per_company_30_days: Annotated[int, Field(ge=1, le=100)] = 3
+    maximum_applications_per_day: Annotated[int, Field(ge=1, le=100)] = 5
+    approved: bool = False
 
 
 class LegalStatus(StrictModel):
@@ -194,6 +320,12 @@ class LegalStatus(StrictModel):
     work_authorization_confirmed: bool
     requires_sponsorship: bool
     approved_for_automated_use: bool
+    citizenships: tuple[str, ...] = ()
+    may_require_sponsorship_in_future: bool | None = None
+    permit_type: str | None = None
+    permit_expiration: date | None = None
+    approved: bool = False
+    last_verified: date | None = None
 
 
 class ApprovedAnswer(StrictModel):
@@ -201,6 +333,23 @@ class ApprovedAnswer(StrictModel):
     question_pattern: NonEmptyStr
     answer: NonEmptyStr
     evidence_ids: tuple[StableId, ...] = ()
+    question_categories: tuple[str, ...] = ()
+    approved: bool = False
+    sensitive: bool = False
+    auto_submit_allowed: bool = False
+    valid_from: date | None = None
+    valid_until: date | None = None
+    archived: bool = False
+
+    @model_validator(mode="after")
+    def validity_dates_are_ordered(self) -> ApprovedAnswer:
+        if (
+            self.valid_from is not None
+            and self.valid_until is not None
+            and self.valid_until < self.valid_from
+        ):
+            raise ValueError("valid_until must not be before valid_from")
+        return self
 
 
 class ApprovedAnswers(StrictModel):
@@ -216,22 +365,51 @@ class ApprovedAnswers(StrictModel):
 
 class CVRules(StrictModel):
     max_pages: Annotated[int, Field(ge=1, le=5)]
+    max_experiences: Annotated[int, Field(ge=1, le=20)] = 4
+    max_projects: Annotated[int, Field(ge=0, le=20)] = 3
+    template_id: Literal["technical_single_page", "technical_two_page"] = "technical_two_page"
+    template_version: Literal["1.0"] = "1.0"
+    template_by_role: dict[NonEmptyStr, Literal["technical_single_page", "technical_two_page"]] = (
+        Field(default_factory=dict)
+    )
     allowed_sections: tuple[NonEmptyStr, ...]
     forbidden_claims: tuple[NonEmptyStr, ...]
     require_evidence_ids: bool
+    approved: bool = False
+
+
+class CoverLetterMotivation(StrictModel):
+    motivation_id: StableId
+    text: NonEmptyStr
+    companies: tuple[NonEmptyStr, ...] = ()
+    roles: tuple[NonEmptyStr, ...] = ()
+    approved: bool = False
 
 
 class CoverLetterRules(StrictModel):
     enabled: bool
+    generation_mode: Literal["always", "priority_only", "motivated_only", "never"] = "always"
+    min_words: Annotated[int, Field(ge=50, le=250)] = 250
     max_words: Annotated[int, Field(ge=50, le=2000)]
+    max_experiences: Annotated[int, Field(ge=1, le=2)] = 2
+    max_projects: Annotated[int, Field(ge=0, le=2)] = 2
+    motivations: tuple[CoverLetterMotivation, ...] = ()
     tone: NonEmptyStr
     forbidden_claims: tuple[NonEmptyStr, ...]
     require_evidence_ids: bool
+    approved: bool = False
+
+    @model_validator(mode="after")
+    def word_range_is_valid(self) -> CoverLetterRules:
+        if self.max_words < self.min_words:
+            raise ValueError("cover-letter maximum words must be at least minimum words")
+        return self
 
 
 class CompanyRules(StrictModel):
     target: tuple[NonEmptyStr, ...]
     blocked: tuple[NonEmptyStr, ...]
+    approved: bool = False
 
     @model_validator(mode="after")
     def lists_do_not_overlap(self) -> CompanyRules:
@@ -245,6 +423,7 @@ class CompanyRules(StrictModel):
 class RoleRules(StrictModel):
     target: tuple[NonEmptyStr, ...]
     blocked: tuple[NonEmptyStr, ...]
+    approved: bool = False
 
     @model_validator(mode="after")
     def lists_do_not_overlap(self) -> RoleRules:
@@ -253,6 +432,70 @@ class RoleRules(StrictModel):
         }:
             raise ValueError("target and blocked roles must not overlap")
         return self
+
+
+class CertificationItem(StrictModel):
+    id: StableId
+    name: NonEmptyStr
+    issuer: NonEmptyStr
+    issued_date: date | None = None
+    expiration_date: date | None = None
+    credential_url: HttpsUrl | None = None
+    cv_eligible: bool = True
+    approved: bool = False
+    archived: bool = False
+
+    @model_validator(mode="after")
+    def expiration_follows_issue(self) -> CertificationItem:
+        if (
+            self.issued_date is not None
+            and self.expiration_date is not None
+            and self.expiration_date < self.issued_date
+        ):
+            raise ValueError("expiration_date must not be before issued_date")
+        return self
+
+
+class Certifications(StrictModel):
+    items: tuple[CertificationItem, ...] = ()
+
+    @model_validator(mode="after")
+    def certification_ids_are_unique(self) -> Certifications:
+        item_ids = [item.id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("duplicate certification IDs are not allowed")
+        return self
+
+
+class PublicationItem(StrictModel):
+    id: StableId
+    title: NonEmptyStr
+    publisher: str | None = None
+    published_date: date | None = None
+    url: HttpsUrl | None = None
+    summary: str | None = None
+    cv_eligible: bool = True
+    approved: bool = False
+    archived: bool = False
+
+
+class Publications(StrictModel):
+    items: tuple[PublicationItem, ...] = ()
+
+    @model_validator(mode="after")
+    def publication_ids_are_unique(self) -> Publications:
+        item_ids = [item.id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("duplicate publication IDs are not allowed")
+        return self
+
+
+class NotificationRules(StrictModel):
+    immediate_events: tuple[NonEmptyStr, ...] = ()
+    digest_enabled: bool = True
+    digest_frequency: Literal["daily", "weekly"] = "daily"
+    channels: tuple[Literal["web", "email"], ...] = ("web",)
+    approved: bool = False
 
 
 class CandidateConfig(StrictModel):
@@ -273,6 +516,9 @@ class CandidateConfig(StrictModel):
     cover_letter_rules: CoverLetterRules
     companies: CompanyRules
     roles: RoleRules
+    certifications: Certifications = Field(default_factory=Certifications)
+    publications: Publications = Field(default_factory=Publications)
+    notification_rules: NotificationRules = Field(default_factory=NotificationRules)
 
     @model_validator(mode="after")
     def candidate_ids_match(self) -> CandidateConfig:

@@ -20,5 +20,5 @@ def test_candidate_snapshot_is_canonical_and_hashes_all_sources(
     assert first.config_json == second.config_json
     assert first.config_sha256 == second.config_sha256
     assert first.config_sha256 == hashlib.sha256(first.config_json.encode("utf-8")).hexdigest()
-    assert len(first.source_file_sha256) == 17
+    assert len(first.source_file_sha256) == 20
     assert first.snapshot_id != second.snapshot_id

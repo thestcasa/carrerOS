@@ -7,7 +7,13 @@
       "field_of_study": "Computer Science",
       "location": "Exampleton",
       "start_date": "2018-09-01",
-      "end_date": "2022-06-30"
+      "end_date": "2022-06-30",
+      "completed": true,
+      "grade": null,
+      "coursework": ["Data systems", "Software engineering"],
+      "cv_eligible": true,
+      "approved": true,
+      "archived": false
     }
   ]
 }

@@ -20,20 +20,81 @@
 
 ## Milestone 2: discovery and analysis
 
-The exact next milestone is **Milestone 2 — Discovery, Analysis, and Jobs Inbox** from the
-master specification: Greenhouse, Lever, and Ashby discovery; normalized versioned jobs;
-duplicate detection; security scanning; the provider-backed `JobAnalysisAgent`;
-candidate-configured scoring; fictional pilot company seeds; discovery controls/status; a
-jobs inbox; and a job-detail view with evidence, score, blockers, salary, and source
-verification. It also introduces PostgreSQL repositories and durable scheduling. It does
-not add browser automation or live submission.
+Milestone 2 is complete. It delivered Greenhouse, Lever, and Ashby discovery; normalized
+versioned jobs; duplicate detection; security scanning; the provider-backed `JobAnalysisAgent`;
+candidate-configured scoring; fictional pilot company seeds; discovery controls/status; a jobs
+inbox; and a job-detail view with evidence, score, blockers, salary, and source verification. It
+also introduced PostgreSQL repositories and durable scheduling without granting discovery code
+any browser or submission capability.
 
-## Later milestones
+### Milestone 2 progress
 
-- Job ingestion and normalization with provenance and deduplication.
-- Human review UI and explicit approval workflows.
-- Restricted browser execution that consumes gate authorizations and stops at CAPTCHA/anti-bot challenges.
-- Observability, retention controls, security hardening, and deployment automation.
+- [x] Strict normalized discovery contracts and fixture-backed Greenhouse, Lever, and Ashby
+  payload adapters.
+- [x] HTTPS/domain allowlisting, prompt-injection scanning, semantic fingerprints, and
+  candidate-scoped duplicate hashes.
+- [x] Append-only job versions and expanded normalized job persistence with Alembic migration.
+- [x] Candidate-configured deterministic classification, scoring, hard blockers, and evidence.
+- [x] Candidate-aware discovery/list/detail/analyze service and initial jobs inbox/detail UI.
+- [x] Persist job-command idempotency receipts and candidate inbox decisions.
+- [x] Add verification, shortlist, skip, and discovery controls/API actions.
+- [x] Add worker/scheduler process boundaries and Redis heartbeat coordination.
+- [x] Add durable discovery receipts, persisted injection events, and passing API/frontend
+  contract coverage under the available Python 3.14 runtime.
+- [x] Route runtime analysis through a typed provider-neutral `JobAnalysisAgent` boundary using a
+  minimal scoring projection, a candidate lifecycle fence, version/policy hashes, exact semantic
+  response correlation, service-owned provenance, and independent deterministic policy
+  recomputation.
+- [x] Complete section 9.3 normalized-job fields across strict adapters, append-only payloads,
+  nullable database storage, scoring input, API contracts, and job-detail presentation without
+  inferring facts absent from provider evidence.
+
+## Milestone 3 and later
+
+- [x] Deterministic approved-fact generation, provenance, validation/review, and immutable draft
+  artifact backend foundation.
+- [x] Persist material metadata through the application API and complete preview/version UI.
+- [x] Rank role-relevant approved facts with configured caps, choose allowlisted role templates,
+  persist cover-letter inclusion reasons and word policy, and bind gate/archive requirements to the
+  immutable application material decision.
+- [x] Append versioned free-text-answer generation, manual revision, withdrawal tombstones,
+  snapshot-derived provenance, exact review identity binding, latest-only downstream consumption,
+  and accessible history/edit controls without overwriting prior answers.
+- [x] Synthetic restricted browser dry-run contracts that stop at CAPTCHA/OTP and cannot click.
+- [x] Persist synthetic browser sessions/screenshots/human actions and complete queue/resume UI.
+- [x] Add synthetic one-time submission authorization consumption, emergency stop, rate limits,
+  autonomy guard, backend confirmation truthfulness, notifications, digest, and analytics.
+- [x] Add provider-neutral correspondence classification and interview-package foundations.
+- [x] Add signed local sessions/artifacts, candidate ownership, CSRF, administrative audit, and
+  export/deletion planning foundations.
+- [x] Integrate materials, synthetic application workflow, artifacts, human actions, security,
+  settings, analytics, local auth, and the primary required web routes.
+- [x] Add a persistent workflow queue and correspondence/notification/interview integration.
+- [x] Add a network-denied Playwright fixture harness and bounded unapproved CV import workflow.
+- [x] Render and structurally validate versioned PDFs before approval, upload their exact hashes,
+  and archive the same bytes without lossy rerendering.
+- [x] Schedule candidate-owned public ATS sources through bounded read-only transports and durable
+  leased discovery tasks with freshness/error status.
+- [x] Execute bounded candidate export, durable deletion/recovery, writer fencing, and configurable
+  browser-profile retention.
+- [x] Add bounded deterministic whole-candidate configuration import/export with atomic versioning
+  and distinct API, CLI, and settings controls.
+- [x] Integrate Playwright dry runs through a task-kind-isolated worker with immutable attempt
+  evidence, lease-fenced finalization, bounded categorized retries, and human escalation.
+- [x] Add a distinct default-disabled controlled Greenhouse worker with exact target/form policy,
+  fresh gate rechecks, a durable irreversible-click boundary, one-use permit, exact confirmation
+  evidence, and terminal no-retry handling for every ambiguous post-boundary outcome.
+- [ ] Complete hosted identity, encrypted secret storage, and deployment-specific interactive
+  human-takeover transport.
+- [x] Verify PostgreSQL/Redis/Compose startup and service health on WSL Docker.
+- [x] Execute and repair the committed Playwright browser E2E and automated accessibility suite on
+  the host with isolated Chromium libraries (13/13). Docker-backed repetition remains environment
+  blocked because the current WSL Docker CLI target is absent.
+- [x] Simplify the first-version website into a guided pipeline and make every autonomy blocker
+  actionable while preserving evidence-backed, fail-closed authorization.
+- [x] Add bounded structured JSON request/runtime logging with correlation IDs, committed CI for
+  backend/frontend/migration/browser gates, and append-only ADRs for submission authority and
+  candidate lifecycle isolation.
 
 ## Acceptance criteria for Milestone 1
 

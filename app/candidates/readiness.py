@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.candidates.models import CandidateConfig
+from app.candidates.models import (
+    CandidateConfig,
+    ClaimFact,
+    EducationItem,
+    ExperienceItem,
+    ProjectItem,
+)
 
 
 class ReadinessStatus(StrEnum):
@@ -108,6 +115,12 @@ def _capability(
 
 def assess_readiness(config: CandidateConfig) -> ReadinessReport:
     issues: list[ReadinessIssue] = []
+    approved_evidence = (
+        any(item.approved and not item.archived for item in config.education.items)
+        or any(item.approved and not item.archived for item in config.experience.items)
+        or any(item.approved and not item.archived for item in config.projects.items)
+    )
+    approved_languages = any(item.approved and not item.archived for item in config.languages.items)
     checks = (
         (
             config.manifest.active,
@@ -124,6 +137,13 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "manifest.validation.profile_approved",
         ),
         (
+            config.identity.approved,
+            "identity_not_approved",
+            "Identity requires explicit candidate approval.",
+            "identity",
+            "identity.approved",
+        ),
+        (
             bool(config.biography.summary),
             "missing_biography",
             "Biography summary is required.",
@@ -131,9 +151,16 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "biography.summary",
         ),
         (
-            bool(config.education.items or config.experience.items or config.projects.items),
-            "missing_evidence",
-            "At least one education, experience, or project is required.",
+            config.biography.approved,
+            "biography_not_approved",
+            "Biography requires explicit candidate approval.",
+            "biography",
+            "biography.approved",
+        ),
+        (
+            approved_evidence,
+            "missing_approved_evidence",
+            "At least one approved education, experience, or project is required.",
             "evidence",
             "experience.items",
         ),
@@ -145,9 +172,16 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "skills.categories",
         ),
         (
-            bool(config.languages.items),
-            "missing_languages",
-            "At least one language is required.",
+            config.skills.approved,
+            "skills_not_approved",
+            "Skills require explicit candidate approval.",
+            "skills",
+            "skills.approved",
+        ),
+        (
+            approved_languages,
+            "missing_approved_languages",
+            "At least one approved language is required.",
             "languages",
             "languages.items",
         ),
@@ -159,11 +193,39 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "career_strategy.target_roles",
         ),
         (
+            config.career_strategy.approved,
+            "career_strategy_not_approved",
+            "Career strategy requires explicit candidate approval.",
+            "strategy",
+            "career_strategy.approved",
+        ),
+        (
             bool(config.roles.target),
             "missing_role_rules",
             "Role rules need a target role.",
             "strategy",
             "roles.target",
+        ),
+        (
+            config.scoring_rules.approved,
+            "scoring_rules_not_approved",
+            "Scoring rules require explicit candidate approval.",
+            "strategy",
+            "scoring_rules.approved",
+        ),
+        (
+            config.preferences.approved,
+            "preferences_not_approved",
+            "Location, compensation, and availability preferences require approval.",
+            "preferences",
+            "preferences.approved",
+        ),
+        (
+            config.preferences.full_time_start is not None,
+            "missing_start_date",
+            "A full-time availability start date is required.",
+            "preferences",
+            "preferences.full_time_start",
         ),
         (
             config.manifest.validation.legal_status_approved,
@@ -187,11 +249,32 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "legal_status.approved_for_automated_use",
         ),
         (
+            config.legal_status.approved,
+            "legal_status_item_not_approved",
+            "Legal status requires explicit candidate approval.",
+            "legal",
+            "legal_status.approved",
+        ),
+        (
+            config.legal_status.last_verified is not None,
+            "legal_status_not_verified",
+            "Legal status needs a candidate-provided verification date.",
+            "legal",
+            "legal_status.last_verified",
+        ),
+        (
             config.manifest.validation.automatic_answers_approved,
             "automatic_answers_not_approved",
             "Automatic answers require explicit approval.",
             "answers",
             "manifest.validation.automatic_answers_approved",
+        ),
+        (
+            config.cv_rules.approved and config.cover_letter_rules.approved,
+            "document_rules_not_approved",
+            "CV and cover-letter rules require explicit candidate approval.",
+            "documents",
+            "cv_rules.approved",
         ),
         (
             config.manifest.validation.cv_templates_approved,
@@ -205,6 +288,62 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
         if not passed:
             issues.append(_issue(code, message, domain, field_path))
 
+    approval_collections: tuple[
+        tuple[str, tuple[EducationItem | ExperienceItem | ProjectItem, ...]], ...
+    ] = (
+        ("education", config.education.items),
+        ("experience", config.experience.items),
+        ("projects", config.projects.items),
+    )
+    for collection_name, items in approval_collections:
+        for index, item in enumerate(items):
+            if not item.archived and not item.approved:
+                issues.append(
+                    _issue(
+                        "candidate_fact_not_approved",
+                        "Imported or edited candidate facts require explicit approval.",
+                        "evidence",
+                        f"{collection_name}.items[{index}].approved",
+                    )
+                )
+
+    for index, answer in enumerate(config.approved_answers.items):
+        if answer.sensitive and (not answer.approved or not answer.auto_submit_allowed):
+            issues.append(
+                _issue(
+                    "sensitive_answer_not_approved",
+                    "Sensitive answers require explicit approval and auto-submit permission.",
+                    "answers",
+                    f"approved_answers.items[{index}]",
+                )
+            )
+        if answer.valid_until is not None and answer.valid_until < date.today():
+            issues.append(
+                _issue(
+                    "approved_answer_expired",
+                    "An approved answer has expired and cannot be used.",
+                    "answers",
+                    f"approved_answers.items[{index}].valid_until",
+                )
+            )
+
+    evidence_fact_collections = (
+        ("experience", tuple(item.achievements for item in config.experience.items)),
+        ("projects", tuple(item.outcomes for item in config.projects.items)),
+    )
+    for collection_name, fact_collections in evidence_fact_collections:
+        for item_index, facts in enumerate(fact_collections):
+            for fact_index, fact in enumerate(facts):
+                if isinstance(fact, ClaimFact) and fact.approved and not fact.verified:
+                    issues.append(
+                        _issue(
+                            "unverified_approved_claim",
+                            "An approved claim must be verified before external use.",
+                            "evidence",
+                            f"{collection_name}.items[{item_index}].facts[{fact_index}]",
+                        )
+                    )
+
     domains = (
         _domain("profile", "Profile approval", "manifest", True, issues),
         _domain("identity", "Identity", "identity", bool(config.identity.full_name), issues),
@@ -213,11 +352,11 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "evidence",
             "Experience and projects",
             "experience",
-            bool(config.education.items or config.experience.items or config.projects.items),
+            approved_evidence,
             issues,
         ),
         _domain("skills", "Skills", "skills", bool(config.skills.categories), issues),
-        _domain("languages", "Languages", "languages", bool(config.languages.items), issues),
+        _domain("languages", "Languages", "languages", approved_languages, issues),
         _domain(
             "strategy",
             "Career strategy",
@@ -251,6 +390,27 @@ def assess_readiness(config: CandidateConfig) -> ReadinessReport:
             "Document rules",
             "cv_rules",
             bool(config.cv_rules.allowed_sections),
+            issues,
+        ),
+        _domain(
+            "certifications",
+            "Certifications",
+            "certifications",
+            config.manifest.data_files.certifications is not None,
+            issues,
+        ),
+        _domain(
+            "publications",
+            "Publications",
+            "publications",
+            config.manifest.data_files.publications is not None,
+            issues,
+        ),
+        _domain(
+            "notifications",
+            "Notification rules",
+            "notification_rules",
+            config.manifest.data_files.notification_rules is not None,
             issues,
         ),
     )

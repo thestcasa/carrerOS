@@ -7,11 +7,41 @@
       "location": "Exampleton",
       "start_date": "2022-07-01",
       "end_date": null,
+      "current": true,
       "achievements": [
-        "Reduced a fictional batch pipeline's recovery time through idempotent processing",
-        "Introduced typed API contracts and automated tests"
+        {
+          "id": "experience_recovery_claim",
+          "statement": "Reduced a fictional batch pipeline's recovery time through idempotent processing",
+          "verified": true,
+          "source": "fictional performance review",
+          "publicly_usable": true,
+          "confidentiality": "public",
+          "approved": true,
+          "archived": false
+        },
+        {
+          "id": "experience_contracts_claim",
+          "statement": "Introduced typed API contracts and automated tests",
+          "verified": true,
+          "source": "fictional project record",
+          "publicly_usable": true,
+          "confidentiality": "public",
+          "approved": true,
+          "archived": false
+        }
       ],
-      "skills": ["Python", "SQL", "FastAPI"]
+      "skills": ["Python", "SQL", "FastAPI"],
+      "employment_type": "full_time",
+      "remote_policy": "hybrid",
+      "summary": "Builds fictional, tested backend systems.",
+      "responsibilities": ["Design fictional data services"],
+      "domains": ["Developer tools"],
+      "role_categories": ["Backend Engineer"],
+      "confidentiality": "public",
+      "cv_eligible": true,
+      "cover_letter_eligible": true,
+      "approved": true,
+      "archived": false
     }
   ]
 }

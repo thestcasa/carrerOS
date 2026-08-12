@@ -1,6 +1,15 @@
 {
   "max_pages": 2,
+  "max_experiences": 2,
+  "max_projects": 2,
+  "template_id": "technical_two_page",
+  "template_version": "1.0",
+  "template_by_role": {
+    "Machine Learning Engineer": "technical_two_page",
+    "Backend Engineer": "technical_single_page"
+  },
   "allowed_sections": ["Summary", "Experience", "Projects", "Education", "Skills", "Languages"],
   "forbidden_claims": ["Unverified performance metrics", "Credentials not present in candidate evidence"],
-  "require_evidence_ids": true
+  "require_evidence_ids": true,
+  "approved": true
 }

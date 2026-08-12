@@ -3,5 +3,10 @@
   "highlights": [
     "Builds tested Python services",
     "Communicates technical tradeoffs clearly"
-  ]
+  ],
+  "headline": "Software engineer building reliable data products",
+  "long_bio": "A fictional engineering profile used only for deterministic CareerOS tests.",
+  "career_stage": "early_career",
+  "primary_professional_identity": "Software engineer",
+  "approved": true
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { ReadinessBoard } from "@/components/ReadinessBoard";
 import { api } from "@/lib/api";
+import { selectActiveCandidate } from "@/lib/active-candidate";
 import type { ReadinessReport } from "@/lib/types";
 
 export function ReadinessPageClient({ candidateId }: { candidateId: string }) {
@@ -13,13 +14,21 @@ export function ReadinessPageClient({ candidateId }: { candidateId: string }) {
 
   async function load() {
     setError(null);
-    try { setReport(await api.readiness(candidateId)); }
+    try {
+      const readinessReport = await api.readiness(candidateId);
+      selectActiveCandidate(candidateId);
+      setReport(readinessReport);
+    }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Readiness could not be calculated."); }
   }
   useEffect(() => {
     let active = true;
     api.readiness(candidateId)
-      .then((readinessReport) => { if (active) setReport(readinessReport); })
+      .then((readinessReport) => {
+        if (!active) return;
+        selectActiveCandidate(candidateId);
+        setReport(readinessReport);
+      })
       .catch((requestError: unknown) => { if (active) setError(requestError instanceof Error ? requestError.message : "Readiness could not be calculated."); });
     return () => { active = false; };
   }, [candidateId]);

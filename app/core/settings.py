@@ -13,13 +13,27 @@ class Settings:
     redis_url: str
     candidates_root: Path
     cors_origins: tuple[str, ...]
+    candidate_fixtures_root: Path | None = None
+    runtime_root: Path = Path.cwd() / "runtime"
+    auth_required: bool = False
+    local_token_secret: str | None = None
+    controlled_submission_enabled: bool = False
 
     @classmethod
     def from_environment(cls) -> Settings:
-        origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+        origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
         return cls(
             database_url=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             candidates_root=Path(os.getenv("CANDIDATES_ROOT", Path.cwd() / "candidates")),
+            candidate_fixtures_root=(
+                Path(value) if (value := os.getenv("CANDIDATE_FIXTURES_ROOT")) else None
+            ),
             cors_origins=tuple(origin.strip() for origin in origins.split(",") if origin.strip()),
+            runtime_root=Path(os.getenv("RUNTIME_ROOT", Path.cwd() / "runtime")),
+            auth_required=os.getenv("AUTH_REQUIRED", "true").casefold() == "true",
+            local_token_secret=os.getenv("LOCAL_TOKEN_SECRET"),
+            controlled_submission_enabled=(
+                os.getenv("CONTROLLED_SUBMISSION_ENABLED", "false").casefold() == "true"
+            ),
         )

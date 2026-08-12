@@ -1,0 +1,37 @@
+# ATS adapters
+
+Greenhouse, Lever, and Ashby adapters normalize deterministic provider payloads into one
+candidate-neutral job schema. Adapters accept only HTTPS provider domains (including legitimate
+subdomains), reject credentials/fragments/cross-domain application URLs, preserve raw source data,
+and strip markup only into a separate normalized description.
+
+External text never becomes instructions. The security scanner records stable findings for policy
+override, secret exfiltration, safety bypass, local-file access, and hidden ATS manipulation.
+Candidate classification and scoring happen after normalization and use only that candidate's
+configuration. Engine code exposes generic `target`, `adjacent`, and `non_target` categories; it
+does not hard-code a pilot's AI/ML taxonomy.
+
+Tests and CLI discovery use fixtures. Adding a provider requires strict contracts, URL allowlists,
+append-only version tests, prompt-injection cases, and a candidate-independent parser. Provider
+credentials do not belong in discovery adapters. Final submission uses a distinct, versioned,
+default-disabled Greenhouse controlled adapter behind `SubmissionGate`; discovery adapters remain
+read-only and cannot obtain a click permit.
+
+An allowed adapter is not automatically a tested adapter. Autonomous readiness clears
+`no_tested_ats_adapter` only from a candidate-scoped, passing synthetic adapter acceptance record
+that binds the adapter version, destination policy, form fingerprint, package inputs, and recorded
+safe outcome. A settings checkbox or agent assertion is not evidence.
+
+Scheduled discovery uses only these public read endpoints:
+
+- `boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true`
+- `api.lever.co/v0/postings/{token}?mode=json`
+- `api.ashbyhq.com/posting-api/job-board/{token}`
+
+Source tokens are restricted identifiers, not URLs or credentials. Redirects, non-JSON responses,
+oversized bodies, excessive job counts, malformed payloads, and provider errors fail with stable
+body-free codes that are safe to persist. Response reads use one-raw-read operations with a
+remaining socket timeout and an absolute monotonic deadline. Source execution requires an explicit
+enabled candidate setting and provider allowlist membership; absence and empty lists deny. Manual
+JSON payload ingestion remains a development and deterministic-fixture path rather than the
+autonomous production path.

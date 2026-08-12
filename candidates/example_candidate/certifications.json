@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "id": "fictional_cloud_certificate",
+      "name": "Fictional Cloud Foundations",
+      "issuer": "Example Certification Institute",
+      "issued_date": "2025-04-01",
+      "expiration_date": null,
+      "credential_url": "https://example.invalid/certificates/cloud-foundations",
+      "cv_eligible": true,
+      "approved": true,
+      "archived": false
+    }
+  ]
+}
