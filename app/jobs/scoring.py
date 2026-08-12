@@ -185,6 +185,21 @@ def _matches(value: str, configured: tuple[str, ...]) -> bool:
     return any(normalized == _normalized(item) for item in configured)
 
 
+def _normalize_employment_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    aliases = {
+        "fulltime": "permanent",
+        "permanent": "permanent",
+        "contract": "contract",
+        "contractor": "contract",
+        "intern": "internship",
+        "internship": "internship",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _classify(job: NormalizedJob, context: CandidateScoringContext) -> RoleClassification:
     targets = (*context.career_strategy.target_roles, *context.roles.target)
     if _matches(job.title, targets):
@@ -275,9 +290,13 @@ def _hard_blockers(job: NormalizedJob, context: CandidateScoringContext) -> tupl
         blockers.append("role_blocked")
     if job.domain is not None and _matches(job.domain, context.career_strategy.excluded_domains):
         blockers.append("domain_excluded")
+    normalized_employment_type = _normalize_employment_type(job.employment_type)
+    accepted_employment_types = {
+        _normalize_employment_type(item) for item in context.preferences.employment_types
+    }
     if (
-        job.employment_type is not None
-        and job.employment_type not in context.preferences.employment_types
+        normalized_employment_type is not None
+        and normalized_employment_type not in accepted_employment_types
     ):
         blockers.append("employment_type_incompatible")
     location_matches = job.location is not None and _matches(

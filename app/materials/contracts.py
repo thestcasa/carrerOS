@@ -68,6 +68,7 @@ class GeneratedAnswer(MaterialModel):
 
 class GenerationRequest(MaterialModel):
     candidate_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+    candidate_name: str = Field(default="Candidate", min_length=1, max_length=200)
     application_id: UUID
     target: JobTarget
     requested_documents: tuple[DocumentKind, ...]
@@ -115,8 +116,10 @@ class RenderValidationReport(MaterialModel):
     document_version: int = Field(ge=1)
     template_id: str
     template_version: str
-    renderer_version: Literal["deterministic_pdf_v2"] = "deterministic_pdf_v2"
+    renderer_version: Literal["deterministic_pdf_v2", "latex_pdf_v1"] = "deterministic_pdf_v2"
+    compiler_version: Literal["restricted_latex_v1"] | None = None
     source_sha256: Sha256
+    latex_sha256: Sha256 | None = None
     pdf_sha256: Sha256 | None = None
     extracted_text_sha256: Sha256 | None = None
     page_count: int = Field(ge=0)
@@ -125,6 +128,18 @@ class RenderValidationReport(MaterialModel):
     layout_overlap_count: int = Field(ge=0)
     valid: bool
     issues: tuple[ValidationIssue, ...] = ()
+
+    @model_validator(mode="after")
+    def latex_identity_matches_renderer(self) -> RenderValidationReport:
+        if self.renderer_version == "latex_pdf_v1" and (
+            self.compiler_version != "restricted_latex_v1" or self.latex_sha256 is None
+        ):
+            raise ValueError("LaTeX render reports require compiler and source identities")
+        if self.renderer_version == "deterministic_pdf_v2" and (
+            self.compiler_version is not None or self.latex_sha256 is not None
+        ):
+            raise ValueError("legacy render reports cannot declare LaTeX identities")
+        return self
 
 
 class AnswerReviewIdentity(MaterialModel):

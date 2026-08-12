@@ -23,12 +23,15 @@ export function JobsPageClient({ candidateId }: { candidateId: string }) {
   return (
     <div className="page-wrap wide-page">
       <header className="page-header">
-        <div><p className="eyebrow">{candidateId}</p><h1>Discovery and analysis</h1></div>
-        <p>Inspect candidate-specific scoring, source freshness, and blockers. Bulk submission is intentionally unavailable.</p>
+        <div><p className="eyebrow">Recommended for you</p><h1>Find your next job</h1></div>
+        <p>Compare opportunities, prepare a tailored application, or continue manually on the employer&apos;s official website.</p>
       </header>
-      <DiscoveryControls candidateId={candidateId} onComplete={() => setReload((value) => value + 1)} />
+      <details className="advanced-diagnostics jobs-advanced-controls">
+        <summary>Advanced: job sources and discovery</summary>
+        <DiscoveryControls candidateId={candidateId} onComplete={() => setReload((value) => value + 1)} />
+      </details>
       {error ? <ErrorState message={error} /> : null}
-      {!error && !jobs ? <LoadingState label="Loading candidate jobs" /> : null}
+      {!error && !jobs ? <LoadingState label="Loading jobs" /> : null}
       {jobs ? <JobsInbox candidateId={candidateId} jobs={jobs} /> : null}
     </div>
   );

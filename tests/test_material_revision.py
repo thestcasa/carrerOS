@@ -170,11 +170,23 @@ def test_cv_revision_appends_version_with_provenance_pdf_and_review_references(
         for artifact in artifacts
         if artifact.kind == "rendered_cv" and artifact.version == 2
     )
+    latex_source = next(
+        artifact
+        for artifact in artifacts
+        if artifact.kind == "latex_source_cv" and artifact.version == 2
+    )
     assert report.metadata["source_sha256"] == versioned_cv[1].sha256
     assert report.metadata["document_version"] == 2
     assert report.metadata["base_document_id"] == str(original_cv.document_id)
     assert report.metadata["manual_revision"] is True
     assert rendered_pdf.metadata == report.metadata
+    assert latex_source.metadata["semantic_source_sha256"] == versioned_cv[1].sha256
+    assert latex_source.sha256 == report.metadata["latex_sha256"]
+    latex_bytes = applications.artifact_path(
+        "example_candidate", generated.application_id, latex_source.artifact_id
+    ).read_bytes()
+    assert latex_bytes.startswith(b"\\documentclass")
+    assert latex_bytes.rstrip().endswith(b"\\end{document}")
     assert (
         applications.artifact_path(
             "example_candidate", generated.application_id, rendered_pdf.artifact_id

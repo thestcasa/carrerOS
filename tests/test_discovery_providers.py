@@ -238,3 +238,34 @@ def test_response_reader_enforces_absolute_deadline_after_each_raw_read(
     with pytest.raises(ProviderFetchError) as error:
         _read_with_deadline(SlowResponse(), 8, 1.0)
     assert error.value.code == "provider_timeout"
+
+
+def test_response_reader_accepts_socket_close_after_final_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Socket:
+        def settimeout(self, remaining: float) -> None:
+            assert remaining > 0
+
+    class Raw:
+        _sock: Socket | None = Socket()
+
+    class File:
+        raw = Raw()
+
+    class ClosingResponse:
+        fp = File()
+        closed = False
+
+        def read1(self, amount: int) -> bytes:
+            assert amount > 0
+            self.fp.raw._sock = None
+            self.closed = True
+            return b"{}"
+
+        def isclosed(self) -> bool:
+            return self.closed
+
+    monkeypatch.setattr("app.discovery.providers.time.monotonic", lambda: 0.5)
+
+    assert _read_with_deadline(ClosingResponse(), 8, 1.0) == b"{}"

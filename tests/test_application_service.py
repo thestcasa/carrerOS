@@ -301,6 +301,8 @@ def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integr
         "rendered_cover_letter",
         "render_report_cv",
         "render_report_cover_letter",
+        "latex_source_cv",
+        "latex_source_cover_letter",
     }
     assert all(not artifact.immutable for artifact in artifacts if artifact.kind in draft_kinds)
     assert all(artifact.immutable for artifact in artifacts if artifact.kind not in draft_kinds)
@@ -454,6 +456,8 @@ def test_render_failure_is_persisted_and_cannot_be_approved(
     assert generated.review is not None and not generated.review.semantic_passed
     artifacts = applications.list_artifacts("example_candidate", generated.application_id)
     assert {item.kind for item in artifacts} == {
+        "latex_source_cv",
+        "latex_source_cover_letter",
         "render_report_cv",
         "render_report_cover_letter",
     }
@@ -490,6 +494,36 @@ def test_tampered_rendered_cv_is_rejected_before_browser_upload(
     with pytest.raises(ApplicationConflictError, match="rendered CV is missing or corrupted"):
         applications.dry_run(
             "example_candidate", generated.application_id, DryRunCommand(), "dry-run-503"
+        )
+
+
+def test_tampered_latex_source_is_rejected_before_approval(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, _sessions = _services(copied_candidates_root, runtime_root)
+    generated = applications.generate_materials(
+        "example_candidate", _job(jobs, 5031), "generate-materials-5031"
+    )
+    latex_cv = next(
+        item
+        for item in applications.list_artifacts("example_candidate", generated.application_id)
+        if item.kind == "latex_source_cv"
+    )
+    path = applications.artifact_path(
+        "example_candidate", generated.application_id, latex_cv.artifact_id
+    )
+    path.write_bytes(path.read_bytes() + b"% tampered\n")
+
+    with pytest.raises(
+        ApplicationConflictError,
+        match="reviewed CV LaTeX source is missing or corrupted",
+    ):
+        applications.approve_materials(
+            "example_candidate",
+            generated.application_id,
+            "approve-tampered-latex-5031",
         )
 
 

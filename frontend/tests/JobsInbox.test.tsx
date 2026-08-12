@@ -9,18 +9,39 @@ const jobs: JobSummary[] = [
 ];
 
 describe("JobsInbox", () => {
-  it("filters jobs without offering a submission action", () => {
+  it("filters simple job cards without offering a submission action", () => {
     render(<JobsInbox candidateId="example_candidate" jobs={jobs} />);
     expect(screen.getByText("ML Engineer")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /submit/i })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("searchbox", { name: /search jobs/i }), { target: { value: "Senior" } });
+
+    fireEvent.change(screen.getByRole("searchbox", { name: /search jobs/i }), {
+      target: { value: "Senior" },
+    });
+
     expect(screen.queryByText("ML Engineer")).not.toBeInTheDocument();
     expect(screen.getByText("Senior Analyst")).toBeInTheDocument();
     expect(screen.getByText(/possible duplicate/i)).toBeInTheDocument();
   });
 
-  it("creates a candidate-scoped analysis link", () => {
+  it("offers separate preparation and manual paths", () => {
     render(<JobsInbox candidateId="example_candidate" jobs={[jobs[0]]} />);
-    expect(screen.getByRole("link", { name: /review ml engineer/i })).toHaveAttribute("href", "/jobs/job-1?candidate_id=example_candidate");
+
+    expect(
+      screen.getByRole("link", { name: /prepare application for ml engineer/i }),
+    ).toHaveAttribute("href", "/jobs/job-1?candidate_id=example_candidate");
+
+    const manual = screen.getByRole("link", {
+      name: /apply manually for ml engineer/i,
+    });
+    expect(manual).toHaveAttribute("href", "https://jobs.example.invalid/1");
+    expect(manual).toHaveAttribute("target", "_blank");
+    expect(screen.getByText(/not recorded as submitted here/i)).toBeInTheDocument();
+  });
+
+  it("can hide jobs with unresolved blockers", () => {
+    render(<JobsInbox candidateId="example_candidate" jobs={jobs} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /ready to prepare/i }));
+    expect(screen.getByText("ML Engineer")).toBeInTheDocument();
+    expect(screen.queryByText("Senior Analyst")).not.toBeInTheDocument();
   });
 });

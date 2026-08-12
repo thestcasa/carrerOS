@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AutonomyQuickStart } from "@/components/AutonomyQuickStart";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { GuidedPipeline } from "@/components/GuidedPipeline";
 import { StatusPill } from "@/components/StatusPill";
@@ -63,29 +64,17 @@ export default function OverviewPage() {
 
   return (
     <div className="page-wrap">
-      <section className="hero">
+      <section className="home-hero">
         <div>
-          <p className="eyebrow">Candidate-controlled application platform</p>
-          <h1>Decisions stay explainable.<br />Submission stays deterministic.</h1>
-          <p className="hero-copy">Career OS keeps candidate evidence, preferences, legal declarations, and automation permissions in versioned configuration.</p>
+          <p className="eyebrow">Your job search</p>
+          <h1>The right opportunities, already ranked for you.</h1>
+          <p className="hero-copy">Review your best matches, prepare an application, or let Career OS keep searching.</p>
           <div className="hero-actions">
-            <Link className="button primary" href="/candidates">Select a candidate</Link>
-            <a className="button secondary" href="#system-status">View system status</a>
+            <Link className="button primary" href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all jobs</Link>
+            <Link className="button secondary" href={`/candidates/${encodeURIComponent(activeCandidate)}/profile`}>Update profile</Link>
           </div>
         </div>
-        <div className="control-card">
-          <p className="eyebrow">Hard safety boundary</p>
-          <strong>SubmissionGate defaults to deny</strong>
-          <p>Only the deterministic gate may issue submission authorization. LLM workers and browser automation cannot override it.</p>
-          <div className="control-row">
-            <span>Live submission</span>
-            <StatusPill
-              status={
-                settings?.controlled_submission_enabled ? "READY_WITH_WARNINGS" : "BLOCKED"
-              }
-            />
-          </div>
-        </div>
+        {settings ? <AutonomyQuickStart candidateId={activeCandidate} settings={settings} onChange={setSettings} /> : null}
       </section>
 
       {error?.candidateId === activeCandidate ? <ErrorState message={error.message} retry={() => void load(activeCandidate, ++requestGeneration.current)} /> : null}
@@ -93,7 +82,31 @@ export default function OverviewPage() {
 
       {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions && readiness && jobs && applications && notifications ? (
         <>
+        <section className="recommended-section" aria-labelledby="recommended-title">
+          <div className="section-heading">
+            <div><p className="eyebrow">Selected for you</p><h2 id="recommended-title">Recommended jobs</h2></div>
+            <Link href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all</Link>
+          </div>
+          {jobs.length ? (
+            <div className="job-card-grid">
+              {[...jobs]
+                .sort((left, right) => (right.score ?? -1) - (left.score ?? -1))
+                .slice(0, 4)
+                .map((job) => (
+                  <article className="job-card" key={job.job_id}>
+                    <div className="job-card-score"><strong>{job.score ?? "?"}</strong><span>match</span></div>
+                    <div><p className="eyebrow">{job.company}</p><h3>{job.title}</h3></div>
+                    <p className="job-card-meta">{job.location ?? "Location to confirm"} <span aria-hidden="true">/</span> {job.remote_policy ?? "Work mode to confirm"}</p>
+                    {job.hard_blockers.length ? <p className="issue-text">Needs review before you continue</p> : <p className="fit-positive">Matches your preferences</p>}
+                    <Link className="button primary" href={`/jobs/${job.job_id}?candidate_id=${encodeURIComponent(activeCandidate)}`}>Review this job</Link>
+                  </article>
+                ))}
+            </div>
+          ) : <div className="empty-state"><h3>We are looking for opportunities</h3><p>New jobs will appear here automatically.</p></div>}
+        </section>
         <GuidedPipeline candidateId={activeCandidate} readiness={readiness} jobs={jobs} applications={applications} actions={actions} />
+        <details className="advanced-diagnostics">
+          <summary>Advanced diagnostics</summary>
         <section id="system-status" className="overview-grid">
           <article className="panel status-panel">
             <div className="panel-title"><div><p className="eyebrow">Runtime</p><h2>System status</h2></div><StatusPill status={health.status} /></div>
@@ -135,6 +148,7 @@ export default function OverviewPage() {
             {!notifications.length ? <p className="muted">No recent notifications. This view refreshes every 15 seconds.</p> : null}
           </article>
         </section>
+        </details>
         </>
       ) : null}
     </div>

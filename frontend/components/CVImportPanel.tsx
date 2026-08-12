@@ -96,8 +96,8 @@ export function CVImportPanel({
     <section className="panel">
       <div className="panel-title">
         <div>
-          <p className="eyebrow">Portable onboarding</p>
-          <h2>Import a CV draft</h2>
+          <p className="eyebrow">Step 1</p>
+          <h2>Upload your CV</h2>
         </div>
       </div>
       <p>
@@ -120,14 +120,14 @@ export function CVImportPanel({
         />
       </label>
       <button className="button secondary" disabled={!file || busy} onClick={() => void extract()}>
-        {busy ? "Checking…" : "Extract unapproved draft"}
+        {busy ? "Reading your CV…" : "Review CV details"}
       </button>
       {error ? <p role="alert">{error}</p> : null}
       {draft ? (
         <div className="callout warning">
           <p>
-            Detected {draft.education.items.length} education and {draft.experience.items.length}{" "}
-            experience entries. Approval is still required.
+            We found {draft.education.items.length} education and {draft.experience.items.length}{" "}
+            experience entries. Add them to your profile, then review each section below.
           </p>
           <ul>{draft.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           <button
@@ -135,7 +135,7 @@ export function CVImportPanel({
             disabled={busy || draft.education.items.length + draft.experience.items.length === 0}
             onClick={() => void apply()}
           >
-            Apply as unapproved facts
+            Add to my profile
           </button>
         </div>
       ) : null}

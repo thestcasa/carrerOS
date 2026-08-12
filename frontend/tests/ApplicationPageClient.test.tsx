@@ -215,7 +215,7 @@ describe("ApplicationPageClient", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Inspect and retry")).toBeInTheDocument());
-    expect(screen.getByText("No backend confirmation yet")).toBeInTheDocument();
+    expect(screen.getByText("Application materials")).toBeInTheDocument();
     expect(screen.queryByText(/^confirmed$/i)).not.toBeInTheDocument();
   });
 
@@ -363,7 +363,7 @@ describe("ApplicationPageClient", () => {
     expect(screen.getByText(/Template technical_two_page@1.0/)).toHaveTextContent(
       "snapshot 1.0.0 · 2 page(s) · extraction matched · validation passed",
     );
-    expect(screen.getByRole("button", { name: "Download exact artifact" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download PDF" })).toBeEnabled();
   });
 
   it("shows the persisted role-aware material policy", async () => {

@@ -37,13 +37,13 @@ export function ProfilePageClient({ candidateId, initialSection }: { candidateId
   return (
     <div className="page-wrap wide-page">
       <header className="page-header profile-page-header">
-        <div><p className="eyebrow">{candidateId}</p><h1>Core profile editor</h1></div>
-        <Link className="button secondary" href={`/candidates/${candidateId}/readiness`}>View readiness</Link>
+        <div><p className="eyebrow">Your profile</p><h1>Tell us about your experience</h1><p>Upload your CV first, then review the details used to prepare applications.</p></div>
+        <Link className="button secondary" href={`/candidates/${candidateId}/readiness`}>Check profile status</Link>
       </header>
       {error ? <ErrorState message={error} retry={() => void load()} /> : null}
       {!error && !detail ? <LoadingState label="Loading versioned profile" /> : null}
       {detail ? <CVImportPanel candidateId={candidateId} onApplied={setDetail} /> : null}
-      {detail ? <ProfileEditor detail={detail} initialSection={initialSection} /> : null}
+      {detail ? <details className="advanced-diagnostics profile-details" open={Boolean(initialSection)}><summary>Review and edit profile details</summary><ProfileEditor detail={detail} initialSection={initialSection} /></details> : null}
     </div>
   );
 }

@@ -1,5 +1,44 @@
 # Autonomous Build Plan
 
+## 2026-08-12 mobile-first product milestone
+
+This autonomous milestone turns the existing operator-oriented control plane into a
+candidate-facing, mobile-first product without weakening backend authority. The normal journey
+becomes onboarding, recommended jobs, material review, and application tracking. Runtime
+diagnostics, adapter payloads, hashes, and policy internals remain available only through
+progressive disclosure.
+
+Implementation order:
+
+1. Replace the eight-item technical navigation and runtime-first home with a four-destination
+   responsive shell, jobs-first dashboard, mobile bottom navigation, and one clear next action.
+2. Present candidate creation, CV upload, preferences, and readiness as a guided onboarding
+   journey; keep raw configuration editing as an advanced recovery surface.
+3. Make the jobs inbox the default working surface, hide provider payload/source configuration
+   from normal use, and add an explicit manual-application path that prepares exact materials and
+   opens the official source without recording a false submission.
+4. Add a single autonomy entry point. It may activate only through existing backend-derived
+   evidence, explicit consequence acknowledgement, rate limits, emergency stop, and
+   `SubmissionGate` controls.
+5. Preserve reviewed semantic document content while compiling fixed, escaped, versioned LaTeX
+   templates into exact PDF artifacts. Persist and hash both `.tex` and `.pdf`; never execute
+   user- or model-supplied LaTeX commands.
+6. Replace the meta/process-heavy cover letter with concise candidate-facing prose built only
+   from selected approved claims, then independently review and version every revision.
+7. Add mobile/desktop, accessibility, exact-once, LaTeX security, PDF integrity, and immutable
+   history regressions; run every repository quality gate and visually inspect representative
+   viewports.
+
+Conservative decisions:
+
+- Manual application means CareerOS prepares reviewed files and opens the verified official
+  form; the user submits personally. CareerOS records no submitted/confirmed state without
+  evidence.
+- One click autonomy means one user command after prerequisites are satisfied. When blocked,
+  the same surface routes to the next prerequisite and cannot self-confirm on the user''s behalf.
+- The semantic document remains plain structured content for claim provenance and safe editing;
+  LaTeX is a deterministic rendering format generated only from fixed templates plus escaped text.
+
 ## Objective
 
 Implement and verify the complete definition of done in `CareerOS_PROJECT_SPEC(1).md` from

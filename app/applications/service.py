@@ -647,6 +647,31 @@ class ApplicationService:
                         for claim in document.claims
                     ],
                 }
+                if rendered_document.report.latex_sha256 is None:
+                    raise ApplicationConflictError("rendered LaTeX source identity is missing")
+                latex_path = self._write_exclusive(
+                    candidate_id,
+                    application.id,
+                    f"latex_source_{document.kind.value}",
+                    f"v{version}.tex",
+                    rendered_document.latex_source,
+                )
+                session.add(
+                    ApplicationArtifact(
+                        candidate_id=candidate_id,
+                        application_id=application.id,
+                        kind=f"latex_source_{document.kind.value}",
+                        version=version,
+                        storage_uri=str(latex_path),
+                        sha256=rendered_document.report.latex_sha256,
+                        content_type="application/x-tex",
+                        immutable=False,
+                        artifact_metadata={
+                            **render_metadata,
+                            "semantic_source_sha256": document.content_sha256,
+                        },
+                    )
+                )
                 report_content = canonical_json_bytes(render_metadata)
                 report_path = self._write_exclusive(
                     candidate_id,
@@ -1702,6 +1727,31 @@ class ApplicationService:
                 **revised_render.report.model_dump(mode="json"),
                 **lineage,
             }
+            if revised_render.report.latex_sha256 is None:
+                raise ApplicationConflictError("rendered LaTeX source identity is missing")
+            latex_path = self._write_exclusive(
+                candidate_id,
+                application_id,
+                f"latex_source_{base_document.kind.value}",
+                f"v{new_version}.tex",
+                revised_render.latex_source,
+            )
+            session.add(
+                ApplicationArtifact(
+                    candidate_id=candidate_id,
+                    application_id=application_id,
+                    kind=f"latex_source_{base_document.kind.value}",
+                    version=new_version,
+                    storage_uri=str(latex_path),
+                    sha256=revised_render.report.latex_sha256,
+                    content_type="application/x-tex",
+                    immutable=False,
+                    artifact_metadata={
+                        **render_metadata,
+                        "semantic_source_sha256": revised_document.content_sha256,
+                    },
+                )
+            )
             report_content = canonical_json_bytes(render_metadata)
             report_path = self._write_exclusive(
                 candidate_id,
@@ -4588,6 +4638,7 @@ class ApplicationService:
             requested_documents.append(DocumentKind.COVER_LETTER)
         return GenerationRequest(
             candidate_id=config.manifest.candidate_id,
+            candidate_name=config.identity.full_name,
             application_id=application_id,
             target=JobTarget(company=job.company, title=job.title),
             requested_documents=tuple(requested_documents),
@@ -4858,6 +4909,41 @@ class ApplicationService:
             artifact.artifact_metadata
         )
 
+    def _latex_source_artifact_valid(
+        self,
+        artifact: ApplicationArtifact,
+        *,
+        document: ApplicationDocument,
+    ) -> bool:
+        if (
+            artifact.content_type != "application/x-tex"
+            or artifact.artifact_metadata.get("latex_sha256") != artifact.sha256
+            or artifact.artifact_metadata.get("semantic_source_sha256") != document.sha256
+            or artifact.artifact_metadata.get("document_version") != document.version
+            or artifact.candidate_id != document.candidate_id
+            or artifact.application_id != document.application_id
+            or artifact.version != document.version
+            or artifact.kind != f"latex_source_{document.kind.value}"
+        ):
+            return False
+        try:
+            application_root = self._candidate_application_root(
+                artifact.candidate_id, artifact.application_id, create=False
+            )
+        except ApplicationConflictError:
+            return False
+        path = Path(artifact.storage_uri).absolute()
+        expected = application_root / artifact.kind / f"v{artifact.version}.tex"
+        if path != expected or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+            return False
+        content = path.read_bytes()
+        return (
+            hashlib.sha256(content).hexdigest() == artifact.sha256
+            and content.startswith(b"\\documentclass")
+            and b"\\begin{document}" in content
+            and content.rstrip().endswith(b"\\end{document}")
+        )
+
     def _source_document_valid(self, document: ApplicationDocument) -> bool:
         try:
             application_root = self._candidate_application_root(
@@ -5094,6 +5180,19 @@ class ApplicationService:
                     ApplicationArtifact.sha256 == report.pdf_sha256,
                 )
             )
+            latex_artifact = (
+                session.scalar(
+                    select(ApplicationArtifact).where(
+                        ApplicationArtifact.candidate_id == application.candidate_id,
+                        ApplicationArtifact.application_id == application.id,
+                        ApplicationArtifact.kind == f"latex_source_{report.document_kind.value}",
+                        ApplicationArtifact.version == report.document_version,
+                        ApplicationArtifact.sha256 == report.latex_sha256,
+                    )
+                )
+                if report.renderer_version == "latex_pdf_v1"
+                else None
+            )
             if (
                 document is None
                 or artifact is None
@@ -5102,6 +5201,14 @@ class ApplicationService:
             ):
                 raise ApplicationConflictError(
                     f"reviewed {report.document_kind.value.upper()} source is missing or corrupted"
+                )
+            if report.renderer_version == "latex_pdf_v1" and (
+                latex_artifact is None
+                or not self._latex_source_artifact_valid(latex_artifact, document=document)
+            ):
+                raise ApplicationConflictError(
+                    f"reviewed {report.document_kind.value.upper()} "
+                    "LaTeX source is missing or corrupted"
                 )
             snapshot_id = artifact.artifact_metadata.get("candidate_snapshot_id")
             try:
@@ -5464,6 +5571,20 @@ class ApplicationService:
         reviewed_materials = self._reviewed_materials(session, application, review)
         reviewed_documents = tuple(item[0] for item in reviewed_materials)
         rendered_artifacts = tuple(item[1] for item in reviewed_materials)
+        latex_artifacts = {
+            document.kind: artifact
+            for document in reviewed_documents
+            if (
+                artifact := session.scalar(
+                    select(ApplicationArtifact).where(
+                        ApplicationArtifact.candidate_id == application.candidate_id,
+                        ApplicationArtifact.application_id == application.id,
+                        ApplicationArtifact.kind == f"latex_source_{document.kind.value}",
+                        ApplicationArtifact.version == document.version,
+                    )
+                )
+            )
+        }
         snapshot_id = UUID(str(rendered_artifacts[0].artifact_metadata["candidate_snapshot_id"]))
         snapshot_record = session.get(CandidateSnapshotRecord, snapshot_id)
         if snapshot_record is None:
@@ -5503,8 +5624,18 @@ class ApplicationService:
                         "content_type": item.content_type,
                         "template_id": item.artifact_metadata.get("template_id"),
                         "template_version": item.artifact_metadata.get("template_version"),
+                        "latex_storage_uri": (
+                            latex_artifacts[document.kind].storage_uri
+                            if document.kind in latex_artifacts
+                            else None
+                        ),
+                        "latex_sha256": (
+                            latex_artifacts[document.kind].sha256
+                            if document.kind in latex_artifacts
+                            else None
+                        ),
                     }
-                    for item in rendered_artifacts
+                    for document, item in reviewed_materials
                 ],
                 answers=[
                     {

@@ -15,6 +15,7 @@ from app.materials.contracts import (
     RenderValidationReport,
     ValidationIssue,
 )
+from app.materials.latex import DeterministicLatexSourceBuilder
 
 _LINES_PER_PAGE = 54
 _LINE_WIDTH = 96
@@ -34,6 +35,7 @@ _TEMPLATES = {
 @dataclass(frozen=True, slots=True)
 class RenderedMaterial:
     document: GeneratedDocument
+    latex_source: bytes
     pdf_bytes: bytes
     report: RenderValidationReport
 
@@ -129,6 +131,9 @@ def _build_pdf(pages: tuple[tuple[str, ...], ...]) -> bytes:
 class DeterministicPdfRenderer:
     """Versioned, network-free renderer whose fixed layout cannot overlap or hide text."""
 
+    def __init__(self, latex_builder: DeterministicLatexSourceBuilder | None = None) -> None:
+        self._latex_builder = latex_builder or DeterministicLatexSourceBuilder()
+
     def render(
         self,
         document: GeneratedDocument,
@@ -139,6 +144,11 @@ class DeterministicPdfRenderer:
         document_version: int,
     ) -> RenderedMaterial:
         issues: list[ValidationIssue] = []
+        latex_source = self._latex_builder.build(
+            document,
+            template_id=template_id,
+            template_version=template_version,
+        )
         template_limit = _TEMPLATES.get((template_id, template_version))
         if template_limit is None:
             issues.append(
@@ -256,7 +266,10 @@ class DeterministicPdfRenderer:
                 document_version=document_version,
                 template_id=template_id,
                 template_version=template_version,
+                renderer_version="latex_pdf_v1",
+                compiler_version="restricted_latex_v1",
                 source_sha256=source_sha256,
+                latex_sha256=latex_source.sha256,
                 page_count=page_count,
                 maximum_pages=maximum_pages,
                 extraction_matches=False,
@@ -264,7 +277,12 @@ class DeterministicPdfRenderer:
                 valid=False,
                 issues=tuple(issues),
             )
-            return RenderedMaterial(document=document, pdf_bytes=b"", report=report)
+            return RenderedMaterial(
+                document=document,
+                latex_source=latex_source.content,
+                pdf_bytes=b"",
+                report=report,
+            )
 
         pages = tuple(
             tuple(lines[offset : offset + _LINES_PER_PAGE])
@@ -293,7 +311,10 @@ class DeterministicPdfRenderer:
             document_version=document_version,
             template_id=template_id,
             template_version=template_version,
+            renderer_version="latex_pdf_v1",
+            compiler_version="restricted_latex_v1",
             source_sha256=source_sha256,
+            latex_sha256=latex_source.sha256,
             pdf_sha256=_sha256(pdf_bytes),
             extracted_text_sha256=_sha256(extracted.encode("utf-8")),
             page_count=len(pages),
@@ -303,7 +324,12 @@ class DeterministicPdfRenderer:
             valid=not issues,
             issues=tuple(issues),
         )
-        return RenderedMaterial(document=document, pdf_bytes=pdf_bytes, report=report)
+        return RenderedMaterial(
+            document=document,
+            latex_source=latex_source.content,
+            pdf_bytes=pdf_bytes,
+            report=report,
+        )
 
 
 def template_for(

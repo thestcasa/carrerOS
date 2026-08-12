@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +52,9 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
     builder = ApplicationArchiveBuilder(tmp_path / "archives")
     application_id = uuid4()
     cv_source, cv_sha256 = _rendered_cv(tmp_path / "fictional-cv.pdf")
+    latex_source = tmp_path / "fictional-cv.tex"
+    latex_source.write_bytes(b"\\documentclass{article}\n\\begin{document}\nCV\n\\end{document}\n")
+    latex_sha256 = hashlib.sha256(latex_source.read_bytes()).hexdigest()
     data = ApplicationArchiveData(
         candidate_snapshot={"candidate_id": "candidate_alpha", "version": 1},
         job_snapshot={"job_id": "fictional-job-1"},
@@ -63,6 +67,8 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
                 "content_type": "application/pdf",
                 "template_id": "technical_single_page",
                 "template_version": "1.0",
+                "latex_storage_uri": str(latex_source),
+                "latex_sha256": latex_sha256,
             }
         ],
         answers=[{"key": "authorization", "answer": "Yes", "supported": True}],
@@ -80,11 +86,15 @@ def test_archive_hashes_detect_mutation_and_archive_cannot_be_overwritten(tmp_pa
 
     archived_cv = (archive_path / "submitted_documents" / "cv_submitted.pdf").read_bytes()
     assert archived_cv == cv_source.read_bytes()
+    archived_latex = archive_path / "submitted_documents" / "cv_source.tex"
+    assert archived_latex.read_bytes() == latex_source.read_bytes()
+    assert hashlib.sha256(archived_latex.read_bytes()).hexdigest() == latex_sha256
     assert (archive_path / "submission" / "pre_submit_screenshot.png").read_bytes() == _BROWSER_PNG
     assert (archive_path / "submission" / "final_page_snapshot.html").read_bytes() == _BROWSER_HTML
     assert builder.verify(archive_path) is True
     manifest = json.loads((archive_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["cv"]["sha256"] == cv_sha256
+    assert manifest["cv"]["source_sha256"] == latex_sha256
     assert manifest["cv"]["template"] == "technical_single_page@1.0"
     assert manifest["model_versions"]
     assert manifest["prompt_versions"]

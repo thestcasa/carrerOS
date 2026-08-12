@@ -1,5 +1,31 @@
 # Autonomous Build Status
 
+## Active 2026-08-12 milestone
+
+- Build status: **COMPLETE - MOBILE-FIRST PRODUCT AND LATEX/PDF MATERIALS**
+- Current objective: replace the backend-oriented control plane with a candidate-facing,
+  smartphone-primary experience; add jobs-first navigation, guided onboarding, safe one-command
+  autonomy entry, explicit manual applications, and exact versioned LaTeX/PDF materials.
+- Safety decision: manual applications open the verified official source after material
+  preparation and never create a false submitted state. One-command autonomy remains gated by
+  backend-derived readiness, immutable adapter/dry-run evidence, explicit user acknowledgement,
+  emergency stop, rate limits, and `SubmissionGate`.
+- Private pilot data remains under `artifacts/private-candidates/` and is not committed.
+- Delivered: English-only four-destination shell, phone bottom navigation, jobs-first home, simplified
+  onboarding/CV upload, recommended job cards, hidden advanced discovery controls, one-command
+  autonomy entry with explicit acknowledgement, and a manual path that only opens the official site.
+- Materials now produce exact escaped, versioned `.tex` sources plus ATS-extractable PDF artifacts
+  from the same reviewed semantic content. Both are hash-bound, tamper-checked, downloadable, and
+  archived; the cover letter uses natural role/company/candidate prose with approved claims only.
+- Verification: Ruff format/lint and strict mypy pass; **365/365** backend tests pass. Frontend
+  lint/typecheck, **89/89** Vitest tests, and the Next.js production build pass. Playwright verifies
+  desktop Chromium and Pixel 7 emulation: **39 passed, 1 intentional skip**, including accessibility,
+  safety, 48px touch targets, navigation, and no horizontal overflow on primary routes.
+- A native TeX executable is not installed in the local runtime. The current restricted renderer
+  treats generated LaTeX as an immutable source artifact and renders the same reviewed content into
+  PDF without executing arbitrary TeX; adopting a locked native TeX toolchain remains an optional
+  infrastructure hardening step, not a user-data or submission safety bypass.
+
 ## Current state
 
 - Build status: **ALL LOCALLY IMPLEMENTABLE DEFINITION-OF-DONE WORK VERIFIED**

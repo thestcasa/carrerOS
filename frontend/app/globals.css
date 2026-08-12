@@ -20,7 +20,7 @@ html { scroll-behavior: smooth; }
 body { margin: 0; color: var(--ink); background: var(--paper); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 a { color: inherit; }
 button, input, textarea, select { font: inherit; }
-button, .button { min-height: 42px; }
+button, .button { min-height: 48px; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #2b78a0; outline-offset: 2px; }
 
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
@@ -33,6 +33,40 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .environment-label { margin-left: auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 600 11px ui-monospace, "Cascadia Code", monospace; text-transform: uppercase; letter-spacing: .06em; }
 main { flex: 1; }
 footer { padding: 28px 24px; color: var(--muted); text-align: center; font-size: 12px; border-top: 1px solid var(--line); }
+.skip-link { position: fixed; left: 12px; top: -80px; z-index: 100; padding: 12px 16px; color: white; background: var(--green-dark); border-radius: 8px; }
+.skip-link:focus { top: 12px; }
+.mobile-nav { display: none; }
+.more-menu { position: relative; margin-left: auto; }
+.more-menu summary { min-height: 44px; display: grid; place-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-weight: 700; list-style: none; }
+.more-menu summary::-webkit-details-marker { display: none; }
+.more-menu-popover { position: absolute; right: 0; top: calc(100% + 8px); width: 230px; display: grid; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.more-menu-popover a { min-height: 44px; display: flex; align-items: center; padding: 8px 10px; border-radius: 7px; text-decoration: none; font-size: 14px; font-weight: 650; }
+.more-menu-popover a:hover { background: var(--green-soft); }
+.home-hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(340px, .9fr); gap: 34px; align-items: center; padding: 28px 0 52px; }
+.home-hero h1 { max-width: 760px; }
+.autonomy-card { min-height: 0; padding: 24px; border: 1px solid #b7c7bf; border-radius: 18px; background: #e9f0ea; box-shadow: var(--shadow); }
+.autonomy-card.active { border-color: var(--green); background: var(--green-soft); }
+.autonomy-card h2 { font-size: 28px; }
+.autonomy-card p { line-height: 1.5; }
+.autonomy-card > .button, .autonomy-start { width: 100%; min-height: 50px; margin-top: 14px; }
+.quick-confirmation { display: flex; gap: 12px; align-items: flex-start; margin-top: 18px; font-size: 13px; line-height: 1.45; cursor: pointer; }
+.quick-confirmation input { width: 22px; height: 22px; flex: 0 0 auto; accent-color: var(--green); }
+.autonomy-limits { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+.autonomy-limits span { padding: 6px 8px; border-radius: 999px; color: var(--green-dark); background: rgb(255 255 255 / 65%); font-size: 11px; font-weight: 700; }
+.autonomy-card details, .advanced-diagnostics { margin-top: 18px; }
+.autonomy-card summary, .advanced-diagnostics > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--green-dark); font-size: 13px; font-weight: 700; }
+.advanced-diagnostics { padding: 14px 18px; border: 1px dashed var(--line); border-radius: 12px; }
+.advanced-diagnostics[open] > summary { margin-bottom: 18px; }
+.recommended-section { margin: 12px 0 26px; }
+.job-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.job-card { position: relative; min-height: 260px; display: flex; flex-direction: column; gap: 12px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 8px 30px rgb(28 45 39 / 5%); }
+.job-card-score { position: absolute; right: 18px; top: 18px; display: grid; text-align: center; }
+.job-card-score strong { font-size: 25px; line-height: 1; }
+.job-card-score span { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.job-card h3 { max-width: calc(100% - 65px); font-size: 20px; }
+.job-card-meta { color: var(--muted); font-size: 13px; }
+.job-card .button { width: 100%; margin-top: auto; }
+.fit-positive { color: var(--green); font-size: 13px; font-weight: 700; }
 
 .page-wrap { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 72px 0 90px; }
 .narrow-page { width: min(960px, calc(100% - 48px)); }
@@ -220,9 +254,13 @@ h3 { margin: 0; font-size: 17px; }
 .pipeline-lane { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .pipeline-lane > h3 { margin-top: 0; }
 .pipeline-lane .application-card { margin-bottom: 16px; }
+.metadata-list div { min-width: 0; }
+.metadata-list dd, .metadata-list code { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.profile-details { margin-top: 20px; }
 
 @media (max-width: 900px) {
-  .hero, .overview-grid, .profile-editor, .material-grid, .detail-columns, .settings-grid { grid-template-columns: 1fr; }
+  .hero, .home-hero, .overview-grid, .profile-editor, .material-grid, .detail-columns, .settings-grid { grid-template-columns: 1fr; }
+  .job-card-grid { grid-template-columns: 1fr 1fr; }
   .pipeline-grid, .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .emergency-panel { grid-column: auto; }
   .topbar { overflow-x: auto; }
@@ -235,11 +273,22 @@ h3 { margin: 0; font-size: 17px; }
 }
 
 @media (max-width: 620px) {
+  body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .desktop-nav { display: none !important; }
+  .mobile-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgb(255 253 248 / 96%); backdrop-filter: blur(18px); }
+  .mobile-nav a { min-height: 48px; display: grid; place-items: center; border-radius: 9px; color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 750; }
+  .mobile-nav a:focus-visible, .mobile-nav a:hover { color: var(--green-dark); background: var(--green-soft); }
+  footer { display: none; }
   .topbar { height: auto; min-height: 68px; padding: 12px 18px; gap: 18px; flex-wrap: wrap; }
   .topbar nav { gap: 14px; }
   .environment-label { display: none; }
   .page-wrap, .narrow-page, .wide-page { width: min(100% - 28px, 1240px); padding-top: 45px; }
   .hero { min-height: auto; }
+  .home-hero { padding-top: 4px; }
+  .home-hero h1 { font-size: clamp(34px, 11vw, 49px); }
+  .job-card-grid { grid-template-columns: 1fr; }
+  .job-card { min-height: 230px; }
+  .more-menu-popover { position: fixed; left: 14px; right: 14px; top: 68px; width: auto; }
   .hero-copy { font-size: 16px; }
   .page-header, .section-heading, .candidate-title-row, .domain-row { align-items: flex-start; flex-direction: column; }
   .capability-grid, .field-grid, .pipeline-grid, .analytics-grid { grid-template-columns: 1fr; }

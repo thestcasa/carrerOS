@@ -27,11 +27,11 @@ describe("active candidate navigation", () => {
     fireEvent.click(editLink);
 
     await waitFor(() => expect(screen.getByText("Active: fictional_friend")).toBeVisible());
-    expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Jobs" })[0]).toHaveAttribute(
       "href",
       "/jobs?candidate_id=fictional_friend",
     );
-    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Home" })[0]).toHaveAttribute(
       "href",
       "/?candidate_id=fictional_friend",
     );
@@ -49,7 +49,7 @@ describe("active candidate navigation", () => {
     render(<AppShell><div>content</div></AppShell>);
 
     expect(screen.getByText("Active: query_candidate")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Applications" })).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Applications" })[0]).toHaveAttribute(
       "href",
       "/applications?candidate_id=query_candidate",
     );
@@ -63,7 +63,7 @@ describe("active candidate navigation", () => {
     render(<AppShell><div>content</div></AppShell>);
 
     expect(screen.getByText("Active: example_candidate")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Home" })[0]).toHaveAttribute(
       "href",
       "/?candidate_id=example_candidate",
     );
@@ -75,7 +75,7 @@ describe("active candidate navigation", () => {
 
     render(<AppShell><div>must not render</div></AppShell>);
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Invalid candidate selection");
+    expect(screen.getByRole("alert")).toHaveTextContent("Invalid profile selection");
     expect(screen.queryByText("must not render")).not.toBeInTheDocument();
     expect(screen.queryByText("Active: fictional_friend")).not.toBeInTheDocument();
     window.history.replaceState({}, "", "/");

@@ -218,6 +218,7 @@ class ApplicationArchiveBuilder:
             write("scoring/validation_report.json", canonical_json_bytes(data.validation_report))
 
             document_hashes: dict[str, str] = {}
+            document_source_hashes: dict[str, str] = {}
             document_templates: dict[str, str] = {}
             references = data.generated_document_references
             if isinstance(references, list):
@@ -269,6 +270,31 @@ class ApplicationArchiveBuilder:
                     write(relative, pdf)
                     document_hashes[kind] = hashes[relative]
                     document_templates[kind] = f"{template_id}@{template_version}"
+                    latex_storage_uri = reference.get("latex_storage_uri")
+                    latex_sha256 = reference.get("latex_sha256")
+                    if latex_storage_uri is not None or latex_sha256 is not None:
+                        if not isinstance(latex_storage_uri, str) or not isinstance(
+                            latex_sha256, str
+                        ):
+                            raise ValueError(f"required {kind} LaTeX source identity is incomplete")
+                        latex_path = Path(latex_storage_uri)
+                        if not latex_path.is_file():
+                            raise ValueError(f"required {kind} LaTeX source file is missing")
+                        latex = latex_path.read_bytes()
+                        if (
+                            sha256_bytes(latex) != latex_sha256
+                            or not latex.startswith(b"\\documentclass")
+                            or b"\\begin{document}" not in latex
+                            or not latex.rstrip().endswith(b"\\end{document}")
+                        ):
+                            raise ValueError(f"required {kind} LaTeX source hash is invalid")
+                        source_relative = (
+                            "submitted_documents/cv_source.tex"
+                            if kind == "cv"
+                            else "submitted_documents/cover_letter_source.tex"
+                        )
+                        write(source_relative, latex)
+                        document_source_hashes[kind] = hashes[source_relative]
             missing_documents = set(data.required_document_kinds) - set(document_hashes)
             if missing_documents:
                 raise ValueError(
@@ -351,6 +377,8 @@ class ApplicationArchiveBuilder:
                     "template": document_templates.get("cv"),
                     "filename": "cv_submitted.pdf",
                     "sha256": document_hashes.get("cv"),
+                    "source_filename": "cv_source.tex" if "cv" in document_source_hashes else None,
+                    "source_sha256": document_source_hashes.get("cv"),
                 },
                 cover_letter={
                     "included": "cover_letter" in document_hashes,
@@ -358,6 +386,12 @@ class ApplicationArchiveBuilder:
                     if "cover_letter" in document_hashes
                     else None,
                     "sha256": document_hashes.get("cover_letter"),
+                    "source_filename": (
+                        "cover_letter_source.tex"
+                        if "cover_letter" in document_source_hashes
+                        else None
+                    ),
+                    "source_sha256": document_source_hashes.get("cover_letter"),
                 },
                 answers_file="answers/final_answers.json",
                 match_score=score_value if isinstance(score_value, (int, float)) else None,
@@ -520,6 +554,7 @@ class ApplicationArchiveBuilder:
         except OSError:
             return False
         expected: dict[str, str] = {}
+        expected_latex: dict[str, str] = {}
         references = data.generated_document_references
         if not isinstance(references, list):
             return not data.required_document_kinds
@@ -531,12 +566,20 @@ class ApplicationArchiveBuilder:
             if not isinstance(kind, str) or not isinstance(digest, str) or kind in expected:
                 return False
             expected[kind] = digest
+            latex_digest = reference.get("latex_sha256")
+            if latex_digest is not None:
+                if not isinstance(latex_digest, str):
+                    return False
+                expected_latex[kind] = latex_digest
         expected_raw_html_sha256 = (
             sha256_bytes(data.job_post_raw_html) if data.job_post_raw_html is not None else None
         )
         return (
             manifest.cv.get("sha256") == expected.get("cv")
             and manifest.cover_letter.get("sha256") == expected.get("cover_letter")
+            and manifest.files.get("submitted_documents/cv_source.tex") == expected_latex.get("cv")
+            and manifest.files.get("submitted_documents/cover_letter_source.tex")
+            == expected_latex.get("cover_letter")
             and manifest.files.get("job_post/raw.html") == expected_raw_html_sha256
             and manifest.agent_version == data.agent_version
             and manifest.model_versions == data.model_versions

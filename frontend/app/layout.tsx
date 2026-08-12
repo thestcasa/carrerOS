@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Career OS",
-  description: "Candidate-configurable autonomous job application control plane",
+  description: "Find relevant jobs, prepare strong applications, and stay in control.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

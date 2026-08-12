@@ -120,6 +120,9 @@ def _read_with_deadline(response: Any, max_bytes: int, deadline: float) -> bytes
         if not chunk:
             break
         content.extend(chunk)
+        is_closed = getattr(response, "isclosed", None)
+        if callable(is_closed) and is_closed():
+            break
     return bytes(content)
 
 

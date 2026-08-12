@@ -43,6 +43,17 @@ def test_target_job_uses_configured_weights_and_exposes_evidence(
     assert all(item.explanation for item in result.dimensions)
 
 
+def test_full_time_provider_value_matches_permanent_candidate_preference(
+    example_candidates_root: Path,
+) -> None:
+    config = CandidateLoader(example_candidates_root).load("example_candidate")
+
+    result = evaluate_job(_job(employment_type="FullTime"), config)
+
+    assert "employment_type_incompatible" not in result.hard_blockers
+    assert result.proposed_action == "prepare"
+
+
 def test_salary_location_language_company_and_role_rules_block_deterministically(
     example_candidates_root: Path,
 ) -> None:

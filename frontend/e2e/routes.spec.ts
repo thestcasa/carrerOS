@@ -24,15 +24,15 @@ test("active candidate follows navigation and readiness blockers link to editing
 
   await page.getByRole("link", { name: "Jobs" }).click();
   await expect(page).toHaveURL(new RegExp(`/jobs\\?candidate_id=${fixtureIds.candidateId}$`));
-  await expect(page.getByText(`Active: ${fixtureIds.candidateId}`)).toBeVisible();
+  await expect(page.getByText(`Active: ${fixtureIds.candidateId}`)).toHaveCount(1);
 });
 
 test("job analysis exposes evidence without a submission action", async ({ page }) => {
   await page.goto(`/jobs/${fixtureIds.jobId}?candidate_id=${fixtureIds.candidateId}`);
-  await expect(page.getByRole("heading", { name: "Requirement-by-requirement analysis" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Requirements", exact: true })).toBeVisible();
   await expect(page.getByText("Production Python")).toBeVisible();
   await expect(page.getByRole("button", { name: /submit/i })).toHaveCount(0);
-  await expect(page.getByText(/cannot authorize or submit/i)).toBeVisible();
+  await expect(page.getByText(/does not record an application or submission/i)).toBeVisible();
 });
 
 test("confirmed application identifies every exact submitted artifact", async ({ page }) => {
@@ -48,5 +48,5 @@ test("confirmed application identifies every exact submitted artifact", async ({
     await expect(card.getByRole("heading", { name: label })).toBeVisible();
     await expect(card.getByRole("button", { name: /Download exact PDF|Preview escaped text/ })).toBeEnabled();
   }
-  await expect(page.getByRole("heading", { name: "SYNTHETIC-CONFIRMATION-001" })).toBeVisible();
+  await expect(page.getByText("SYNTHETIC-CONFIRMATION-001", { exact: true }).first()).toBeVisible();
 });

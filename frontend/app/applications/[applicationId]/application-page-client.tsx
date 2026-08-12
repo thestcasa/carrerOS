@@ -446,6 +446,9 @@ export function ApplicationPageClient({
   async function download(artifact: ArtifactView) {
     setError(null);
     try {
+      const extension = artifact.content_type === "application/pdf" ? ".pdf"
+        : artifact.content_type === "application/x-tex" ? ".tex"
+          : artifact.content_type === "application/json" ? ".json" : "";
       const blob = await api.downloadArtifact(
         candidateId,
         applicationId,
@@ -454,7 +457,7 @@ export function ApplicationPageClient({
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${artifact.kind}-v${artifact.version}`;
+      anchor.download = `${artifact.kind}-v${artifact.version}${extension}`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (reason) {
@@ -721,8 +724,8 @@ export function ApplicationPageClient({
         confirmationReference={application.confirmation_reference}
       />
       <section className="panel">
-        <p className="eyebrow">Archive and receipt</p>
-        <h2>{application.confirmation_reference ?? "No backend confirmation yet"}</h2>
+        <p className="eyebrow">Your files</p>
+        <h2>{application.confirmation_reference ? "Submitted package and receipt" : "Application materials"}</h2>
         {artifacts.length ? (
           <ul className="artifact-list">
             {artifacts.map((artifact) => (
@@ -736,7 +739,7 @@ export function ApplicationPageClient({
                 ) : null}
                 <code>{artifact.sha256}</code>
                 <button className="text-button" type="button" onClick={() => void download(artifact)}>
-                  Download exact artifact
+                  {artifact.content_type === "application/pdf" ? "Download PDF" : artifact.content_type === "application/x-tex" ? "Download LaTeX source" : "Download file"}
                 </button>
               </li>
             ))}

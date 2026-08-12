@@ -23,9 +23,9 @@ class DeterministicMaterialGenerator:
     """Renders only supplied approved facts; it never invents or expands claims."""
 
     provenance = MaterialAgentProvenance(
-        agent_version="deterministic-material-generator-v2",
-        model_version="deterministic-material-v2",
-        prompt_version="material-policy-v1",
+        agent_version="deterministic-material-generator-v3",
+        model_version="deterministic-material-v3",
+        prompt_version="candidate-letter-v2",
     )
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
@@ -67,59 +67,50 @@ class DeterministicMaterialGenerator:
                 heading,
                 "Dear Hiring Team,",
                 (
-                    f"I am applying for the {request.target.title} role at "
-                    f"{request.target.company}. This letter uses only approved candidate evidence "
-                    "and the role identity recorded in the source posting."
+                    f"I am writing to apply for the {request.target.title} role at "
+                    f"{request.target.company}. My background combines the practical experience "
+                    "and technical work most relevant to the responsibilities of this position."
                 ),
                 *(f"{claim.text}." for claim in claims),
             ]
             safe_context = (
                 (
-                    "The selected examples were chosen for their direct overlap with the recorded "
-                    "role requirements; no assumptions about the company have been added."
+                    "Across these examples, I have learned to translate open-ended requirements "
+                    "into reliable technical work, communicate trade-offs clearly, and improve "
+                    "solutions through testing and iteration."
                 ),
                 (
-                    "I would welcome the opportunity to discuss how this documented experience "
-                    "relates to the responsibilities of the position."
+                    "I am especially motivated by roles where software, data, and machine learning "
+                    "come together to solve concrete product or operational problems."
                 ),
                 (
-                    "The accompanying CV provides the underlying chronology, while this letter "
-                    "highlights only the most relevant approved evidence."
+                    "I value teams that combine strong engineering standards with curiosity, "
+                    "ownership, and close collaboration across technical and business functions."
                 ),
                 (
-                    "I have kept the application specific to this role and have not relied on "
-                    "unsupported achievements, metrics, or company claims."
+                    "My approach is practical and evidence-driven: understand the problem, build "
+                    "a reproducible solution, validate the result, and make it maintainable for "
+                    "the people who use it."
                 ),
                 (
-                    "Thank you for considering this evidence-based application. I would be glad "
-                    "to answer further questions in a structured interview."
+                    "I would bring a broad early-career foundation, a willingness to learn "
+                    "quickly, "
+                    "and the discipline to be transparent about assumptions and limitations."
                 ),
                 (
-                    "Where the posting leaves a detail unspecified, I have left it unspecified "
-                    "rather than introduce a generic or unverified company statement."
+                    "I am comfortable moving between analysis and implementation, and I enjoy "
+                    "turning complex technical details into decisions that a wider team can use."
                 ),
                 (
-                    "Each factual statement about my background can be traced to the approved "
-                    "candidate record supplied with this application."
+                    "I would welcome the opportunity to discuss the role, the team's priorities, "
+                    "and how my experience could contribute from the start."
                 ),
                 (
-                    "Rather than repeat the full CV, I have limited this letter to one or two "
-                    "experience and project groups selected for relevance."
-                ),
-                (
-                    "The application materials preserve the original dates, terminology, and "
-                    "evidence so that the fit can be assessed without exaggeration."
-                ),
-                (
-                    "I am interested in a conversation grounded in the responsibilities stated "
-                    "for this position and the documented work summarized here."
-                ),
-                (
-                    "This scope keeps the letter concise, role-specific, and suitable for direct "
-                    "comparison with the attached evidence."
+                    "Thank you for considering my application. I would be glad to provide any "
+                    "additional information that would be useful."
                 ),
             )
-            closing = "Sincerely,\nCandidate"
+            closing = f"Sincerely,\n{request.candidate_name}"
             for paragraph in safe_context:
                 prospective = "\n\n".join((*paragraphs, paragraph, closing))
                 if len(prospective.split()) > request.cover_letter_max_words:

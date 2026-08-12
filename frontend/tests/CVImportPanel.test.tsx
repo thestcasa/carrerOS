@@ -31,11 +31,11 @@ describe("CVImportPanel", () => {
     render(<CVImportPanel candidateId="example_candidate" onApplied={onApplied} />);
     const file = new File(["EDUCATION"], "fictional.txt", { type: "text/plain" });
     fireEvent.change(screen.getByLabelText("CV file"), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "Extract unapproved draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review CV details" }));
 
-    expect(await screen.findByText(/Detected 1 education and 1 experience/)).toBeVisible();
+    expect(await screen.findByText(/We found 1 education and 1 experience/)).toBeVisible();
     expect(api.applyCvImport).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Apply as unapproved facts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to my profile" }));
     await waitFor(() => expect(api.applyCvImport).toHaveBeenCalledOnce());
   });
 
@@ -45,9 +45,9 @@ describe("CVImportPanel", () => {
     const file = new File(["EDUCATION"], "fictional.txt", { type: "text/plain" });
     fireEvent.change(screen.getByLabelText("CV file"), { target: { files: [file] } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Extract unapproved draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review CV details" }));
     await screen.findByRole("alert");
-    fireEvent.click(screen.getByRole("button", { name: "Extract unapproved draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review CV details" }));
     await waitFor(() => expect(api.createCvImport).toHaveBeenCalledTimes(2));
 
     expect(vi.mocked(api.createCvImport).mock.calls[1][3]).toBe(

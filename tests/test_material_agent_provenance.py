@@ -45,4 +45,4 @@ def test_records_declared_material_agent_provenance(tmp_path: Path) -> None:
 
     assert service._generator_provenance == _IdentifiedGenerator.provenance
     assert service._reviewer_provenance == IndependentMaterialReviewer.provenance
-    assert DeterministicMaterialGenerator.provenance.model_version == "deterministic-material-v2"
+    assert DeterministicMaterialGenerator.provenance.model_version == "deterministic-material-v3"

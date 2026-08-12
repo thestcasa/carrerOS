@@ -9,30 +9,41 @@ const job: JobDetailData = {
 };
 
 describe("JobDetail actions", () => {
-  it("exposes review actions but no submission control", () => {
+  it("offers preparation and manual application without a submission control", () => {
     const onAction = vi.fn();
     render(<JobDetail job={job} onAction={onAction} />);
-    fireEvent.click(screen.getByRole("button", { name: /shortlist/i }));
-    expect(onAction).toHaveBeenCalledWith("shortlist");
+
+    fireEvent.click(screen.getByRole("button", { name: /prepare application/i }));
+    expect(onAction).toHaveBeenCalledWith("generate");
+
+    const manual = screen.getByRole("link", { name: /apply manually on official site/i });
+    expect(manual).toHaveAttribute("href", job.source_url);
+    expect(manual).toHaveAttribute("target", "_blank");
+    expect(screen.getByText(/does not record an application or submission/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^submit/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/cannot authorize or submit/i)).toBeInTheDocument();
   });
 
-  it("announces a failed action and disables controls while busy", () => {
-    render(<JobDetail job={job} busyAction="verify" actionError="Source verification failed safely." onAction={vi.fn()} />);
+  it("keeps save controls safe and disables actions while busy", () => {
+    const onAction = vi.fn();
+    render(
+      <JobDetail
+        job={job}
+        busyAction="verify"
+        actionError="Source verification failed safely."
+        onAction={onAction}
+      />,
+    );
+
     expect(screen.getByRole("alert")).toHaveTextContent(/failed safely/i);
+    expect(screen.getByRole("button", { name: /prepare application/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save job/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByText("Advanced job analysis"));
     expect(screen.getByRole("button", { name: /verifying/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /shortlist/i })).toBeDisabled();
   });
 
-  it("presents normalized source, compensation, and eligibility fields", () => {
+  it("presents key eligibility first and technical source data on demand", () => {
     render(<JobDetail job={job} />);
-
-    const metadata = screen.getByRole("region", { name: "Normalized job metadata" });
-    expect(metadata).toHaveTextContent("gh-101");
-    expect(metadata).toHaveTextContent("machine learning engineer");
-    expect(metadata).toHaveTextContent("Applied AI");
-    expect(metadata).toHaveTextContent("2027-01-15");
 
     const eligibility = screen.getByRole("region", {
       name: "Employment and eligibility requirements",
@@ -41,6 +52,21 @@ describe("JobDetail actions", () => {
     expect(eligibility).toHaveTextContent("English (B2 minimum)");
     expect(eligibility).toHaveTextContent("Authorized to work in Spain");
     expect(screen.getByRole("heading", { name: "EUR 42000–50000 gross_annual" })).toBeVisible();
-    expect(screen.getByText("job_post")).toBeVisible();
+
+    fireEvent.click(screen.getByText("Advanced job analysis"));
+    const metadata = screen.getByRole("region", { name: "Normalized job metadata" });
+    expect(metadata).toHaveTextContent("gh-101");
+    expect(metadata).toHaveTextContent("machine learning engineer");
+    expect(metadata).toHaveTextContent("Applied AI");
+    expect(metadata).toHaveTextContent("2027-01-15");
+  });
+
+  it("blocks preparation when hard blockers remain but preserves the manual path", () => {
+    render(<JobDetail job={{ ...job, hard_blockers: ["seniority mismatch"] }} />);
+    expect(screen.getByRole("button", { name: /prepare application/i })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /apply manually/i })).toHaveAttribute(
+      "href",
+      job.source_url,
+    );
   });
 });

@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 
+import pytest
 from pypdf import PdfReader
 
 from app.domain.enums import DocumentKind
-from app.materials.contracts import Claim, GeneratedDocument
+from app.materials.contracts import Claim, GeneratedDocument, RenderValidationReport
+from app.materials.latex import DeterministicLatexSourceBuilder, escape_latex
 from app.materials.rendering import DeterministicPdfRenderer, RenderedMaterial
 
 
@@ -126,3 +128,61 @@ def test_renderer_rejects_a_false_declared_source_hash() -> None:
     assert not rendered.report.valid
     assert rendered.report.source_sha256 == hashlib.sha256(document.content.encode()).hexdigest()
     assert {issue.code for issue in rendered.report.issues} == {"render_source_hash_mismatch"}
+
+
+def test_latex_source_is_deterministic_hashed_and_escapes_untrusted_commands() -> None:
+    content = (
+        "CV - Engineer at Fictional Systems Ltd\n\n"
+        r"- Fictional evidence \input{secrets} & 50% #1_name $5 ^top ~home."
+    )
+    document = _document(content)
+    builder = DeterministicLatexSourceBuilder()
+
+    first = builder.build(
+        document,
+        template_id="technical_two_page\n\\input{template-secret}",
+        template_version="1.0",
+    )
+    second = builder.build(
+        document,
+        template_id="technical_two_page\n\\input{template-secret}",
+        template_version="1.0",
+    )
+
+    assert first == second
+    assert first.sha256 == hashlib.sha256(first.content).hexdigest()
+    source = first.content.decode()
+    assert source.count("\n\\input") == 0
+    assert r"\input{secrets}" not in source
+    assert r"\textbackslash{}input\{secrets\}" in source
+    assert all(
+        escaped in source for escaped in (r"\&", r"\%", r"\#", r"\_", r"\$", r"\textasciicircum{}")
+    )
+    assert escape_latex(r"{}~") == r"\{\}\textasciitilde{}"
+
+
+def test_render_report_accepts_legacy_identity_but_requires_latex_for_new_renderer() -> None:
+    legacy = RenderValidationReport.model_validate(
+        {
+            "document_kind": "cv",
+            "document_version": 1,
+            "template_id": "technical_single_page",
+            "template_version": "1.0",
+            "source_sha256": "0" * 64,
+            "page_count": 1,
+            "maximum_pages": 1,
+            "extraction_matches": True,
+            "layout_overlap_count": 0,
+            "valid": True,
+        }
+    )
+
+    assert legacy.latex_sha256 is None
+    assert legacy.compiler_version is None
+    with pytest.raises(ValueError, match="LaTeX render reports require"):
+        RenderValidationReport.model_validate(
+            {
+                **legacy.model_dump(mode="json"),
+                "renderer_version": "latex_pdf_v1",
+            }
+        )
