@@ -1,6 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import type { JobDetail as JobDetailData, ScoreContribution } from "@/lib/types";
+import { matchStatus, roleCategoryLabel } from "@/lib/product-semantics";
+import { BottomSheet } from "./BottomSheet";
+import { MatchBreakdown } from "./MatchBreakdown";
+import { ProductIcon } from "./ProductIcon";
 
 function Contributions({ title, items }: { title: string; items: ScoreContribution[] }) {
   return (
@@ -57,9 +62,26 @@ export function JobDetail({
   onAction?: (action: "verify" | "shortlist" | "skip" | "generate") => void;
 }) {
   const canPrepare = job.score !== null && job.hard_blockers.length === 0;
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const match = matchStatus(job.score, job.role_category, job.proposed_action);
+  const supported = job.requirements.filter((item) => item.status === "supported");
 
   return (
     <div className="readiness-layout">
+      <section className="mobile-job-summary panel" aria-label="Job summary">
+        <div className={`match-score-large semantic-${match.tone}`}><strong>{job.score ?? "—"}</strong><span>{match.label}</span></div>
+        <div><h2>{job.title}</h2><p>{job.company}</p><p className="muted">{[job.location, job.remote_policy?.replaceAll("_", " "), job.employment_type?.replaceAll("_", " ")].filter(Boolean).join(" · ")}</p></div>
+        <a className="official-source-link" href={job.source_url} target="_blank" rel="noreferrer">View original <ProductIcon name="external" /></a>
+        <button className="button secondary match-analysis-trigger" type="button" onClick={() => setAnalysisOpen(true)}>View match analysis</button>
+      </section>
+      <BottomSheet open={analysisOpen} title="Match analysis" description={match.description} onClose={() => setAnalysisOpen(false)}>
+        <div className={`sheet-score semantic-${match.tone}`}><span>Overall match</span><strong>{job.score ?? "—"}</strong></div>
+        <MatchBreakdown items={job.score_dimensions} />
+        {supported.length ? <div className="sheet-summary"><h3>Main strengths</h3><ul>{supported.slice(0, 3).map((item) => <li key={item.requirement}>{item.requirement}</li>)}</ul></div> : null}
+        {job.hard_blockers.length ? <div className="sheet-summary concern"><h3>Main concern</h3><p>{job.hard_blockers[0]}</p></div> : null}
+        <button className="button primary sheet-primary" type="button" onClick={() => setAnalysisOpen(false)}>Back to job</button>
+      </BottomSheet>
+
       <section className="panel action-panel job-primary-actions" aria-labelledby="job-actions-heading">
         <div>
           <p className="eyebrow">Choose how to continue</p>
@@ -104,7 +126,7 @@ export function JobDetail({
         <article className="panel">
           <p className="eyebrow">Match</p>
           <span className="large-metric">{job.score ?? "—"}</span>
-          <p>{job.role_category?.replaceAll("_", " ") ?? "Not classified"}</p>
+          <p>{roleCategoryLabel(job.role_category)}</p>
         </article>
         <article className="panel">
           <p className="eyebrow">Location and work mode</p>
@@ -116,6 +138,24 @@ export function JobDetail({
           <h2>{salaryRange(job)}</h2>
           <p>{job.employment_type?.replaceAll("_", " ") ?? "Employment type not provided"}</p>
         </article>
+      </section>
+
+      <section className="match-reasons-grid">
+        <article className="panel">
+          <p className="eyebrow">Your strengths</p><h2>Why it matches you</h2>
+          {supported.length ? <ul className="evidence-list positive-list">{supported.map((item) => <li key={item.requirement}><ProductIcon name="check" /><span><strong>{item.requirement}</strong>{item.evidence[0] ? <small>{item.evidence[0]}</small> : null}</span></li>)}</ul> : <p className="muted">No requirement-level matches have been confirmed yet. Review the score breakdown for available evidence.</p>}
+        </article>
+        <article className="panel">
+          <p className="eyebrow">Things to review</p><h2>Potential gaps</h2>
+          {job.hard_blockers.length ? <><h3>Blocking</h3><ul className="evidence-list danger-list">{job.hard_blockers.map((item) => <li key={item}><ProductIcon name="warning" />{item}</li>)}</ul></> : null}
+          {job.requirements.some((item) => item.status !== "supported") ? <><h3>Needs confirmation</h3><ul className="evidence-list attention-list">{job.requirements.filter((item) => item.status !== "supported").slice(0, 5).map((item) => <li key={item.requirement}><ProductIcon name="warning" />{item.requirement}</li>)}</ul></> : null}
+          {!job.hard_blockers.length && job.requirements.every((item) => item.status === "supported") ? <p className="muted">No gaps are recorded in the current analysis.</p> : null}
+        </article>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Match breakdown</p><h2>How this score was built</h2>
+        <MatchBreakdown items={job.score_dimensions} />
       </section>
 
       <section className="panel" aria-labelledby="job-description-heading">
@@ -172,10 +212,10 @@ export function JobDetail({
         </section>
       ) : null}
 
-      <section className="panel action-panel" aria-label="Save or skip job">
+      <section className="panel action-panel" aria-label="Shortlist or skip job">
         <div>
           <p className="eyebrow">Keep your list organised</p>
-          <h2>Save this opportunity for later</h2>
+          <h2>Shortlist this opportunity</h2>
         </div>
         <div className="editor-actions">
           <button
@@ -183,7 +223,7 @@ export function JobDetail({
             disabled={Boolean(busyAction) || job.state === "shortlisted"}
             onClick={() => onAction?.("shortlist")}
           >
-            {busyAction === "shortlist" ? "Saving…" : "Save job"}
+            {busyAction === "shortlist" ? "Adding…" : "Add to shortlist"}
           </button>
           <button
             className="button secondary"

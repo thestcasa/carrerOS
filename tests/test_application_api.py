@@ -509,6 +509,70 @@ def test_settings_api_rejects_self_asserted_autonomy_evidence(
     assert response.status_code == 422
 
 
+def test_emergency_stop_reset_api_is_explicit_scoped_and_idempotent(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    client, _job_id, _applications, _task_queue = _client(
+        copied_candidates_root, tmp_path / "runtime-reset-stop"
+    )
+    with client:
+        login = client.post(
+            "/api/auth/local-session", json={"candidate_id": "example_candidate"}
+        ).json()
+        auth = {"Authorization": f"Bearer {login['session_token']}"}
+        mutation = {
+            **auth,
+            "X-CSRF-Token": login["csrf_token"],
+        }
+        stopped = client.post(
+            "/api/automation/emergency-stop?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-stop-before-reset"},
+        )
+        assert stopped.status_code == 200
+        assert stopped.json()["emergency_stopped"] is True
+
+        body = {
+            "acknowledged": True,
+            "consequence_version": "emergency-stop-reset-consequences-v1",
+        }
+        missing_csrf = client.post(
+            "/api/automation/emergency-stop/reset?candidate_id=example_candidate",
+            headers={**auth, "Idempotency-Key": "api-reset-missing-csrf"},
+            json=body,
+        )
+        false_ack = client.post(
+            "/api/automation/emergency-stop/reset?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-reset-false-ack"},
+            json={**body, "acknowledged": False},
+        )
+        reset_headers = {**mutation, "Idempotency-Key": "api-reset-stop"}
+        reset = client.post(
+            "/api/automation/emergency-stop/reset?candidate_id=example_candidate",
+            headers=reset_headers,
+            json=body,
+        )
+        replay = client.post(
+            "/api/automation/emergency-stop/reset?candidate_id=example_candidate",
+            headers=reset_headers,
+            json=body,
+        )
+        inactive = client.post(
+            "/api/automation/emergency-stop/reset?candidate_id=example_candidate",
+            headers={**mutation, "Idempotency-Key": "api-reset-inactive"},
+            json=body,
+        )
+
+    assert missing_csrf.status_code == 403
+    assert false_ack.status_code == 422
+    assert reset.status_code == 200
+    assert reset.headers["cache-control"] == "no-store"
+    assert reset.json() == replay.json()
+    assert reset.json()["emergency_stopped"] is False
+    assert reset.json()["automation_mode"] == "disabled"
+    assert reset.json()["explicit_autonomy_confirmation"] is False
+    assert inactive.status_code == 409
+
+
 def test_autonomy_confirmation_api_rejects_a_false_acknowledgement(
     copied_candidates_root: Path, tmp_path: Path
 ) -> None:

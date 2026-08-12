@@ -23,7 +23,24 @@ const application = {
   ats_platform: "greenhouse",
   documents: [],
   answers: [],
-  events: [],
+  events: [
+    {
+      event_id: "00000000-0000-0000-0000-000000000601",
+      event_type: "MATERIALS_GENERATED",
+      from_state: "materials_generating",
+      to_state: "review_pending",
+      occurred_at: "2026-08-05T08:00:00Z",
+      payload: {},
+    },
+    {
+      event_id: "00000000-0000-0000-0000-000000000602",
+      event_type: "SUBMISSION_CONFIRMED",
+      from_state: "submitted",
+      to_state: "confirmed",
+      occurred_at: "2026-08-05T10:00:00Z",
+      payload: {},
+    },
+  ],
   review: null,
   correspondence: [],
   archive_available: true,
@@ -82,6 +99,35 @@ const readiness = {
       ],
     },
   ],
+};
+
+const candidateConfig = {
+  identity: {
+    candidate_id: candidateId,
+    full_name: "Example Candidate",
+    email: "candidate@example.invalid",
+    location: "Paris",
+  },
+  career_strategy: { target_roles: ["Machine Learning Engineer"], role_tiers: [] },
+  experience: { items: [] },
+  education: { items: [] },
+  projects: { items: [] },
+  skills: { primary: ["Python"], secondary: [] },
+  languages: { items: [{ language: "English", level: "C1", approved: true }] },
+  manifest: {
+    validation: {
+      profile_approved: false,
+      legal_status_approved: false,
+      automatic_answers_approved: false,
+      cv_templates_approved: false,
+    },
+    workflow: {
+      discovery_enabled: true,
+      automatic_submission_enabled: false,
+      email_tracking_enabled: false,
+      notifications_enabled: true,
+    },
+  },
 };
 
 const job = {
@@ -215,6 +261,53 @@ export async function installApiFixtures(page: Page): Promise<void> {
         candidate_ids: [candidateId],
       });
     }
+    if (path === `/api/candidates/${candidateId}/cv-imports` && route.request().method() === "POST") {
+      const payload = route.request().postDataJSON() as { filename: string; content_base64: string };
+      if (!payload.filename.endsWith(".txt") || !payload.content_base64) {
+        return json(route, { error: { code: "invalid_cv", message: "The CV file was rejected safely." } }, 422);
+      }
+      return json(route, {
+        import_id: "00000000-0000-0000-0000-000000000701",
+        candidate_id: candidateId,
+        source_filename: payload.filename,
+        source_sha256: "7".repeat(64),
+        education: { items: [] },
+        experience: {
+          items: [{
+            id: "imported_experience_1",
+            organization: "Fictional Research Lab",
+            title: "ML Engineer",
+            approved: false,
+            confidentiality: "restricted",
+          }],
+        },
+        warnings: ["Imported facts are drafts and remain unapproved."],
+        approval_required: true,
+        applied_profile_version: null,
+      });
+    }
+    if (
+      path === `/api/candidates/${candidateId}/cv-imports/00000000-0000-0000-0000-000000000701/apply`
+      && route.request().method() === "POST"
+    ) {
+      return json(route, {
+        candidate_id: candidateId,
+        profile_version: "fixture-v2",
+        config: {
+          ...candidateConfig,
+          experience: {
+            items: [{
+              id: "imported_experience_1",
+              organization: "Fictional Research Lab",
+              title: "ML Engineer",
+              approved: false,
+              confidentiality: "restricted",
+            }],
+          },
+        },
+        readiness,
+      });
+    }
     if (path === `/api/candidates/${candidateId}/readiness`) return json(route, readiness);
     if (path === "/api/candidates") {
       return json(route, [{
@@ -227,7 +320,7 @@ export async function installApiFixtures(page: Page): Promise<void> {
       }]);
     }
     if (path === `/api/candidates/${candidateId}`) {
-      return json(route, { candidate_id: candidateId, profile_version: "fixture-v1", config: {}, readiness });
+      return json(route, { candidate_id: candidateId, profile_version: "fixture-v1", config: candidateConfig, readiness });
     }
     if (path === "/api/jobs/sources") return json(route, []);
     if (path === "/api/jobs") return json(route, [job]);
@@ -287,6 +380,7 @@ export async function installApiFixtures(page: Page): Promise<void> {
         created_at: "2026-08-05T10:00:00Z",
       }]);
     }
+    if (path === "/api/security-events") return json(route, []);
     if (path === "/api/analytics/overview") {
       return json(route, {
         candidate_id: candidateId,

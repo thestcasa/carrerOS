@@ -30,7 +30,7 @@ test("active candidate follows navigation and readiness blockers link to editing
 test("job analysis exposes evidence without a submission action", async ({ page }) => {
   await page.goto(`/jobs/${fixtureIds.jobId}?candidate_id=${fixtureIds.candidateId}`);
   await expect(page.getByRole("heading", { name: "Requirements", exact: true })).toBeVisible();
-  await expect(page.getByText("Production Python")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Production Python" })).toBeVisible();
   await expect(page.getByRole("button", { name: /submit/i })).toHaveCount(0);
   await expect(page.getByText(/does not record an application or submission/i)).toBeVisible();
 });

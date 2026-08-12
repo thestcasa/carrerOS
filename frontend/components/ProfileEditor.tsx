@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { TagEditor } from "./TagEditor";
 import { api, ApiError } from "@/lib/api";
 import type {
   CandidateDetail,
@@ -153,18 +154,7 @@ function Field({
     const template = arrayTemplate(path);
     const structured = Boolean(template) || value.some((item) => item !== null && typeof item === "object");
     if (structured) return <StructuredArrayField label={label} path={path} value={value} onChange={onChange} emptyTemplate={template} arrayTemplate={arrayTemplate} />;
-    return (
-      <label className="form-field" htmlFor={id}>
-        <span>{label}</span>
-        <textarea
-          id={id}
-          rows={Math.max(3, value.length + 1)}
-          value={value.join("\n")}
-          onChange={(event) => onChange(path, event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))}
-        />
-        <small>One value per line</small>
-      </label>
-    );
+    return <TagEditor id={id} label={label} values={value.filter((item): item is string => typeof item === "string")} onChange={(values) => onChange(path, values)} />;
   }
 
   const isLongText = fieldKey === "summary";
@@ -293,11 +283,11 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const saveCommand = useRef<{ identity: string; key: string } | null>(null);
 
-  const current = data[activeSection];
-  const dirty = JSON.stringify(current) !== JSON.stringify(baseline[activeSection]);
+  const current = data[activeSection] ?? {};
+  const dirty = JSON.stringify(current) !== JSON.stringify(baseline[activeSection] ?? {});
 
   function change(path: string[], value: JsonValue) {
-    setData((previous) => ({ ...previous, [activeSection]: updateAtPath(previous[activeSection], path, value) }));
+    setData((previous) => ({ ...previous, [activeSection]: updateAtPath(previous[activeSection] ?? {}, path, value) }));
     setMessage(null);
   }
 
@@ -386,7 +376,7 @@ export function ProfileEditor({ detail, initialSection = "identity" }: { detail:
         {message ? <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p> : null}
         <div className="editor-actions">
           <button className="button primary" disabled={!dirty || saving} onClick={save}>{saving ? "Saving…" : "Save new version"}</button>
-          <button className="button secondary" disabled={!dirty || saving} onClick={() => setData((previous) => ({ ...previous, [activeSection]: structuredClone(baseline[activeSection]) }))}>Discard changes</button>
+          <button className="button secondary" disabled={!dirty || saving} onClick={() => setData((previous) => ({ ...previous, [activeSection]: structuredClone(baseline[activeSection] ?? {}) }))}>Discard changes</button>
         </div>
       </section>
     </div>

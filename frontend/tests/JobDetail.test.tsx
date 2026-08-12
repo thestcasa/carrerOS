@@ -36,7 +36,7 @@ describe("JobDetail actions", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/failed safely/i);
     expect(screen.getByRole("button", { name: /prepare application/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /save job/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /add to shortlist/i })).toBeDisabled();
 
     fireEvent.click(screen.getByText("Advanced job analysis"));
     expect(screen.getByRole("button", { name: /verifying/i })).toBeDisabled();
@@ -68,5 +68,23 @@ describe("JobDetail actions", () => {
       "href",
       job.source_url,
     );
+  });
+
+  it("opens an accessible evidence-based match sheet and returns focus", () => {
+    const evidenceJob = {
+      ...job,
+      score_dimensions: [{ name: "role_fit", points: 28, explanation: "Configured target role" }],
+      hard_blockers: ["work authorization needs confirmation"],
+    };
+    render(<JobDetail job={evidenceJob} />);
+    const trigger = screen.getByRole("button", { name: "View match analysis" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Match analysis" });
+    expect(dialog).toHaveTextContent("+28 pts");
+    expect(dialog).toHaveTextContent("work authorization needs confirmation");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Match analysis" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

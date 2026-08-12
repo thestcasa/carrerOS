@@ -182,7 +182,7 @@ export interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
 
-export type JobWorkflowState = "discovered" | "saved" | "ignored" | "blocked" | "shortlisted";
+export type JobWorkflowState = "discovered" | "scored" | "verified" | "verification_failed" | "saved" | "ignored" | "blocked" | "shortlisted";
 export type JobRoleCategory = "target" | "adjacent" | "non_target";
 
 export interface RequiredJobLanguage {
@@ -213,6 +213,8 @@ export interface JobSummary {
   deadline: string | null;
   expected_start_date: string | null;
   verified_open_at: string | null;
+  verification_status?: string | null;
+  verification_reason?: string | null;
   salary_display: string | null;
   salary_min: string | null;
   salary_max: string | null;
@@ -230,6 +232,7 @@ export interface JobSummary {
   hard_blockers: string[];
   possible_duplicate: boolean;
   stale: boolean;
+  proposed_action?: "skip" | "review" | "prepare" | "auto_apply";
 }
 
 export interface ScoreContribution {
@@ -257,7 +260,6 @@ export interface JobDetail extends JobSummary {
   source_verified: boolean;
   source_trust_level: string;
   classification_confidence: number | null;
-  proposed_action: "skip" | "review" | "prepare" | "auto_apply";
   required_skills: string[];
   preferred_skills: string[];
   requirements: RequirementEvidence[];

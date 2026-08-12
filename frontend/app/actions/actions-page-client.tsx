@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { ProductIcon } from "@/components/ProductIcon";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
 import type { HumanActionView } from "@/lib/types";
@@ -79,8 +80,8 @@ export function ActionsPageClient({ candidateId }: { candidateId: string }) {
   return (
     <div className="page-wrap">
       <header className="page-header">
-        <div><p className="eyebrow">{candidateId}</p><h1>Human actions</h1></div>
-        <p>CAPTCHA, OTP, legal ambiguity, and novel sensitive questions pause in the same isolated browser session. Career OS never bypasses them.</p>
+        <div><p className="eyebrow">Action required</p><h1>Needs your attention</h1></div>
+        <p>Complete human-only steps so Career OS can continue safely. CAPTCHA and OTP are never bypassed.</p>
       </header>
       {error ? <ErrorState message={error} /> : null}
       {!actions ? (
@@ -92,15 +93,17 @@ export function ActionsPageClient({ candidateId }: { candidateId: string }) {
         </div>
       ) : (
         <div className="candidate-list">
-          {actions.map((action) => {
+          {[...actions].sort((left, right) => Number(left.status !== "pending") - Number(right.status !== "pending") || left.created_at.localeCompare(right.created_at)).map((action) => {
             const actionBusy = busy?.startsWith(`${action.action_id}:`) ?? false;
             return (
-              <article className="panel" key={action.action_id}>
+              <article className="panel action-required-detail" key={action.action_id}>
                 <div className="panel-title">
                   <div><p className="eyebrow">{action.kind}</p><h2>{action.company} · {action.role}</h2></div>
                   <StatusPill status={action.status} />
                 </div>
                 <p>{action.reason}</p>
+                <p className="action-created"><ProductIcon name="clock" /> {new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(action.created_at))}</p>
+                <details className="technical-inline"><summary>Technical details</summary>
                 <dl className="metadata-list">
                   <div><dt>Safe origin</dt><dd>{action.safe_origin ?? "Unavailable"}</dd></div>
                   <div><dt>Browser session</dt><dd>{action.browser_session_health.replaceAll("_", " ")}</dd></div>
@@ -116,6 +119,7 @@ export function ActionsPageClient({ candidateId }: { candidateId: string }) {
                     </>
                   ) : null}
                 </dl>
+                </details>
                 <section aria-label="Action consequences">
                   <h3>Before continuing</h3>
                   <p>{action.continue_consequence}</p>

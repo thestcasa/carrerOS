@@ -82,6 +82,7 @@ describe("ActionsPageClient", () => {
   it("shows scoped evidence, safe origin, verifier state, and cancellation consequences", async () => {
     render(<ActionsPageClient candidateId="example_candidate" />);
 
+    fireEvent.click(await screen.findByText("Technical details"));
     expect(await screen.findByText("http://127.0.0.1:8090")).toBeVisible();
     expect(screen.getByText("awaiting human")).toBeVisible();
     expect(screen.getByText("Withdraw without submitting.")).toBeVisible();

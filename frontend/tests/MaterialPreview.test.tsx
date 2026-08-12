@@ -137,4 +137,26 @@ describe("MaterialPreview", () => {
     expect(screen.getByText("Immutable history", { selector: ".material-state" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit selected draft" })).toBeDisabled();
   });
+
+  it("promotes a selected historical CV through a new backend-reviewed version", async () => {
+    const onSaveRevision = vi.fn().mockResolvedValue({
+      ...application,
+      documents: [
+        document("z", "cv", 3, "CV immutable version one", false),
+        ...application.documents.map((item) => ({ ...item, immutable: true })),
+      ],
+    });
+    render(<MaterialPreview application={application} onSaveRevision={onSaveRevision} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cv · version 1/i }));
+    expect(screen.getByText(/original uploaded import file is not retained/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Use CV version 1" }));
+
+    await waitFor(() => expect(onSaveRevision).toHaveBeenCalledWith({
+      document_id: "v",
+      base_version: 2,
+      content: "CV immutable version one",
+      reason: "Candidate selected CV version 1 for this application",
+    }));
+  });
 });

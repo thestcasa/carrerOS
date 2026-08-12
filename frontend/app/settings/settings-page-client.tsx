@@ -229,6 +229,29 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
       setSaving(false);
     }
   }
+  async function restart() {
+    if (!globalThis.confirm("Clear the emergency stop? Automation will remain off. Pending pre-stop authorizations are cancelled and interrupted applications will not retry automatically.")) return;
+    setSaving(true);
+    setError(null);
+    const payload = { candidate_id: candidateId, consequence_version: "emergency-stop-reset-consequences-v1" };
+    const identity = `${candidateId}:restart-automation:${JSON.stringify(payload)}`;
+    try {
+      const updated = await api.restartAutomation(
+        candidateId,
+        replayKey("restart-automation", payload),
+      );
+      mutationKeys.current.delete(identity);
+      setSettings(updated);
+      setRetentionDays(updated.browser_session_retention_days);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Autopilot could not be restarted safely.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const confirmationPrerequisitesBlocked = settings?.autonomy_blockers.some(
     (blocker) => blocker !== "explicit_confirmation_missing",
   ) ?? true;
@@ -521,13 +544,14 @@ function CandidateSettings({ candidateId }: { candidateId: string }) {
               Prevents all new submission authorizations while preserving
               in-progress state and audit history.
             </p>
-            <button
-              className="button danger"
-              disabled={saving}
-              onClick={() => void stop()}
-            >
-              Activate emergency stop
-            </button>
+            {settings.emergency_stopped ? (
+              <>
+                <p><strong>Career OS is stopped.</strong> Clearing the stop keeps automation disabled, cancels pending pre-stop authorizations, and never retries an interrupted application.</p>
+                <button className="button primary" disabled={saving} onClick={() => void restart()}>Clear stop safely</button>
+              </>
+            ) : (
+              <button className="button danger" disabled={saving} onClick={() => void stop()}>Activate emergency stop</button>
+            )}
           </section>
         </div>
       )}

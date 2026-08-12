@@ -8,6 +8,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     candidate: vi.fn(),
     readiness: vi.fn(),
+    humanActions: vi.fn(),
   },
 }));
 
@@ -29,6 +30,7 @@ describe("candidate route selection", () => {
       config: { identity: {} },
       readiness: { ...readiness, candidate_id: candidateId },
     }));
+    vi.mocked(api.humanActions).mockResolvedValue([]);
     vi.mocked(api.readiness).mockImplementation(async (candidateId) => ({
       ...readiness,
       candidate_id: candidateId,

@@ -423,6 +423,8 @@ export const api = {
     request<SettingsView>(`/api/automation/confirm?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ acknowledged: true, consequence_version: "autonomy-consequences-v1" }) }),
   emergencyStop: (candidateId: string, idempotencyKey: string) =>
     request<SettingsView>(`/api/automation/emergency-stop?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey) }),
+  restartAutomation: (candidateId: string, idempotencyKey: string) =>
+    request<SettingsView>(`/api/automation/emergency-stop/reset?candidate_id=${encodeURIComponent(candidateId)}`, { method: "POST", headers: commandHeaders(idempotencyKey), body: JSON.stringify({ acknowledged: true, consequence_version: "emergency-stop-reset-consequences-v1" }) }),
   analytics: (candidateId: string) =>
     request<AnalyticsOverview>(`/api/analytics/overview?candidate_id=${encodeURIComponent(candidateId)}`),
 };

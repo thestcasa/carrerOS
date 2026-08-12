@@ -101,7 +101,7 @@ export function CVImportPanel({
         </div>
       </div>
       <p>
-        Bounded TXT, PDF, and DOCX text is extracted locally. The source file is not retained, and
+        Bounded TXT, PDF, and DOCX text is extracted locally. The source file is not retained; approved facts can later be used to generate selectable application CV versions, and
         every imported fact remains restricted and unapproved until you review it. Encrypted,
         active-content, oversized, or excessively compressed documents fail closed.
       </p>

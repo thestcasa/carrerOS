@@ -118,6 +118,28 @@ export function MaterialPreview({
       setSaving(false);
     }
   }
+  async function selectCvVersionForApplication() {
+    const latestCv = ordered.find((item) => item.kind === "cv");
+    if (!latestCv || document.kind !== "cv" || latestCv.document_id === document.document_id) return;
+    setSaving(true);
+    try {
+      const updated = await onSaveRevision({
+        document_id: latestCv.document_id,
+        base_version: latestCv.version,
+        content: document.content,
+        reason: `Candidate selected CV version ${document.version} for this application`,
+      });
+      const selected = [...updated.documents]
+        .filter((item) => item.kind === "cv")
+        .sort((left, right) => right.version - left.version)[0];
+      if (selected) setSelectedId(selected.document_id);
+    } catch {
+      // The parent keeps the backend error visible and the candidate can retry safely.
+    } finally {
+      setSaving(false);
+    }
+  }
+
 
   const provenance: JsonObject[] = document.provenance;
 
@@ -222,6 +244,14 @@ export function MaterialPreview({
           ) : (
             <pre>{document.content}</pre>
           )}
+          {!editing && document.kind === "cv" && ordered.some((item) => item.kind === "cv" && item.version > document.version) ? (
+            <div className="cv-version-choice">
+              <p>This is an earlier generated CV. Selecting it appends a newly validated and reviewed version; the original uploaded import file is not retained.</p>
+              <button className="button primary" disabled={disabled || saving} onClick={() => void selectCvVersionForApplication()} type="button">
+                {saving ? "Selecting…" : `Use CV version ${document.version}`}
+              </button>
+            </div>
+          ) : null}
           <p className="artifact-hash">SHA-256 {document.sha256}</p>
         </article>
       </div>

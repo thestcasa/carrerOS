@@ -1,5 +1,21 @@
 # Autonomous Build Status
 
+## Active 2026-08-12 responsive redesign
+
+- Build status: **IN PROGRESS - REFERENCE-LED MOBILE DECISION CENTER**
+- Baseline: commit e100f5a supplies a partial mobile shell and job simplification, but the current
+  task requires a broader responsive product system across Home, Jobs, application progress,
+  Action required, Profile, advanced areas, shared status semantics, accessibility, and visual QA.
+- Reference inspected: current user-owned untracked image
+  design/ChatGPT Image Aug 12, 2026, 07_19_00 PM.png (1024x1536). The requested docs/design/...
+  path was not present at inspection time.
+- Current safety posture: frontend-only by default; preserve candidate-scoped API calls, durable
+  idempotency keys, emergency stop, human CAPTCHA/OTP gates, immutable history, and backend-only
+  submission authorization.
+- Preserved user-owned paths: rtifacts/, candidates/.lifecycle_locks/, cv/, design/,
+  untime/, scripts/run-autonomous-build.sh, and how d8c72b0 remain unstaged.
+- Verification will be updated with exact current results after implementation and visual QA.
+
 ## Active 2026-08-12 milestone
 
 - Build status: **COMPLETE - MOBILE-FIRST PRODUCT AND LATEX/PDF MATERIALS**
@@ -269,6 +285,55 @@
 
 ## Latest verification
 
+
+## Responsive product redesign completion  2026-08-12
+
+The responsive Career OS redesign is complete and verified. Mobile is now a decision center with
+fixed safe-area navigation, compact Autopilot status, prominent pending actions, match-first job
+cards, mobile filter and analysis sheets, an event-backed application timeline, and a profile
+overview with section navigation and tag editing. Desktop retains board views, diagnostics, source
+management, settings, and the broader control-center information density. Light and dark themes
+share semantic design tokens and persist across route navigation.
+
+New shared frontend primitives include `ProductIcon`, `ThemeToggle`, `BottomSheet`,
+`AutopilotCard`, `ActionRequiredCard`, `MatchBreakdown`, `ApplicationTimeline`,
+`ProfileOverview`, and `TagEditor`. Central product semantics map backend application states,
+Autopilot states, actions, match categories, dates, and safe errors into candidate language while
+preserving raw state and audit data inside technical disclosures. Match labels derive from the
+backend proposed action; unsupported skill evidence is never presented as a confirmed match.
+
+Emergency stop can now be reset through a candidate-scoped, CSRF- and idempotency-protected API
+with an explicit consequence acknowledgement. Resetting leaves automation disabled, invalidates
+the previous autonomy confirmation, expires every unconsumed authorization, denies prepared
+controlled attempts/tasks, and refuses to clear while a click-authorized attempt is unresolved.
+The user must then explicitly choose a mode to restart processing. This is intentionally labelled
+Reset emergency stop, not Resume, because clearing a safety stop must not replay work.
+
+CV imports remain bounded draft extraction: original uploaded bytes are not retained and extracted
+facts remain unapproved until review. For applications, candidates can choose any existing
+generated CV version while review is open; the action appends a newly rendered and independently
+reviewed version through the existing material-revision contract. Artifact and configuration
+downloads stay candidate scoped and hash/type checked. Browser tests cover a fictional TXT CV
+upload/apply flow and exact PDF artifact download. Literal reuse of an arbitrary original upload
+was deliberately not added because it would bypass the current provenance/privacy model without a
+new trusted candidate-asset subsystem.
+
+Final verification:
+
+- Backend: Ruff format/check, strict mypy, and 370/370 pytest tests pass.
+- Frontend: ESLint, strict TypeScript, 105/105 Vitest tests, and Next.js production build pass.
+- Browser: 85 tests pass and 7 intentional cross-project skips remain; all 13 routes, named
+  controls, active navigation, uploads/downloads, light/dark persistence, accessibility, desktop,
+  and 320/375/390/393/430 px layouts are covered with fictional intercepted data.
+- Safety journey: material generation/review/start/dry-run reaches READY_TO_SUBMIT and asserts no
+  authorization, controlled attempt, submission event, submitted timestamp, confirmation, or
+  external request. No live final action was exercised.
+- Schema/config: fresh disposable SQLite Alembic upgrade and check report no new operations;
+  `example_candidate` validation succeeds and readiness reports ready.
+- Visual: final production screenshots for light/dark Home, Jobs/job detail, Applications/detail,
+  Action Required, Profile, and desktop control-center layouts were inspected after the test run.
+
+Known constraints are deliberate: the requested `docs/design/career-os-mobile-reference.png` was
 - Backend: `ruff format --check`, Ruff lint, strict mypy, and **360 pytest tests pass** with seven
   non-failing dependency deprecation warnings on Python 3.14.4. With isolated Chromium and extracted
   libraries, the real synthetic browser matrix passes **20/20** across standard, optional-cover,

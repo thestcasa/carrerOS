@@ -14,6 +14,7 @@ describe("JobsInbox", () => {
     expect(screen.getByText("ML Engineer")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /submit/i })).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "All jobs" }));
     fireEvent.change(screen.getByRole("searchbox", { name: /search jobs/i }), {
       target: { value: "Senior" },
     });
@@ -27,7 +28,7 @@ describe("JobsInbox", () => {
     render(<JobsInbox candidateId="example_candidate" jobs={[jobs[0]]} />);
 
     expect(
-      screen.getByRole("link", { name: /prepare application for ml engineer/i }),
+      screen.getByRole("link", { name: /review ml engineer/i }),
     ).toHaveAttribute("href", "/jobs/job-1?candidate_id=example_candidate");
 
     const manual = screen.getByRole("link", {
@@ -40,8 +41,29 @@ describe("JobsInbox", () => {
 
   it("can hide jobs with unresolved blockers", () => {
     render(<JobsInbox candidateId="example_candidate" jobs={jobs} />);
+    fireEvent.click(screen.getByRole("button", { name: "All jobs" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /ready to prepare/i }));
     expect(screen.getByText("ML Engineer")).toBeInTheDocument();
     expect(screen.queryByText("Senior Analyst")).not.toBeInTheDocument();
+  });
+
+  it("opens mobile filters, applies real score data, resets, and returns focus", () => {
+    render(<JobsInbox candidateId="example_candidate" jobs={jobs} />);
+    const trigger = screen.getByRole("button", { name: "Open job filters" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "Filters" });
+    expect(dialog).toBeVisible();
+    fireEvent.change(screen.getByRole("slider", { name: /minimum match score/i }), {
+      target: { value: "90" },
+    });
+    expect(screen.getByText("No jobs match these filters")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("ML Engineer")).toBeVisible();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

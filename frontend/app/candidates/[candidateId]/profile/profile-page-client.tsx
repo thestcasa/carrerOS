@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { ProfileOverview } from "@/components/ProfileOverview";
 import { CVImportPanel } from "@/components/CVImportPanel";
 import { ProfileEditor } from "@/components/ProfileEditor";
 import { api } from "@/lib/api";
@@ -37,13 +38,14 @@ export function ProfilePageClient({ candidateId, initialSection }: { candidateId
   return (
     <div className="page-wrap wide-page">
       <header className="page-header profile-page-header">
-        <div><p className="eyebrow">Your profile</p><h1>Tell us about your experience</h1><p>Upload your CV first, then review the details used to prepare applications.</p></div>
+        <div><p className="eyebrow">Your profile</p><h1>Profile</h1><p>Keep the facts used in every application accurate and under your control.</p></div>
         <Link className="button secondary" href={`/candidates/${candidateId}/readiness`}>Check profile status</Link>
       </header>
+      {detail ? <ProfileOverview detail={detail} /> : null}
       {error ? <ErrorState message={error} retry={() => void load()} /> : null}
       {!error && !detail ? <LoadingState label="Loading versioned profile" /> : null}
       {detail ? <CVImportPanel candidateId={candidateId} onApplied={setDetail} /> : null}
-      {detail ? <details className="advanced-diagnostics profile-details" open={Boolean(initialSection)}><summary>Review and edit profile details</summary><ProfileEditor detail={detail} initialSection={initialSection} /></details> : null}
+      {detail ? <details id="profile-editor" className="advanced-diagnostics profile-details" open={Boolean(initialSection)}><summary>Review and edit profile details</summary><ProfileEditor key={initialSection ?? "identity"} detail={detail} initialSection={initialSection} /></details> : null}
     </div>
   );
 }

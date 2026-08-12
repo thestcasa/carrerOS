@@ -16,6 +16,7 @@ from app.applications import (
     ApplicationService,
     CorrespondenceIngestRequest,
     DryRunCommand,
+    EmergencyStopResetRequest,
     HumanActionView,
     SettingsUpdate,
     SyntheticSubmissionRequest,
@@ -38,8 +39,10 @@ from app.domain.models import (
     Base,
     BrowserSession,
     CandidateSettingsRecord,
+    ControlledSubmissionAttempt,
     HumanAction,
     SecurityEvent,
+    SubmissionAuthorizationRecord,
 )
 from app.job_service import DiscoveryRequest, JobService
 from app.tasks import TaskQueue
@@ -132,6 +135,118 @@ def _execute_browser_dry_run(
     )
     assert completed.status == "completed"
     return queued, applications.get_application("example_candidate", application_id)
+
+
+def test_complete_dry_run_stops_before_any_submission_authorization(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    """Exercise the complete safe journey and prove that it never crosses the send boundary."""
+    _lower_fixture_threshold(copied_candidates_root)
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
+    job_id = _job(jobs, external_id=502)
+    generated = applications.generate_materials("example_candidate", job_id, "generate-no-send-502")
+    applications.approve_materials(
+        "example_candidate", generated.application_id, "approve-no-send-502"
+    )
+    applications.start("example_candidate", generated.application_id, "start-no-send-502")
+
+    _queued, ready = _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
+        generated.application_id,
+        DryRunCommand(),
+        "dry-run-no-send-502",
+    )
+
+    assert ready.state is ApplicationState.READY_TO_SUBMIT
+    assert ready.submitted_at is None
+    assert ready.confirmation_reference is None
+    assert all(
+        event.event_type
+        not in {"SUBMISSION_AUTHORIZED", "SUBMISSION_STARTED", "SUBMISSION_CONFIRMED"}
+        for event in ready.events
+    )
+    with sessions() as session:
+        assert (
+            session.scalar(
+                select(SubmissionAuthorizationRecord).where(
+                    SubmissionAuthorizationRecord.application_id == generated.application_id
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(ControlledSubmissionAttempt).where(
+                    ControlledSubmissionAttempt.application_id == generated.application_id
+                )
+            )
+            is None
+        )
+
+
+def test_emergency_reset_expires_old_authorization_and_allows_explicit_restart(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _lower_fixture_threshold(copied_candidates_root)
+    runtime_root = tmp_path / "runtime"
+    jobs, applications, sessions = _services(copied_candidates_root, runtime_root)
+    job_id = _job(jobs, external_id=503)
+    generated = applications.generate_materials("example_candidate", job_id, "generate-reset-503")
+    applications.approve_materials(
+        "example_candidate", generated.application_id, "approve-reset-503"
+    )
+    applications.start("example_candidate", generated.application_id, "start-reset-503")
+    _queued, ready = _execute_browser_dry_run(
+        applications,
+        sessions,
+        runtime_root,
+        generated.application_id,
+        DryRunCommand(),
+        "dry-run-reset-503",
+    )
+    assert ready.state is ApplicationState.READY_TO_SUBMIT
+    old_authorization = applications.authorize(
+        "example_candidate", generated.application_id, "authorize-before-stop-503"
+    )
+
+    applications.emergency_stop("example_candidate", "stop-with-authorization-503")
+    reset = applications.restart_automation(
+        "example_candidate",
+        EmergencyStopResetRequest(
+            acknowledged=True,
+            consequence_version="emergency-stop-reset-consequences-v1",
+        ),
+        "reset-with-authorization-503",
+    )
+
+    assert reset.emergency_stopped is False
+    assert reset.automation_mode == "disabled"
+    with pytest.raises(ApplicationConflictError, match="expired"):
+        applications.submit_synthetic(
+            "example_candidate",
+            generated.application_id,
+            SyntheticSubmissionRequest(
+                authorization_id=old_authorization.authorization_id,
+                synthetic_fixture_acknowledged=True,
+            ),
+            "stale-submit-after-reset-503",
+        )
+    unchanged = applications.get_application("example_candidate", generated.application_id)
+    assert unchanged.state is ApplicationState.READY_TO_SUBMIT
+    assert unchanged.submitted_at is None
+    assert unchanged.confirmation_reference is None
+
+    applications.update_settings(
+        SettingsUpdate(candidate_id="example_candidate", automation_mode="approval_required"),
+        "explicit-mode-after-reset-503",
+    )
+    fresh_authorization = applications.authorize(
+        "example_candidate", generated.application_id, "authorize-after-reset-503"
+    )
+    assert fresh_authorization.authorization_id != old_authorization.authorization_id
 
 
 def test_materials_dry_run_archive_and_confirmed_synthetic_submission_are_integrated(
@@ -1083,6 +1198,52 @@ def test_settings_and_emergency_stop_are_hash_chained_in_admin_audit(
         ]
         assert records[0].previous_hash is None
         assert records[1].previous_hash == records[0].event_hash
+
+
+def test_emergency_stop_reset_is_disabled_idempotent_and_audited(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    applications.update_settings(
+        SettingsUpdate(candidate_id="example_candidate", automation_mode="dry_run"),
+        "settings-before-stop",
+    )
+    applications.emergency_stop("example_candidate", "stop-before-reset")
+    request = EmergencyStopResetRequest(
+        acknowledged=True,
+        consequence_version="emergency-stop-reset-consequences-v1",
+    )
+
+    reset = applications.restart_automation("example_candidate", request, "reset-stop")
+    replay = applications.restart_automation("example_candidate", request, "reset-stop")
+
+    assert reset == replay
+    assert reset.emergency_stopped is False
+    assert reset.automation_mode == "disabled"
+    assert reset.explicit_autonomy_confirmation is False
+    with sessions() as session:
+        records = session.scalars(
+            select(AdministrativeAuditRecord).order_by(AdministrativeAuditRecord.occurred_at)
+        ).all()
+        assert [record.event_type for record in records] == [
+            "settings_updated",
+            "emergency_stop_activated",
+            "emergency_stop_cleared",
+        ]
+        assert records[-1].details["interrupted_work_replayed"] is False
+        assert records[-1].previous_hash == records[-2].event_hash
+
+
+def test_emergency_stop_reset_rejects_when_stop_is_inactive(
+    copied_candidates_root: Path, tmp_path: Path
+) -> None:
+    _jobs, applications, _sessions = _services(copied_candidates_root, tmp_path / "runtime")
+    request = EmergencyStopResetRequest(
+        acknowledged=True,
+        consequence_version="emergency-stop-reset-consequences-v1",
+    )
+    with pytest.raises(ApplicationConflictError, match="not active"):
+        applications.restart_automation("example_candidate", request, "inactive-reset")
 
 
 def test_reading_default_settings_does_not_mutate_persistence(

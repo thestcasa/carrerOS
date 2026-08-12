@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
+import { ApplicationTimeline } from "@/components/ApplicationTimeline";
 import { MaterialPreview } from "@/components/MaterialPreview";
 import { StatusPill } from "@/components/StatusPill";
 import { SubmittedPackageViewer } from "@/components/SubmittedPackageViewer";
@@ -678,6 +679,12 @@ export function ApplicationPageClient({
           </button>
         ) : null}
       </section>
+      <section className="panel application-progress-panel">
+        <p className="eyebrow">Application progress</p>
+        <h2>What is happening</h2>
+        <ApplicationTimeline events={application.events} currentState={application.state} />
+      </section>
+
       <MaterialPolicyPanel policy={application.material_policy} />
       <MaterialPreview
         application={application}
@@ -748,9 +755,9 @@ export function ApplicationPageClient({
           <p className="muted">The pre-submit archive is created immediately before authorization.</p>
         )}
       </section>
-      <section className="panel">
-        <p className="eyebrow">Append-only audit</p>
-        <h2>State timeline</h2>
+      <details className="panel technical-details">
+        <summary>Technical details and audit trail</summary>
+        <h2>Raw state events</h2>
         <ol className="timeline">
           {application.events.map((event) => (
             <li key={event.event_id}>
@@ -760,7 +767,7 @@ export function ApplicationPageClient({
             </li>
           ))}
         </ol>
-      </section>
+      </details>
     </div>
   );
 }

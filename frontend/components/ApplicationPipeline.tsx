@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { ApplicationState, ApplicationSummary } from "@/lib/types";
+import { applicationStatus } from "@/lib/product-semantics";
 import { StatusPill } from "./StatusPill";
 
 const lanes: Array<{ label: string; states: ApplicationState[] }> = [
@@ -24,6 +25,7 @@ function ageLabel(value: string): string {
 }
 
 function ApplicationCard({ candidateId, application }: { candidateId: string; application: ApplicationSummary }) {
+  const status = applicationStatus(application.state);
   return (
     <article className="panel application-card">
       <div className="panel-title">
@@ -32,10 +34,11 @@ function ApplicationCard({ candidateId, application }: { candidateId: string; ap
       </div>
       <dl className="compact-metadata">
         <div><dt>Score</dt><dd>{application.score ?? "Not scored"}</dd></div>
-        <div><dt>Last event</dt><dd>{application.last_event?.replaceAll("_", " ") ?? "Created"}</dd></div>
+        <div><dt>Status</dt><dd>{status.label}</dd></div>
         <div><dt>Age in state</dt><dd>{ageLabel(application.updated_at)}</dd></div>
       </dl>
-      <p className="muted">Next: {application.next_action}</p>
+      <p className="muted">{status.description}</p>
+      <details className="technical-inline"><summary>Technical details</summary><p>State: <code>{application.state}</code></p><p>Last event: <code>{application.last_event ?? "created"}</code></p><p>Backend next action: {application.next_action}</p></details>
       <Link className="button secondary" href={`/applications/${application.application_id}?candidate_id=${encodeURIComponent(candidateId)}`}>Open application</Link>
     </article>
   );

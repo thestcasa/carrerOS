@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AutonomyQuickStart } from "@/components/AutonomyQuickStart";
+import { ActionRequiredCard } from "@/components/ActionRequiredCard";
+import { AutopilotCard } from "@/components/AutopilotCard";
 import { ErrorState, LoadingState } from "@/components/LoadingState";
 import { GuidedPipeline } from "@/components/GuidedPipeline";
 import { StatusPill } from "@/components/StatusPill";
 import { api } from "@/lib/api";
 import { useActiveCandidateId } from "@/lib/active-candidate";
-import type { AnalyticsOverview, ApplicationSummary, CandidateSummary, HealthReport, HumanActionView, JobSummary, NotificationView, ReadinessReport, SettingsView } from "@/lib/types";
+import type { AnalyticsOverview, ApplicationSummary, CandidateSummary, DiscoverySourceView, HealthReport, HumanActionView, JobSummary, NotificationView, ReadinessReport, SettingsView } from "@/lib/types";
 
 export default function OverviewPage() {
   const [health, setHealth] = useState<HealthReport | null>(null);
@@ -21,13 +22,14 @@ export default function OverviewPage() {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
   const [applications, setApplications] = useState<ApplicationSummary[] | null>(null);
   const [notifications, setNotifications] = useState<NotificationView[] | null>(null);
+  const [sources, setSources] = useState<DiscoverySourceView[] | null>(null);
   const [loadedCandidateId, setLoadedCandidateId] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const activeCandidate = useActiveCandidateId();
 
   const load = useCallback(async (candidateId: string, generation: number) => {
     try {
-      const [healthReport, candidateList, analyticsReport, settingsReport, humanActions, readinessReport, jobList, applicationList, notificationList] = await Promise.all([api.health(), api.candidates(), api.analytics(candidateId), api.settings(candidateId), api.humanActions(candidateId), api.readiness(candidateId), api.jobs(candidateId), api.applications(candidateId), api.notifications(candidateId)]);
+      const [healthReport, candidateList, analyticsReport, settingsReport, humanActions, readinessReport, jobList, applicationList, notificationList, sourceList] = await Promise.all([api.health(), api.candidates(), api.analytics(candidateId), api.settings(candidateId), api.humanActions(candidateId), api.readiness(candidateId), api.jobs(candidateId), api.applications(candidateId), api.notifications(candidateId), api.discoverySources(candidateId)]);
       if (generation !== requestGeneration.current) return;
       setError(null);
       setHealth(healthReport);
@@ -35,10 +37,11 @@ export default function OverviewPage() {
       setAnalytics(analyticsReport); setSettings(settingsReport); setActions(humanActions);
       setReadiness(readinessReport); setJobs(jobList); setApplications(applicationList);
       setNotifications(notificationList);
+      setSources(sourceList);
       setLoadedCandidateId(candidateId);
     } catch (requestError) {
       if (generation !== requestGeneration.current) return;
-      setAnalytics(null); setSettings(null); setActions(null); setReadiness(null); setJobs(null); setApplications(null); setNotifications(null); setLoadedCandidateId(null);
+      setAnalytics(null); setSettings(null); setActions(null); setReadiness(null); setJobs(null); setApplications(null); setNotifications(null); setSources(null); setLoadedCandidateId(null);
       setError({ candidateId, message: requestError instanceof Error ? requestError.message : "The control plane is unavailable." });
     }
   }, []);
@@ -63,28 +66,32 @@ export default function OverviewPage() {
   if (!activeCandidate) return null;
 
   return (
-    <div className="page-wrap">
+    <div className="page-wrap home-page">
       <section className="home-hero">
         <div>
-          <p className="eyebrow">Your job search</p>
-          <h1>The right opportunities, already ranked for you.</h1>
-          <p className="hero-copy">Review your best matches, prepare an application, or let Career OS keep searching.</p>
+          <p className="home-greeting">Your job search,</p>
+          <h1>on autopilot</h1>
+          <p className="hero-copy">Career OS is finding the right opportunities and preparing everything for you.</p>
           <div className="hero-actions">
             <Link className="button primary" href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all jobs</Link>
             <Link className="button secondary" href={`/candidates/${encodeURIComponent(activeCandidate)}/profile`}>Update profile</Link>
           </div>
         </div>
-        {settings ? <AutonomyQuickStart candidateId={activeCandidate} settings={settings} onChange={setSettings} /> : null}
+        {settings && actions && jobs && applications && sources ? <AutopilotCard candidateId={activeCandidate} settings={settings} actions={actions} jobs={jobs} applications={applications} sources={sources} /> : null}
       </section>
 
       {error?.candidateId === activeCandidate ? <ErrorState message={error.message} retry={() => void load(activeCandidate, ++requestGeneration.current)} /> : null}
-      {error?.candidateId !== activeCandidate && (!health || !candidates || loadedCandidateId !== activeCandidate || !analytics || !settings || !actions || !readiness || !jobs || !applications || !notifications) ? <LoadingState label="Checking the control plane" /> : null}
+      {error?.candidateId !== activeCandidate && (!health || !candidates || loadedCandidateId !== activeCandidate || !analytics || !settings || !actions || !readiness || !jobs || !applications || !notifications || !sources) ? <LoadingState label="Checking your job search" /> : null}
 
-      {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions && readiness && jobs && applications && notifications ? (
+      {health && candidates && loadedCandidateId === activeCandidate && analytics && settings && actions && readiness && jobs && applications && notifications && sources ? (
         <>
         <section className="recommended-section" aria-labelledby="recommended-title">
+        {actions.some((action) => action.status === "pending") ? <section className="attention-section" aria-labelledby="attention-title">
+          <div className="section-heading compact-heading"><h2 id="attention-title">Needs your attention <span className="count-badge">{actions.filter((action) => action.status === "pending").length}</span></h2><Link href={`/actions?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all</Link></div>
+          <div className="attention-list">{actions.filter((action) => action.status === "pending").slice(0, 3).map((action) => <ActionRequiredCard key={action.action_id} candidateId={activeCandidate} action={action} />)}</div>
+        </section> : null}
           <div className="section-heading">
-            <div><p className="eyebrow">Selected for you</p><h2 id="recommended-title">Recommended jobs</h2></div>
+            <div><h2 id="recommended-title">Recommended for you</h2></div>
             <Link href={`/jobs?candidate_id=${encodeURIComponent(activeCandidate)}`}>View all</Link>
           </div>
           {jobs.length ? (
@@ -97,7 +104,7 @@ export default function OverviewPage() {
                     <div className="job-card-score"><strong>{job.score ?? "?"}</strong><span>match</span></div>
                     <div><p className="eyebrow">{job.company}</p><h3>{job.title}</h3></div>
                     <p className="job-card-meta">{job.location ?? "Location to confirm"} <span aria-hidden="true">/</span> {job.remote_policy ?? "Work mode to confirm"}</p>
-                    {job.hard_blockers.length ? <p className="issue-text">Needs review before you continue</p> : <p className="fit-positive">Matches your preferences</p>}
+                    {job.hard_blockers.length ? <p className="issue-text">Needs review before you continue</p> : <p className="fit-positive">No hard blockers detected</p>}
                     <Link className="button primary" href={`/jobs/${job.job_id}?candidate_id=${encodeURIComponent(activeCandidate)}`}>Review this job</Link>
                   </article>
                 ))}

@@ -35,6 +35,7 @@ from app.applications import (
     CorrespondenceIngestRequest,
     CorrespondenceView,
     DryRunCommand,
+    EmergencyStopResetRequest,
     HumanActionView,
     MaterialRevisionRequest,
     NotificationView,
@@ -808,6 +809,17 @@ def _operations_router() -> APIRouter:
         idempotency_key: IdempotencyKey,
     ) -> SettingsView:
         return service.emergency_stop(candidate_id, idempotency_key)
+
+    @router.post("/automation/emergency-stop/reset", response_model=SettingsView)
+    def restart_automation(
+        reset: EmergencyStopResetRequest,
+        response: Response,
+        service: ApplicationServiceDependency,
+        candidate_id: Annotated[str, Query(min_length=1)],
+        idempotency_key: IdempotencyKey,
+    ) -> SettingsView:
+        response.headers["Cache-Control"] = "no-store"
+        return service.restart_automation(candidate_id, reset, idempotency_key)
 
     @router.get("/analytics/overview", response_model=AnalyticsOverview)
     def analytics(

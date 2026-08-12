@@ -31,6 +31,7 @@ from app.applications.contracts import (
     CorrespondenceView,
     DocumentView,
     DryRunCommand,
+    EmergencyStopResetRequest,
     EventView,
     HumanActionView,
     MaterialRevisionRequest,
@@ -1359,7 +1360,9 @@ class ApplicationService:
                     SubmissionAuthorizationRecord.candidate_id == task.candidate_id,
                     SubmissionAuthorizationRecord.application_id == application.id,
                     SubmissionAuthorizationRecord.consumed_at.is_(None),
+                    SubmissionAuthorizationRecord.expires_at > now,
                 )
+                .execution_options(synchronize_session=False)
                 .values(consumed_at=now)
                 .returning(SubmissionAuthorizationRecord.authorization_id)
             ).scalar_one_or_none()
@@ -3117,6 +3120,9 @@ class ApplicationService:
                 raise ApplicationConflictError("submission authorization was not found")
             if record.consumed_at is not None:
                 raise ApplicationConflictError("submission authorization was already consumed")
+            if now < _utc(record.issued_at) or now >= _utc(record.expires_at):
+                raise ApplicationConflictError("submission authorization is expired")
+
             if application.state is not ApplicationState.READY_TO_SUBMIT:
                 raise ApplicationConflictError("application is no longer ready to submit")
             job = session.get(GlobalJob, application.job_id)
@@ -3177,7 +3183,9 @@ class ApplicationService:
                     SubmissionAuthorizationRecord.candidate_id == candidate_id,
                     SubmissionAuthorizationRecord.application_id == application_id,
                     SubmissionAuthorizationRecord.consumed_at.is_(None),
+                    SubmissionAuthorizationRecord.expires_at > now,
                 )
+                .execution_options(synchronize_session=False)
                 .values(consumed_at=now)
                 .returning(SubmissionAuthorizationRecord.authorization_id)
             ).scalar_one_or_none()
@@ -4251,6 +4259,9 @@ class ApplicationService:
                 return replay
             record = self._settings_record(session, candidate_id)
             record.emergency_stopped = True
+            record.explicit_autonomy_confirmation = False
+            record.autonomy_confirmation_scope_sha256 = None
+            record.autonomy_confirmed_at = None
             record.automation_mode = "disabled"
             self._append_admin_audit(
                 session, candidate_id, "emergency_stop_activated", {"automation_mode": "disabled"}
@@ -4260,6 +4271,118 @@ class ApplicationService:
                 session,
                 candidate_id,
                 "emergency_stop_activated",
+                key_sha256,
+                request_sha256,
+                view,
+            )
+            return view
+
+    def restart_automation(
+        self, candidate_id: str, reset: EmergencyStopResetRequest, idempotency_key: str
+    ) -> SettingsView:
+        """Clear the global stop without replaying any interrupted application work."""
+        with self._candidates.lifecycle_write(candidate_id):
+            return self._restart_automation(candidate_id, reset, idempotency_key)
+
+    def _restart_automation(
+        self, candidate_id: str, reset: EmergencyStopResetRequest, idempotency_key: str
+    ) -> SettingsView:
+        config = self._candidates.get_config(candidate_id)
+        with self._sessions.begin() as session:
+            replay, request_sha256, key_sha256 = self._settings_command_replay(
+                session,
+                candidate_id,
+                "emergency_stop_cleared",
+                {"candidate_id": candidate_id, **reset.model_dump(mode="json")},
+                idempotency_key,
+            )
+            if replay is not None:
+                return replay
+            record = session.scalar(
+                select(CandidateSettingsRecord)
+                .where(CandidateSettingsRecord.candidate_id == candidate_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise ApplicationConflictError("emergency stop is not active")
+            if not record.emergency_stopped:
+                raise ApplicationConflictError("emergency stop is not active")
+            now = datetime.now(UTC)
+            attempts = session.scalars(
+                select(ControlledSubmissionAttempt)
+                .where(
+                    ControlledSubmissionAttempt.candidate_id == candidate_id,
+                    ControlledSubmissionAttempt.status.in_(("prepared", "click_authorized")),
+                )
+                .with_for_update()
+            ).all()
+            if any(attempt.status == "click_authorized" for attempt in attempts):
+                raise ApplicationConflictError("a submission outcome is still being finalized")
+            for attempt in attempts:
+                attempt.status = "denied"
+                attempt.finalized_at = now
+                attempt.failure_category = "emergency_stop_reset"
+                if attempt.task_id is not None:
+                    task = session.get(WorkflowTask, attempt.task_id)
+                    if task is not None:
+                        task.status = "failed"
+                        task.last_error = "emergency_stop_reset"
+                        task.last_error_category = "emergency_stop_reset"
+                        task.last_error_retryable = False
+                        task.locked_by = None
+                        task.locked_at = None
+                application = session.get(Application, attempt.application_id)
+                if application is not None and application.candidate_id == candidate_id:
+                    self._append_same_state_event(
+                        session,
+                        application,
+                        f"{idempotency_key}:controlled-attempt:{attempt.id}",
+                        "CONTROLLED_SUBMISSION_CANCELLED_BY_EMERGENCY_RESET",
+                        payload={
+                            "attempt_id": str(attempt.id),
+                            "automatic_retry": False,
+                        },
+                    )
+            pending_authorizations = (
+                session.scalar(
+                    select(func.count(SubmissionAuthorizationRecord.authorization_id)).where(
+                        SubmissionAuthorizationRecord.candidate_id == candidate_id,
+                        SubmissionAuthorizationRecord.consumed_at.is_(None),
+                    )
+                )
+                or 0
+            )
+            session.execute(
+                update(SubmissionAuthorizationRecord)
+                .where(
+                    SubmissionAuthorizationRecord.candidate_id == candidate_id,
+                    SubmissionAuthorizationRecord.consumed_at.is_(None),
+                )
+                .values(expires_at=now)
+            )
+            record.emergency_stopped = False
+            record.automation_mode = "disabled"
+            record.explicit_autonomy_confirmation = False
+            record.autonomy_confirmation_scope_sha256 = None
+            record.autonomy_confirmed_at = None
+            self._append_admin_audit(
+                session,
+                candidate_id,
+                "emergency_stop_cleared",
+                {
+                    "automation_mode": "disabled",
+                    "consequence_version": reset.consequence_version,
+                    "autonomy_confirmation_invalidated": True,
+                    "interrupted_work_replayed": False,
+                    "prepared_attempts_cancelled": len(attempts),
+                    "pending_authorizations_cancelled": pending_authorizations,
+                },
+            )
+            view = self._settings_view(session, config, record)
+            self._append_settings_receipt(
+                session,
+                candidate_id,
+                "emergency_stop_cleared",
                 key_sha256,
                 request_sha256,
                 view,

@@ -8,6 +8,7 @@ vi.mock("@/lib/api", () => ({
     settings: vi.fn(),
     updateSettings: vi.fn(),
     confirmAutonomy: vi.fn(),
+    restartAutomation: vi.fn(),
     emergencyStop: vi.fn(),
     candidate: vi.fn(),
     discoverySources: vi.fn(),
@@ -200,7 +201,9 @@ describe("SettingsPageClient", () => {
     });
 
     fireEvent.click(toggle);
-    expect(await screen.findByText("Uncertain backend outcome.")).toBeVisible();
+    expect(await screen.findByText(/data and application state were not changed/i)).toBeVisible();
+    fireEvent.click(screen.getByText("Technical details"));
+    expect(screen.getByText("Uncertain backend outcome.")).toBeVisible();
     fireEvent.click(toggle);
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
 
@@ -212,6 +215,7 @@ describe("SettingsPageClient", () => {
   it("shows a blocked effective mode and direct fix when autonomous scope drifts", async () => {
     vi.mocked(api.settings).mockResolvedValue({
       ...(await api.settings("example_candidate")),
+
       automation_mode: "autonomous",
       tested_ats_adapters: ["greenhouse"],
       dry_run_acceptance_passed: true,
@@ -242,5 +246,33 @@ describe("SettingsPageClient", () => {
     expect(
       screen.getByRole("checkbox", { name: /understand these consequences/i }),
     ).toBeDisabled();
+  });
+
+  it("clears an emergency stop without replaying work or enabling automation", async () => {
+    const stopped = {
+      ...(await api.settings("example_candidate")),
+      automation_mode: "disabled" as const,
+      emergency_stopped: true,
+      autonomy_blockers: ["emergency_stop_active"],
+    };
+    vi.mocked(api.settings).mockResolvedValue(stopped);
+    vi.mocked(api.restartAutomation).mockResolvedValue({
+      ...stopped,
+      emergency_stopped: false,
+      autonomy_blockers: [],
+    });
+    vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    render(<SettingsPageClient candidateId="example_candidate" />);
+
+    const reset = await screen.findByRole("button", { name: "Clear stop safely" });
+    expect(screen.queryByRole("button", { name: "Activate emergency stop" })).not.toBeInTheDocument();
+    expect(screen.getByText(/never retries an interrupted application/i)).toBeVisible();
+    fireEvent.click(reset);
+
+    await waitFor(() => expect(api.restartAutomation).toHaveBeenCalledWith(
+      "example_candidate",
+      expect.stringMatching(/^restart-automation-/),
+    ));
+    expect(globalThis.confirm).toHaveBeenCalledWith(expect.stringMatching(/automation will remain off/i));
   });
 });

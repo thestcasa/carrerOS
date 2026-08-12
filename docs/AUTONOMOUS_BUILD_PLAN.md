@@ -1,5 +1,52 @@
 # Autonomous Build Plan
 
+## 2026-08-12 responsive decision-center redesign
+
+Status: in progress.
+
+The e100f5a mobile-first checkpoint established a four-destination shell and simplified Jobs,
+but it does not yet satisfy the current reference-led redesign. This slice will preserve all
+backend contracts and safety gates while completing the shared candidate-facing responsive system.
+
+Implementation sequence:
+
+1. Introduce centralized product status/match semantics, inline icons, active-route navigation,
+   safe-area-aware mobile headers/bottom navigation, bottom sheets, skeletons, and shared empty/error
+   states. Keep the desktop top navigation and dense operational layouts.
+2. Recompose Home around actual automation state, pending human actions, real discovery/application
+   counts, and a compact set of score-ranked jobs. Raw runtime diagnostics remain expandable.
+3. Rebuild Jobs as a mobile scan list with real search/filter/sort controls, a bottom-sheet filter
+   composition, consistent match badges, and supported Saved/For-you views only.
+4. Recompose Job detail around the real score, evidence-backed strengths/gaps, supported score
+   contributions, source link, safe state-dependent actions, and a reusable match-analysis sheet.
+5. Map application states/events once into candidate-facing labels and semantics. Use them across
+   mobile application lists, action cards, detail actions, and an event-derived progress timeline;
+   preserve raw events in Technical details.
+6. Recompose Profile as a mobile candidate summary with readiness and section rows leading to the
+   existing versioned editor. Add chip editing only for simple string arrays while preserving the
+   current API representation and all approval semantics.
+7. Keep discovery sources, security, analytics, settings, candidate switching, and diagnostics in
+   responsive advanced surfaces; do not weaken existing visibility/authorization checks.
+8. Add unit and Playwright coverage for active navigation, all automation states, action-required
+   prominence, score/match semantics, filters/sheets, application labels/timeline, profile readiness,
+   authorization-sensitive controls, loading/empty/error states, and 320/375/390/393/430px layouts.
+9. Run every repository quality gate, inspect the rendered app against the current repository image
+   at representative iPhone and desktop sizes, repair visual regressions, update documentation, and
+   commit the coherent milestone.
+
+Conservative decisions:
+
+- The requested docs/design/career-os-mobile-reference.png path is absent at the start of this
+  run. The current 1024x1536 reference at
+  design/ChatGPT Image Aug 12, 2026, 07_19_00 PM.png was inspected instead and will not be moved or
+  staged because it is an existing user-owned untracked asset.
+- Saved jobs use the existing persisted shortlisted decision state; no bookmark model or Saved
+  tab is invented. Candidate-facing counts use only current API records and timestamps.
+- Job score breakdowns use only persisted score_dimensions; readable strengths/gaps use only
+  requirement evidence, hard blockers, and score explanations already returned by the API.
+- The frontend never derives submission permission. Existing backend responses, one-time command
+  keys, emergency stop, and SubmissionGate remain authoritative.
+
 ## 2026-08-12 mobile-first product milestone
 
 This autonomous milestone turns the existing operator-oriented control plane into a
@@ -279,6 +326,40 @@ reported separately from the interactive transport capability, which truthfully 
 unavailable until a deployment-specific broker exists. Fifteen-minute action expiry is reconciled
 on the 15-minute scheduler cadence independently of long-term browser-profile retention.
 
+
+### Phase 7  responsive candidate product redesign (2026-08-12)
+
+1. Establish shared responsive tokens, semantic status/match mappings, accessible bottom sheets,
+   product icons, empty/loading/error primitives, and a persistent light/dark theme.
+2. Replace the phone shell with candidate-scoped Home, Jobs, Applications, and Profile bottom
+   navigation while retaining the denser desktop control center and advanced routes.
+3. Recompose Home, jobs/detail, applications/detail, action-required, and profile experiences
+   around decisions, real backend data, readable timelines, evidence-backed match explanations,
+   progressive technical disclosure, and safe-area-aware 48 px controls.
+4. Add a consequence-aware emergency-stop reset that cancels pre-stop authorization/work, leaves
+   automation disabled, invalidates autonomy consent, and requires an explicit later mode choice.
+5. Let candidates choose an earlier generated application CV by creating a new reviewed version;
+   retain the privacy boundary that CV imports extract unapproved facts and do not retain raw files.
+6. Verify every route and visible control with fictional API interception, upload/download tests,
+   accessibility checks, 320/375/390/393/430 px viewports, production screenshots, and a workflow
+   that stops at READY_TO_SUBMIT without issuing authorization or sending.
+
+Status: complete. The shared component system is integrated across all candidate routes, dark mode
+persists without a flash, active navigation is parent-route aware, sheets trap and return focus,
+and desktop board/advanced workflows remain available. Emergency reset cannot silently resume
+automation: it clears the stop only after invalidating pending authorization and prepared work,
+then the candidate separately chooses how to restart. Application CV selection reuses the existing
+hash-verified revision/review path instead of retaining or trusting an arbitrary uploaded binary.
+
+The requested reference path, `docs/design/career-os-mobile-reference.png`, was absent at execution
+time. The current repository image at `design/ChatGPT Image Aug 12, 2026, 07_19_00 PM.png` was
+inspected as the likely design-direction substitute but deliberately left untracked. Differences
+from the mock are data/safety driven: no fabricated readiness percentage or daily scan counts, no
+unsupported saved toggle, no raw score-dimension percentages, and no direct job-detail submission.
+
+Verification is complete: 370 pytest tests, 105 Vitest tests, 85 passing Playwright cases with 7
+intentional project skips, Ruff format/lint, strict mypy, ESLint, TypeScript, Next production build,
+fresh disposable Alembic upgrade/check, fictional candidate validation/readiness, and manual review
 ### Phase 4 — Milestones 5 and 6: controlled submission and operations
 
 1. Complete the required pre-submit archive and one-time, short-lived authorization consumption.

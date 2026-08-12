@@ -330,6 +330,11 @@ class AutonomyConfirmationRequest(ApplicationContract):
     consequence_version: Literal["autonomy-consequences-v1"]
 
 
+class EmergencyStopResetRequest(ApplicationContract):
+    acknowledged: Literal[True]
+    consequence_version: Literal["emergency-stop-reset-consequences-v1"]
+
+
 class AnalyticsOverview(ApplicationContract):
     candidate_id: str
     applications: int
